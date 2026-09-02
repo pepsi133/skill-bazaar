@@ -1,0 +1,35 @@
+{
+  "name": "skill-bazaar",
+  "owner": {
+    "name": "pepsi133",
+    "url": "https://github.com/pepsi133"
+  },
+  "description": "A curated marketplace of cross-tool AI agent skills and plugins.",
+  "plugins": [
+    {
+      "name": "mikrotik-routeros",
+      "source": "./skills/mikrotik-routeros",
+      "description": "Design, configure, audit, and troubleshoot MikroTik RouterOS networks — CAPsMAN/wifi, VLANs, firewall and multi-layer NAT, routing, DHCP, QoS, VPNs, and .rsc scripting."
+    },
+    {
+      "name": "agent-delegation",
+      "source": "./skills/agent-delegation",
+      "description": "Protocol for handing work to a subagent that cannot ask the human mid-run: a decision-completeness gate, stop-clause wording, and artifact verification instead of exit codes."
+    },
+    {
+      "name": "caveman",
+      "source": "./plugins/caveman",
+      "description": "Vendored, pinned copy of JuliusBrussee/caveman (MIT): ultra-compressed caveman-style replies that cut ~75% of output tokens while keeping technical substance exact."
+    },
+    {
+      "name": "limit-guard",
+      "source": "./plugins/limit-guard",
+      "description": "Pause a Claude Code session before it burns through the 5-hour or 7-day usage window, wait for the reset without spending tokens, and resume automatically."
+    },
+    {
+      "name": "ste",
+      "source": "./plugins/ste",
+      "description": "Simple Technical English (ASD-STE100) bridged to caveman: caveman's compressed style stays the default, and STE takes over on exactly the turns caveman itself says to drop compression. Toggle with /ste on|off|status."
+    }
+  ]
+}

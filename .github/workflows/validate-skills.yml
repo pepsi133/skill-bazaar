@@ -1,0 +1,57 @@
+# ============================================================================
+# SKILL.md / plugin manifest / roadmap frontmatter validation
+# ============================================================================
+# Runs scripts/validate-skills.py (stdlib-only, no PyYAML) against the repo,
+# runs its own unit tests, and syntax-checks every shell script under
+# plugins/ and scripts/. See scripts/validate-skills.py for exactly what is
+# checked, and for what this deliberately does not check (no security scanning
+# here).
+# ============================================================================
+
+name: Validate Skills
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-skills-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - name: Validate SKILL.md / plugin / marketplace / roadmap frontmatter
+        run: python3 scripts/validate-skills.py
+
+      - name: Run validator unit tests
+        run: python3 -m unittest discover -s scripts/tests -v
+
+      - name: Syntax-check shell scripts
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r -d '' script; do
+            found=1
+            echo "Checking $script"
+            bash -n "$script"
+          done < <(find plugins scripts -type f -name '*.sh' -print0 2>/dev/null)
+          if [ "$found" -eq 0 ]; then
+            echo "No *.sh files found under plugins/ or scripts/ — nothing to check."
+          fi

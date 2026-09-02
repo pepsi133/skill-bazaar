@@ -1,0 +1,4 @@
+{
+  "_comment": "Example (inert while hooks stays empty) — a PreToolUse hook that runs a bundled script before every Bash call: hooks.PreToolUse = [{ matcher: 'Bash', hooks: [{ type: 'command', command: '${CLAUDE_PLUGIN_ROOT}/scripts/check-bash.sh' }] }]. See templates/plugin/TEMPLATE.md for the full example and https://code.claude.com/docs/en/hooks.md for the schema.",
+  "hooks": {}
+}

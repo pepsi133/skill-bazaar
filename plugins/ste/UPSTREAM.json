@@ -1,0 +1,34 @@
+{
+  "_comment": "Machine-readable pin for scripts/vendor-sync.sh. Human-readable twin: UPSTREAM.md. vendor/LICENSE.SimpleEnglish-MIT is upstream's root LICENSE, renamed; vendor-sync cannot map paths, so it is verified by the sha in UPSTREAM.md only.",
+  "name": "ste",
+  "repo": "https://github.com/AminBlg/SimpleEnglish",
+  "sha": "34855f2ab2101e939618b9fe3151b74a2720d300",
+  "tag": "2.0.0",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 AminBlg",
+  "vendored_dirs": [
+    "prompts",
+    "skills/simple-english"
+  ],
+  "modified": [
+    "skills/simple-english/SKILL.md"
+  ],
+  "_excluded_comment": "Upstream paths under vendored_dirs deliberately NOT vendored. Reasons in UPSTREAM.md.",
+  "excluded": [],
+  "files": {
+    "prompts/system-prompt.md": "73dacf384adf2f158646c03fba3eb2899880c906631e4206e4e9d96ecbcd0b9d",
+    "skills/simple-english/SKILL.md": "defad72e3b11910e75198193e8af5a39fecc23010424d77c48ce83f09c8f6329",
+    "skills/simple-english/references/checklist.md": "56c8296bd382a20912c4f789b2dd259d42f194c6a6686a25ea028f51aa0e130b",
+    "skills/simple-english/references/strict-vocabulary.md": "3f34ef3a878d9dc83de68191b5ddd6220fdb4e3c99eafc89425adfabd46258a7",
+    "skills/simple-english/references/use-cases.md": "6c5b342f706d346255466b86400d11d558c4db677a2f7ca5ec4dedb978df8a7c",
+    "skills/simple-english/references/word-swaps.md": "e6cbc5677e3a910190eedf3d87fce49540b42863a6f2166cd1211dcce2074378"
+  },
+  "local": [
+    ".claude-plugin",
+    "hooks",
+    "skills/ste",
+    "tests",
+    "vendor"
+  ],
+  "_local_comment": "This plugin's own bridge code and the renamed upstream LICENSE; not upstream files, skipped by vendor-sync."
+}

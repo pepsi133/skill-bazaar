@@ -1,0 +1,25 @@
+# CODEOWNERS — Responsible reviewers for each area
+#
+# For now, the core maintainers own everything.
+# As the repo grows, assign per-skill and per-plugin ownership here.
+#
+# Format: <pattern> <owner> [<owner>...]
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default: core maintainers own everything
+*                               @pepsi133
+
+# Root config files — maintainers only
+/AGENTS.md                      @pepsi133
+/CODEOWNERS                     @pepsi133
+/LICENSE                        @pepsi133
+/.claude-plugin/                @pepsi133
+
+# Skills — assign per-skill ownership as contributors join
+# /skills/mikrotik-routeros/    @pepsi133
+
+# Plugins — assign per-plugin ownership as they're created
+# /plugins/<plugin-name>/       @contributor
+
+# Roadmap — anyone can propose ideas
+# /roadmap/                     @pepsi133

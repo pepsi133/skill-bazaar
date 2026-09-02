@@ -1,0 +1,9 @@
+{
+  "name": "my-plugin-name",
+  "description": "A brief description of what this plugin bundle provides.",
+  "version": "0.1.0",
+  "author": {
+    "name": "your-github-handle",
+    "url": "https://github.com/your-github-handle"
+  }
+}

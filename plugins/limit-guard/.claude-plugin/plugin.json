@@ -1,0 +1,8 @@
+{
+  "name": "limit-guard",
+  "description": "Pause a Claude Code session before it burns through the 5-hour or 7-day usage window, wait for the reset without spending tokens, and resume automatically.",
+  "version": "0.1.0",
+  "author": { "name": "pepsi133", "url": "https://github.com/pepsi133" },
+  "license": "MIT",
+  "keywords": ["usage-limits", "rate-limits", "statusline", "hooks", "cost-control"]
+}

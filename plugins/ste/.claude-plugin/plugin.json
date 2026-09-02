@@ -1,0 +1,8 @@
+{
+  "name": "ste",
+  "description": "Simple Technical English (ASD-STE100) for Claude Code, bridged to caveman: caveman's compressed style stays the default, and STE takes over on exactly the turns caveman itself says to drop compression. Toggle with /ste on|off|status; the setting persists across sessions.",
+  "version": "0.1.0",
+  "author": { "name": "pepsi133", "url": "https://github.com/pepsi133" },
+  "license": "MIT",
+  "keywords": ["technical-writing", "asd-ste100", "plain-english", "caveman", "hooks", "style"]
+}

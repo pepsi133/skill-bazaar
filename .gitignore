@@ -1,0 +1,17 @@
+# Editors / IDEs
+.idea/
+
+# Claude Code local state
+/.claude/
+/.remember/
+
+# Local-only overrides, never committed
+settings.local.json
+*.local.json
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store

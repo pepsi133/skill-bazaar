@@ -1,0 +1,9 @@
+{
+  "name": "mikrotik-routeros",
+  "description": "Design, configure, audit, and troubleshoot MikroTik RouterOS networks — CAPsMAN/wifi, VLANs, firewall and multi-layer NAT, bridging with hardware offload, routing, DHCP, QoS, VPNs, and .rsc scripting on RouterOS 7.20+.",
+  "version": "0.1.0",
+  "author": { "name": "pepsi133", "url": "https://github.com/pepsi133" },
+  "license": "MIT",
+  "keywords": ["mikrotik", "routeros", "networking", "firewall", "vlan"],
+  "skills": ["."]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "my-skill-name",
+  "description": "A brief description of what this skill does — mirror the SKILL.md description.",
+  "version": "0.1.0",
+  "author": {
+    "name": "your-github-handle",
+    "url": "https://github.com/your-github-handle"
+  },
+  "license": "MIT",
+  "skills": ["."]
+}

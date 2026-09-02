@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ste-activate.js\"",
+            "timeout": 5,
+            "statusMessage": "ste: loading Simple Technical English"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ste-mode-tracker.js\"",
+            "timeout": 5,
+            "statusMessage": "ste: checking style state"
+          }
+        ]
+      }
+    ]
+  }
+}

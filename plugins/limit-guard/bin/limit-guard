@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# limit-guard CLI. Claude Code puts a plugin's bin/ on the Bash tool's PATH
+# while the plugin is enabled, so `limit-guard status` works as a bare command.
+#
+#   limit-guard status     current window usage, pause state, cache age
+#   limit-guard resume     clear a pause (the escape hatch for manual mode)
+#   limit-guard install    print the settings.json snippet to install by hand
+#   limit-guard selftest   run the decision function over built-in fixtures
+#   limit-guard off        allow everything until `limit-guard on`
+#   limit-guard on         remove the override
+#
+# `install` deliberately only PRINTS. Nothing here edits settings.json: that
+# file is the user's, and a plugin that rewrites it is a plugin you cannot
+# trust.
+set -euo pipefail
+
+PY="${LIMIT_GUARD_PYTHON:-python3}"
+
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT}/hooks/limit-guard-gate.py" ]; then
+  ROOT="${CLAUDE_PLUGIN_ROOT}"
+else
+  ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")/.." >/dev/null 2>&1 && pwd -P)"
+fi
+GATE="${ROOT}/hooks/limit-guard-gate.py"
+STATUSLINE="${ROOT}/hooks/limit-guard-statusline.sh"
+STATE_DIR="${LIMIT_GUARD_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/limit-guard}"
+
+# The gate's ensure_dir() refuses a symlinked state directory; so must this.
+# `mkdir -p` follows a symlink happily, and `rm -f "$STATE_DIR/override"` would
+# then delete a file somewhere else entirely.
+check_state_dir() {
+  if [ -L "$STATE_DIR" ]; then
+    echo "limit-guard: state dir is a symlink, refusing: $STATE_DIR" >&2
+    exit 1
+  fi
+}
+
+usage() {
+  # Print the header comment block and stop at the first line that is not a
+  # comment. A fixed line range drifts every time the header changes, and the
+  # last drift printed `set -euo pipefail` as though it were help text.
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' \
+    "${BASH_SOURCE[0]:-$0}"
+}
+
+case "${1:-status}" in
+  status)   exec "$PY" "$GATE" --status ;;
+  resume)   exec "$PY" "$GATE" --resume ;;
+  selftest) exec "$PY" "$GATE" --selftest ;;
+  version|--version|-V) exec "$PY" "$GATE" --version ;;
+  off)
+    check_state_dir
+    mkdir -p -m 700 "$STATE_DIR"
+    if [ -L "$STATE_DIR/override" ]; then
+      echo "limit-guard: override is a symlink, refusing" >&2; exit 1
+    fi
+    : > "$STATE_DIR/override"
+    chmod 600 "$STATE_DIR/override"
+    echo "limit-guard: gate disabled (override set). Re-enable with: limit-guard on"
+    ;;
+  on)
+    check_state_dir
+    if [ -L "$STATE_DIR/override" ]; then
+      echo "limit-guard: override is a symlink, refusing" >&2; exit 1
+    fi
+    rm -f "$STATE_DIR/override"
+    echo "limit-guard: gate enabled."
+    ;;
+  install)
+    cat <<EOF
+limit-guard install
+===================
+
+1. Enable the plugin (hooks load automatically):
+
+     /plugin install limit-guard@skill-bazaar
+
+2. A plugin cannot set the main statusLine, so add this to ~/.claude/settings.json
+   BY HAND. It is the data tap — without it the gate has no numbers and stays
+   silent (fail-open). The path below is already resolved: settings.json is
+   JSON, not shell, and expands neither globs nor ~, so paste it literally.
+
+     "statusLine": {
+       "type": "command",
+       "command": "bash ${STATUSLINE}"
+     }
+
+   If that path is inside plugins/cache/, it changes when the plugin updates —
+   re-run this command and re-paste. Pointing at a clone of the marketplace
+   repo instead is stable across updates.
+
+   Already have a statusline? Keep it. Chaining is opt-in: nothing is
+   auto-detected, and this wrapper never executes a command you did not name.
+   settings.json has no "env" field for statusLine, but "command" runs in a
+   shell, so set the variable inline:
+
+     "command": "LIMIT_GUARD_INNER='bash /abs/path/your-statusline.sh' bash ${STATUSLINE}"
+
+   The value is split on whitespace and run as an argv vector, never through a
+   shell, so it supports neither shell syntax nor paths containing spaces; wrap
+   anything more elaborate in a script of your own. It is bounded by a 5s
+   timeout so a hung statusline cannot cost you the capture.
+
+   The hooks invoke python3 by name, so python3 must be on PATH.
+
+3. Verify:
+
+     limit-guard selftest
+     limit-guard status
+
+State lives in ${STATE_DIR} (mode 0600).
+EOF
+    ;;
+  help|--help|-h) usage ;;
+  *) echo "limit-guard: unknown command '${1}'" >&2; usage >&2; exit 2 ;;
+esac
