@@ -25,7 +25,8 @@ See [skills/README.md](skills/README.md) for the layout and the two-manifest rul
    - Add platform-specific notes if needed
 
 3. **Optional:** Add supporting files:
-   - `references/` — supplementary documentation the skill can reference
+   - `references/` — docs the skill reads while it runs. Roadmap material for the skill
+     (evidence logs, measurements, open decisions) goes to `roadmap/`, not here
    - `scripts/` — helper scripts (include `requirements.txt` if Python)
    - `assets/` — images, templates, or other resources
 

@@ -12,7 +12,7 @@ skills/
     ├── SKILL.md             # Required: the skill, at the directory root
     ├── .claude-plugin/
     │   └── plugin.json      # Required: packages the folder as a one-skill plugin
-    ├── references/          # Optional: supplementary docs the skill can pull in
+    ├── references/          # Optional: docs the skill reads while it runs
     ├── scripts/             # Optional: helper scripts
     └── assets/              # Optional: images, templates, other resources
 ```

@@ -50,6 +50,12 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
    Code loads a root `SKILL.md` as the plugin's single skill; the manifests here declare
    `"skills": ["."]` to say so explicitly. The layout is what keeps the folder a plain
    portable skill for every other tool.
+9. **`references/` holds only material the skill reads while it runs.** Every file there
+   is a context cost at use time. Roadmap material for the skill does not belong there:
+   measurement records, evidence logs, harness comparisons, open decisions, review notes,
+   scoping. Put that in `roadmap/` (a backlog item for the skill), or in a place of your
+   own outside this repo. Test: if the agent never needs the file to do the job the skill
+   describes, it is not a reference.
 
 ## Plugin Authoring Rules
 
