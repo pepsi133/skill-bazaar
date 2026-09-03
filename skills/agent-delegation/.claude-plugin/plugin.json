@@ -1,7 +1,7 @@
 {
   "name": "agent-delegation",
-  "description": "Protocol for handing work to a subagent that cannot ask the human mid-run: a decision-completeness gate, stop-clause wording, and artifact verification instead of exit codes.",
-  "version": "0.1.0",
+  "description": "Protocol for handing work to a subagent that cannot ask the human mid-run: a decision-completeness gate, stop-clause wording, an ask-and-continue variant for harnesses with a parent relay, and artifact verification instead of exit codes.",
+  "version": "0.2.0",
   "author": { "name": "pepsi133", "url": "https://github.com/pepsi133" },
   "license": "MIT",
   "keywords": ["subagents", "delegation", "orchestration", "prompting"],
