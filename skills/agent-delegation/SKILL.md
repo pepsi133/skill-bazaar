@@ -6,9 +6,10 @@ description: >-
   decision-completeness gate, stop-clause wording, an ask-and-continue variant for
   harnesses with a parent relay, and artifact verification instead of exit codes. Use on
   "delegate this", "spawn an agent to...", "hand off to a subagent", "the subagent needs
-  an answer", and before editing files inline in the main session. The unsupervised-guess
-  protocol, not a subagent-preset chooser like cavecrew; not for background shell commands
-  or plain subagent search.
+  an answer", before doing multi-file work inline instead of delegating it, and before a
+  subagent reads a credential store. The unsupervised-guess protocol, not a
+  subagent-preset chooser like cavecrew; not for background shell commands or plain
+  subagent search.
 ---
 
 # Agent delegation
@@ -38,14 +39,17 @@ a spec that feels understood is exactly one that passes the gate below cheaply.
 
 Before any edit in the main session, ask whether a subagent can do it from a spec. If yes,
 write the spec and spawn. The threshold: delegate when writing the spec costs less than
-doing the work inline. A one-line fix fails that test; a multi-file edit passes it. Three
-cases stay in the main session:
+doing the work inline. A one-line fix fails that test; a multi-file edit passes it. Two
+carve-outs stay in the main session whatever the threshold says:
 
-1. **Work that reads or writes secret values.** See *Secrets*, below.
+1. **Work that reads or writes secret values**, unless the subagent is handed the exact
+   filtered command. See *Secrets*, below.
 2. **The step that needs the human: a security warning the human must see, or the
    confirmation before an irreversible action.** The subagent has no direct channel to the
    human (wall 1). The step itself stays; the work around it can be delegated.
-3. **A spec that fails the gate below** and whose open decisions cannot be resolved first.
+
+A spec that fails the gate below is not a third carve-out. It stays in the main session
+only until its open decisions are resolved, and it is delegable once they are.
 
 A delegate-by-default rule written in the context window is advisory. It loses effect as
 the session grows and the context fills. Where the harness can gate a tool call before it
