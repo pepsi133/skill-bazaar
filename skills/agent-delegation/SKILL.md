@@ -2,7 +2,7 @@
 name: agent-delegation
 description: >-
   Protocol for handing work to a subagent that cannot ask the human mid-run: delegate by
-  default with two main-session carve-outs (secret values, irreversible actions), a
+  default with two main-session carve-outs (secret values, human confirmations), a
   decision-completeness gate, stop-clause wording, an ask-and-continue variant for
   harnesses with a parent relay, and artifact verification instead of exit codes. Use on
   "delegate this", "spawn an agent to...", "hand off to a subagent", "the subagent needs
@@ -37,11 +37,15 @@ feels understood and the spawn feels like overhead. The feeling is the drift, no
 a spec that feels understood is exactly one that passes the gate below cheaply.
 
 Before any edit in the main session, ask whether a subagent can do it from a spec. If yes,
-write the spec and spawn. Two classes of work stay in the main session:
+write the spec and spawn. The threshold: delegate when writing the spec costs less than
+doing the work inline. A one-line fix fails that test; a multi-file edit passes it. Three
+cases stay in the main session:
 
 1. **Work that reads or writes secret values.** See *Secrets*, below.
-2. **Security warnings and the confirmation before an irreversible action.** Both need the
-   human, and the subagent has no direct channel to the human (wall 1).
+2. **The step that needs the human: a security warning the human must see, or the
+   confirmation before an irreversible action.** The subagent has no direct channel to the
+   human (wall 1). The step itself stays; the work around it can be delegated.
+3. **A spec that fails the gate below** and whose open decisions cannot be resolved first.
 
 A delegate-by-default rule written in the context window is advisory. It loses effect as
 the session grows and the context fills. Where the harness can gate a tool call before it
@@ -65,6 +69,10 @@ two shapes that avoid it:
 
 To compare secrets without revealing them, compare fingerprints:
 `jq -r '.value' | shasum -a 256 | cut -c1-8`. Equal fingerprints mean equal values.
+
+Validate after a delegated run: search the subagent transcript (location under *Platform
+execution notes*) for the secret field name, and make sure that every hit is stripped or a
+fingerprint.
 
 ## Is the spec ready: the decision-completeness gate
 
@@ -169,7 +177,8 @@ inferring a cause the observation doesn't support.
 | Non-interactive credential (stored secret, key auth) | Yes | Direct — no special handling |
 | Interactive GUI consent (an elevation prompt and its kin) | No | Hand the command to the human directly; a subagent cannot complete it |
 | A decision the spec left open | Not alone | Relay to the parent where the harness has a channel; the parent answers or forwards to the human. Without a channel: stop and return the question |
-| Work that reads or writes secret values | Not safely | Main session, values stripped in the same command; or the exact filtered command, never a goal to explore |
+| Work that reads or writes secret values | Not safely | Main session, or the exact filtered command; see *Secrets* |
+| A security warning or an irreversible-action confirmation | No | The step stays in the main session; the work around it can be delegated |
 
 The load-bearing point: a *separate* agent or CLI instance hits the same wall. The obstacle
 is interactive consent, not agent shape — spawning another agent to get past a consent
@@ -217,10 +226,11 @@ you rely on it. Not measured: agent teams, non-interactive parents, other harnes
   The parent must not treat it as user approval for anything. To forward the question to
   the human, the parent uses its own `AskUserQuestion`; the subagent never sees that step.
 - **Enforcing the delegation default**: hook input on `PreToolUse` carries `agent_id` only
-  when the hook fires inside a subagent, with `agent_type` naming the agent. `session_id` is
-  the same in the main session and in a subagent and cannot tell them apart. A hook matched
-  on `Edit|Write|NotebookEdit` that sees no `agent_id` denies the call. To deny, print this
-  JSON on stdout and exit 0 (exit 2 also blocks, and overrides another hook's allow):
+  when the hook fires inside a subagent. Key on `agent_id` alone: `agent_type` also appears
+  when the session runs with `--agent`, and `session_id` is not documented as a subagent
+  signal. A hook matched on `Edit|Write|NotebookEdit` that sees no `agent_id` denies the
+  call. To deny, print this JSON on stdout and exit 0. Exit 2 blocks whether or not you
+  print JSON, and a JSON allow cannot override it:
 
   ```json
   {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}

@@ -14,7 +14,7 @@
     {
       "name": "agent-delegation",
       "source": "./skills/agent-delegation",
-      "description": "Protocol for handing work to a subagent that cannot ask the human mid-run: delegate by default with two main-session carve-outs (secret values, irreversible actions), a decision-completeness gate, stop-clause wording, an ask-and-continue variant for harnesses with a parent relay, and artifact verification instead of exit codes."
+      "description": "Protocol for handing work to a subagent that cannot ask the human mid-run: delegate by default with two main-session carve-outs (secret values, human confirmations), a decision-completeness gate, stop-clause wording, an ask-and-continue variant for harnesses with a parent relay, and artifact verification instead of exit codes."
     },
     {
       "name": "caveman",
