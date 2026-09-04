@@ -55,28 +55,16 @@ A delegate-by-default rule written in the context window is advisory. It loses e
 the session grows and the context fills. Where the harness can gate a tool call before it
 runs, put the rule there. See *Platform execution notes*.
 
-### Secrets: the leak is at the tool result
+### Secrets: keep values out of the transcript
 
-"Report metadata only, never print a value" constrains the report, not what a tool returns
-into the transcript. A subagent sent to inventory a credential store starts with the broad
-listing call. If the listing returns plaintext values (GitLab's CI variables endpoint does;
-`masked` redacts job logs only), every value is in the transcript before the agent forms
-any intention. The transcript persists after the run.
-
-This skill does not control the environment, so it cannot prevent the leak. It can name the
-two shapes that avoid it:
-
-- Keep the work in the main session and strip values in the same command, so no value
-  reaches any tool result: `... | jq 'map(del(.value))'`.
-- If the work must be delegated, hand the subagent the exact filtered command. Given a
-  goal to explore instead of a command, the subagent tries the broad call first.
-
-To compare secrets without revealing them, compare fingerprints:
-`jq -r '.value' | shasum -a 256 | cut -c1-8`. Equal fingerprints mean equal values.
-
-Validate after a delegated run: search the subagent transcript (location under *Platform
-execution notes*) for the secret field name, and make sure that every hit is stripped or a
-fingerprint.
+A "report metadata only" instruction does not stop a tool result from carrying values. The
+broad listing call comes first, and some endpoints return plaintext (GitLab's CI variables
+endpoint does; `masked` covers job logs only). Strip values in the same command, in the
+main session (`... | jq 'map(del(.value))'`), or hand a subagent that exact command.
+Compare fingerprints, never values, one variable at a time:
+`jq -r '.value' | shasum -a 256 | cut -c1-8`. After a delegated run, grep the subagent
+transcript (location under *Platform execution notes*) for the secret field name. Every
+hit must be stripped or a fingerprint.
 
 ## Is the spec ready: the decision-completeness gate
 
@@ -229,21 +217,15 @@ you rely on it. Not measured: agent teams, non-interactive parents, other harnes
   attached to the next tool result, marked as coming from an agent and not from the user.
   The parent must not treat it as user approval for anything. To forward the question to
   the human, the parent uses its own `AskUserQuestion`; the subagent never sees that step.
-- **Enforcing the delegation default**: hook input on `PreToolUse` carries `agent_id` only
-  when the hook fires inside a subagent. Key on `agent_id` alone: `agent_type` also appears
-  when the session runs with `--agent`, and `session_id` is not documented as a subagent
-  signal. A hook matched on `Edit|Write|NotebookEdit` that sees no `agent_id` denies the
-  call. To deny, print this JSON on stdout and exit 0. Exit 2 blocks whether or not you
-  print JSON, and a JSON allow cannot override it:
+- **Enforcing the delegation default**: `PreToolUse` hook input carries `agent_id` only
+  inside a subagent, which the hooks documentation names as the way to tell a subagent call
+  from a main-session one. A hook on `Edit|Write|NotebookEdit` that sees no `agent_id`
+  denies the call by printing this on stdout and exiting 0. A wrong or non-executable
+  script path fails open, and the gate is then silently off:
 
   ```json
   {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}
   ```
-
-  Two limits. The matcher does not see a file write done through `Bash` (`sed -i`, a
-  redirect). A wrong or non-executable script path fails open: the harness allows the call
-  and the gate is silently off. Validate once after setup: an `Edit` in the main session is
-  denied with the reason text, and the same `Edit` inside a subagent passes.
 - **Subagent transcripts**: a subagent's tool results, secrets included, are written to
   `~/.claude/projects/<project>/<session>/subagents/agent-<id>.jsonl`. Removing the symlink
   under the session's `tasks/` directory leaves that file in place.
