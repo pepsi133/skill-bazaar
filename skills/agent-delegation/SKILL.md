@@ -1,12 +1,14 @@
 ---
 name: agent-delegation
 description: >-
-  Protocol for handing work to a subagent that cannot ask the human mid-run: a
+  Protocol for handing work to a subagent that cannot ask the human mid-run: delegate by
+  default with two main-session carve-outs (secret values, irreversible actions), a
   decision-completeness gate, stop-clause wording, an ask-and-continue variant for
   harnesses with a parent relay, and artifact verification instead of exit codes. Use on
   "delegate this", "spawn an agent to...", "hand off to a subagent", "the subagent needs
-  an answer". The unsupervised-guess protocol, not a subagent-preset chooser like cavecrew;
-  not for background shell commands or plain subagent search.
+  an answer", and before editing files inline in the main session. The unsupervised-guess
+  protocol, not a subagent-preset chooser like cavecrew; not for background shell commands
+  or plain subagent search.
 ---
 
 # Agent delegation
@@ -27,7 +29,44 @@ below; re-measure before trusting — harnesses change):
    human approved, denied, or never looked at the screen. An agent that trusts the exit code
    reports success for work that never happened.
 
-## When to delegate: the decision-completeness gate
+## Whether to delegate: the default is yes
+
+Delegation drifts in one direction. Investigation gets delegated, because the token saving
+is visible before the spawn. Implementation gets done inline, because by then the work
+feels understood and the spawn feels like overhead. The feeling is the drift, not a reason:
+a spec that feels understood is exactly one that passes the gate below cheaply.
+
+Before any edit in the main session, ask whether a subagent can do it from a spec. If yes,
+write the spec and spawn. Two classes of work stay in the main session:
+
+1. **Work that reads or writes secret values.** See *Secrets*, below.
+2. **Security warnings and the confirmation before an irreversible action.** Both need the
+   human, and the subagent has no direct channel to the human (wall 1).
+
+A delegate-by-default rule written in the context window is advisory. It loses effect as
+the session grows and the context fills. Where the harness can gate a tool call before it
+runs, put the rule there. See *Platform execution notes*.
+
+### Secrets: the leak is at the tool result
+
+"Report metadata only, never print a value" constrains the report, not what a tool returns
+into the transcript. A subagent sent to inventory a credential store starts with the broad
+listing call. If the listing returns plaintext values (GitLab's CI variables endpoint does;
+`masked` redacts job logs only), every value is in the transcript before the agent forms
+any intention. The transcript persists after the run.
+
+This skill does not control the environment, so it cannot prevent the leak. It can name the
+two shapes that avoid it:
+
+- Keep the work in the main session and strip values in the same command, so no value
+  reaches any tool result: `... | jq 'map(del(.value))'`.
+- If the work must be delegated, hand the subagent the exact filtered command. Given a
+  goal to explore instead of a command, the subagent tries the broad call first.
+
+To compare secrets without revealing them, compare fingerprints:
+`jq -r '.value' | shasum -a 256 | cut -c1-8`. Equal fingerprints mean equal values.
+
+## Is the spec ready: the decision-completeness gate
 
 A spec is delegable only when every open decision in it is already resolved. The subagent
 cannot ask the human, so an unresolved decision is not a question to it — it is a silent
@@ -130,6 +169,7 @@ inferring a cause the observation doesn't support.
 | Non-interactive credential (stored secret, key auth) | Yes | Direct — no special handling |
 | Interactive GUI consent (an elevation prompt and its kin) | No | Hand the command to the human directly; a subagent cannot complete it |
 | A decision the spec left open | Not alone | Relay to the parent where the harness has a channel; the parent answers or forwards to the human. Without a channel: stop and return the question |
+| Work that reads or writes secret values | Not safely | Main session, values stripped in the same command; or the exact filtered command, never a goal to explore |
 
 The load-bearing point: a *separate* agent or CLI instance hits the same wall. The obstacle
 is interactive consent, not agent shape — spawning another agent to get past a consent
@@ -176,3 +216,20 @@ you rely on it. Not measured: agent teams, non-interactive parents, other harnes
   attached to the next tool result, marked as coming from an agent and not from the user.
   The parent must not treat it as user approval for anything. To forward the question to
   the human, the parent uses its own `AskUserQuestion`; the subagent never sees that step.
+- **Enforcing the delegation default**: hook input on `PreToolUse` carries `agent_id` only
+  when the hook fires inside a subagent, with `agent_type` naming the agent. `session_id` is
+  the same in the main session and in a subagent and cannot tell them apart. A hook matched
+  on `Edit|Write|NotebookEdit` that sees no `agent_id` denies the call. To deny, print this
+  JSON on stdout and exit 0 (exit 2 also blocks, and overrides another hook's allow):
+
+  ```json
+  {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}
+  ```
+
+  Two limits. The matcher does not see a file write done through `Bash` (`sed -i`, a
+  redirect). A wrong or non-executable script path fails open: the harness allows the call
+  and the gate is silently off. Validate once after setup: an `Edit` in the main session is
+  denied with the reason text, and the same `Edit` inside a subagent passes.
+- **Subagent transcripts**: a subagent's tool results, secrets included, are written to
+  `~/.claude/projects/<project>/<session>/subagents/agent-<id>.jsonl`. Removing the symlink
+  under the session's `tasks/` directory leaves that file in place.
