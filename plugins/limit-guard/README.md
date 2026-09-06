@@ -193,6 +193,27 @@ it did; `limit-guard on` removes it.
 | `limit-guard install` | print the settings.json snippet — edits nothing |
 | `limit-guard selftest` | run the decision function over built-in fixtures; touches no state |
 
+## Public contract for other status lines
+
+`hooks/limit-guard-gate.py` exposes one function another status line may import and call in
+its own process, rather than paying for a second `python3` start:
+
+```python
+capture(stdin_text: str) -> tuple | None
+```
+
+It writes `rate_limits.json`, unpauses a window whose reset time has passed, saves
+`state.json`, and rewrites `status.md`. It prints nothing and never raises. It returns
+`(cache, state, now)`, or `None` when the capture could not complete.
+
+`run_capture()` keeps its previous behavior: it calls `capture()` and then prints the badge.
+The `--capture` command line is unchanged, so a user running limit-guard alone sees no
+difference.
+
+`bobby-statusline` in this marketplace is the first caller. Renaming or changing the
+signature of `capture()` breaks it, and a test on that side fails when it does. Added in
+0.2.0.
+
 ## State
 
 `~/.claude/limit-guard/`, every file mode 0600, every write atomic (tmp + rename), every

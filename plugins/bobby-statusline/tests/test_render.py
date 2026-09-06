@@ -426,6 +426,112 @@ class TestRobustness(Base):
         self.assertIn("ctx ?%", BS.render("[1, 2, 3]"))
 
 
+class TestAuditRegressions(Base):
+    """One test per defect found in the 2026-09-06 audit of these commits."""
+
+    def payload(self, **fields) -> str:
+        base = {"model": {"display_name": "Opus 5"}}
+        base.update(fields)
+        return json.dumps(base)
+
+    def test_narrow_terminal_renders_something(self):
+        """fit() used to return an empty list, so a tiny terminal showed nothing."""
+        self.write_state_paused()
+        for width in (5, 10, 20, 30):
+            with self.subTest(width=width):
+                line = self.plain(self.render("full.json", COLUMNS=width))
+                self.assertTrue(line, "empty row at COLUMNS=%d" % width)
+                self.assertLessEqual(len(line), width)
+        self.assertTrue(self.plain(self.render("full.json", COLUMNS=10)).startswith("PAUSE"))
+
+    def write_state_paused(self):
+        d = os.path.join(self.config, "limit-guard")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "state.json"), "w") as fh:
+            json.dump({"paused": True, "until": int(NOW) + 1800}, fh)
+
+    def test_expired_window_shows_no_stale_time(self):
+        """A window past its reset carries a stale percentage and a past clock."""
+        line = self.render_payload(
+            rate_limits={
+                "five_hour": {"used_percentage": 88, "resets_at": int(NOW) - 60},
+                "seven_day": {"used_percentage": 14, "resets_at": int(NOW) + 86400},
+            }
+        )
+        self.assertIn("5h ?%", line)
+        self.assertIn("7d 14%", line)
+
+    def test_prompt_cache_without_warm_is_unknown_not_cold(self):
+        line = self.render_payload(prompt_cache={"hit_ratio": 0.9})
+        self.assertIn("cache ?", line)
+        self.assertNotIn("cache cold", line)
+
+    def test_prompt_cache_with_warm_false_is_cold(self):
+        self.assertIn("cache cold", self.render_payload(prompt_cache={"warm": False}))
+
+    def test_token_count_above_the_window_falls_back_to_percent(self):
+        """Input tokens include cache reads, so the sum can exceed the window."""
+        line = self.render_payload(
+            context_window={
+                "total_input_tokens": 300000,
+                "total_output_tokens": 4000,
+                "context_window_size": 200000,
+                "used_percentage": 61,
+            }
+        )
+        self.assertIn("ctx 61%", line)
+        self.assertNotIn("/200k", line)
+
+    def test_limit_guard_home_is_honored_by_the_fallback(self):
+        home = os.path.join(self.config, "elsewhere")
+        os.makedirs(home)
+        with open(os.path.join(home, "state.json"), "w") as fh:
+            json.dump({"paused": True, "until": int(NOW) + 600}, fh)
+        os.environ["LIMIT_GUARD_HOME"] = home
+        self.assertIn("PAUSED", self.render("full.json"))
+
+    def test_c1_control_characters_are_stripped(self):
+        """0x9b is a CSI introducer in some terminals."""
+        line = BS.render(self.payload(agent={"name": "a\u009b31mred"}))
+        self.assertNotIn("\u009b", line)
+
+    def test_bidi_overrides_are_stripped(self):
+        """A right-to-left override can reorder a percentage on screen."""
+        line = BS.render(self.payload(agent={"name": "a\u202eb"}))
+        self.assertNotIn("\u202e", line)
+
+    def test_version_key_orders_ten_above_nine(self):
+        paths = [
+            "/c/limit-guard/0.9.0/hooks/limit-guard-gate.py",
+            "/c/limit-guard/0.10.0/hooks/limit-guard-gate.py",
+        ]
+        self.assertEqual(max(paths, key=BS._version_key), paths[1])
+
+    def render_payload(self, **fields) -> str:
+        return BS.render(self.payload(**fields))
+
+
+class TestMultiColorSegments(Base):
+    def setUp(self):
+        super().setUp()
+        del os.environ["NO_COLOR"]
+
+    def test_added_and_removed_lines_carry_their_own_colors(self):
+        line = self.render("full.json")
+        self.assertIn("\033[38;5;108m+156\033[0m", line)
+        self.assertIn("\033[38;5;174m-23\033[0m", line)
+
+    def test_badges_keep_separate_colors(self):
+        self.write_flag(".caveman-active", "ultra")
+        self.write_flag(".ste-active", "on")
+        line = self.render("full.json")
+        self.assertIn("\033[38;5;173m[CAVEMAN:ULTRA]\033[0m", line)
+        self.assertIn("\033[38;5;109m[STE]\033[0m", line)
+
+    def test_truncation_keeps_color(self):
+        self.assertIn("\033[", self.render("full.json", COLUMNS=8))
+
+
 class TestSlashCommand(unittest.TestCase):
     """The install command is a prompt, so what is testable is its contract."""
 

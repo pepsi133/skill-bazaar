@@ -88,11 +88,14 @@ def read_json(path: str) -> dict | None:
     return val if isinstance(val, dict) else None
 
 
-CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# C0, DEL, C1, and the bidi overrides. C1 matters because 0x9b is a second
+# CSI introducer in some terminals, and the bidi marks can visually reorder a
+# row so that a low percentage reads as a high one.
+CONTROL = re.compile(r"[\x00-\x1f\x7f\u0080-\u009f\u202a-\u202e\u2066-\u2069]")
 
 
 def clean(text, cap: int = 64) -> str:
-    """Strip control bytes and cap the length. Everything printed passes here."""
+    """Strip control characters and cap the length. Everything printed passes here."""
     if not isinstance(text, str):
         text = "" if text is None else str(text)
     return CONTROL.sub("", text)[:cap]
@@ -221,8 +224,22 @@ def limit_guard_gate_path() -> str | None:
     pattern = os.path.join(
         config_home(), "plugins", "cache", "*", "limit-guard", "*", "hooks", "limit-guard-gate.py"
     )
-    found = sorted(glob.glob(pattern))
-    return found[-1] if found else None
+    found = glob.glob(pattern)
+    if not found:
+        return None
+    # Highest version, not the lexically last path: plain string order puts
+    # "0.9.0" after "0.10.0", which would pin an old copy forever.
+    return max(found, key=_version_key)
+
+
+def _version_key(path: str):
+    """Sort key from the version directory in a plugin-cache path."""
+    parts = path.split(os.sep)
+    version = parts[-3] if len(parts) >= 3 else ""
+    numbers = []
+    for chunk in re.split(r"[._-]", version):
+        numbers.append(int(chunk) if chunk.isdigit() else 0)
+    return (numbers, path)
 
 
 def limit_guard_module():
@@ -277,7 +294,10 @@ def limit_guard_state(mod) -> dict:
                 return state
     except Exception:
         pass
-    stored = read_json(os.path.join(config_home(), "limit-guard", "state.json")) or {}
+    # limit-guard's own base_dir() honors LIMIT_GUARD_HOME, so a fallback that
+    # ignored it would read the wrong file and always report "not paused".
+    base = os.environ.get("LIMIT_GUARD_HOME") or os.path.join(config_home(), "limit-guard")
+    stored = read_json(os.path.join(base, "state.json")) or {}
     return {
         "paused": bool(stored.get("paused")),
         "manual": bool(stored.get("manual")),
@@ -387,12 +407,32 @@ def paint(text: str, code: int | None, enabled: bool) -> str:
 
 
 class Seg:
-    __slots__ = ("key", "text", "color")
+    """One segment, as a list of (text, color) pieces.
 
-    def __init__(self, key: str, text: str, color: int | None = None):
+    Most segments are one piece. The badges and the changed-lines count carry
+    more than one color, so the row is painted piece by piece rather than by
+    special-casing a key at paint time.
+    """
+
+    __slots__ = ("key", "parts")
+
+    def __init__(self, key: str, parts: list):
         self.key = key
-        self.text = text
-        self.color = color
+        self.parts = parts
+
+    @property
+    def text(self) -> str:
+        return "".join(text for text, _ in self.parts)
+
+    def truncated(self, width: int) -> "Seg":
+        """A copy cut to `width` visible characters, colors preserved."""
+        kept, left = [], width
+        for text, color in self.parts:
+            if left <= 0:
+                break
+            kept.append((text[:left], color))
+            left -= len(text[:left])
+        return Seg(self.key, kept)
 
 
 def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
@@ -402,7 +442,12 @@ def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
 
     def add(key, text, color=None):
         if on.get(key) and text:
-            out.append(Seg(key, text, color))
+            out.append(Seg(key, [(text, color)]))
+
+    def add_parts(key, parts):
+        parts = [(t, c) for t, c in parts if t]
+        if on.get(key) and parts:
+            out.append(Seg(key, parts))
 
     # PAUSED first and hardest to drop. A session that is not spending tokens
     # must say so; every other segment is information, this one is a state.
@@ -417,10 +462,11 @@ def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
         mode = clean(vim, 12).upper()
         add("vim", mode, VIM_COLORS.get(mode, C_GREY))
 
-    # Both badges live in one segment so they drop together, but each keeps its
-    # own color. paint_row resolves that per badge; the segment color stays None.
-    badges = [b for b in (caveman_badge(), ste_badge()) if b]
-    add("flags", " ".join(badges), None)
+    # Both badges live in one segment so they drop together, and each keeps its
+    # own color.
+    badges = [(caveman_badge(), C_CAVEMAN), (ste_badge(), C_STE)]
+    badges = [(text, color) for text, color in badges if text]
+    add_parts("flags", [p for pair in badges for p in ((" ", None), pair)][1:])
 
     ctx = data.get("context_window") or {}
     pct = ctx.get("used_percentage")
@@ -428,6 +474,11 @@ def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
     used_tokens = _num(ctx.get("total_input_tokens"), 0) + _num(ctx.get("total_output_tokens"), 0)
     if pct is None:
         add("ctx", "ctx ?%", C_GREY)
+    elif size and used_tokens > size:
+        # total_input_tokens includes cache reads and writes, so the sum can
+        # exceed the window. The percentage is the authoritative number; a
+        # token count larger than the window would read as a fault.
+        add("ctx", "ctx %d%%" % _num(pct), usage_color(_num(pct)))
     elif size:
         add(
             "ctx",
@@ -447,6 +498,13 @@ def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
                 continue
             wpct = _num(win.get("used_percentage"))
             resets = _num(win.get("resets_at"))
+            if resets and now >= resets:
+                # The window already reset, so the percentage is stale. Claude
+                # Code drops such a window from the payload; this covers the gap
+                # between the reset and the next render. limit-guard's own badge
+                # skips it for the same reason.
+                add(key, "%s ?%%" % label, C_GREY)
+                continue
             stamp = "%s%s" % (g["reset"], fmt_short(resets, now)) if resets else ""
             add(key, "%s %d%% %s" % (label, wpct, stamp) if stamp else "%s %d%%" % (label, wpct),
                 usage_color(wpct))
@@ -455,7 +513,9 @@ def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
         add("cost", "$?" if cost is None else "$%.2f" % _num(cost), C_COST)
 
     cache = data.get("prompt_cache")
-    if isinstance(cache, dict):
+    if isinstance(cache, dict) and "warm" not in cache:
+        add("cache", "cache ?", C_GREY)
+    elif isinstance(cache, dict):
         if cache.get("warm"):
             ratio = cache.get("hit_ratio")
             text = "cache warm" if ratio is None else "cache warm %d%%" % (_num(ratio) * 100)
@@ -500,7 +560,14 @@ def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
     cost_obj = data.get("cost") or {}
     added, removed = cost_obj.get("total_lines_added"), cost_obj.get("total_lines_removed")
     if added is not None or removed is not None:
-        add("lines", "+%d/-%d" % (_num(added), _num(removed)), C_GREY)
+        add_parts(
+            "lines",
+            [
+                ("+%d" % _num(added), C_ADD),
+                ("/", C_GREY),
+                ("-%d" % _num(removed), C_DEL),
+            ],
+        )
 
     return out
 
@@ -550,28 +617,23 @@ def fit(segments: list, width: int, sep: str, order: list) -> list:
     """
     rank = {key: i for i, key in enumerate(order)}
     kept = list(segments)
-    while kept:
+    while len(kept) > 1:
         if len(sep.join(s.text for s in kept)) <= width:
             return kept
         victim = max(kept, key=lambda s: rank.get(s.key, len(rank)))
         kept.remove(victim)
-    return kept
+    if not kept:
+        return kept
+    # One segment left. If even that does not fit, cut it rather than return an
+    # empty row: a truncated PAUSED still tells the user the session is paused,
+    # and a blank status line looks like the script crashed.
+    return kept if len(kept[0].text) <= width else [kept[0].truncated(width)]
 
 
 def paint_row(segments: list, sep: str, color: bool) -> str:
-    parts = []
-    for seg in segments:
-        if seg.key == "flags":
-            # Two badges, each with its own color, inside one segment.
-            parts.append(
-                " ".join(
-                    paint(b, C_CAVEMAN if b.startswith("[CAVEMAN") else C_STE, color)
-                    for b in seg.text.split(" ")
-                )
-            )
-        else:
-            parts.append(paint(seg.text, seg.color, color))
-    return sep.join(parts)
+    return sep.join(
+        "".join(paint(text, code, color) for text, code in seg.parts) for seg in segments
+    )
 
 
 # --------------------------------------------------------------------------

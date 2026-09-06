@@ -117,7 +117,18 @@ is dropped last.
 
 When a value has not arrived yet, the segment shows a question mark rather than a zero:
 `ctx ?%`, `5h ?%`, `$?`. The segment keeps its place, so the row does not reshuffle when the
-first API response lands.
+first API response lands. A question mark also appears in three cases where the number
+exists but cannot be trusted:
+
+- A usage window whose `resets_at` has already passed. The percentage belongs to the window
+  that just ended. Claude Code drops such a window from the payload, so this covers only the
+  gap before the next render.
+- `prompt_cache` present without a `warm` field, which means the cache state is unknown
+  rather than cold.
+- The context segment falls back to `ctx 13%` without the token counts when
+  `total_input_tokens` plus `total_output_tokens` exceeds the window size. Input includes
+  cache reads and writes, so that sum can run past the window, and `ctx 1.2M/1M (13%)` would
+  read as a fault. The percentage is the authoritative number.
 
 ## How it fits the width
 
@@ -129,6 +140,10 @@ If the joined row is wider than `COLUMNS`, the lowest-priority segment is droppe
 row is measured again. There is no abbreviation and no wrapping. The documentation says
 long output "may get truncated or wrap awkwardly", which is undefined behavior rather than
 a layout, so the row is kept inside the width by construction.
+
+One segment always survives. If even the most protected segment is wider than the terminal,
+it is cut to fit rather than dropped, because a truncated `PAUSE` still tells you the session
+is paused and a blank row looks like the script crashed.
 
 ```
 COLUMNS = 200   nothing dropped
@@ -213,7 +228,7 @@ belongs to exactly one condition: a usage window at 95 percent or above.
 | agent | `110` |
 | model, effort, worktree, fast and thinking | `245` grey |
 | PR approved, pending, changes requested | `108`, `244`, `173` |
-| lines added, lines removed | `108`, `174` |
+| lines added, lines removed | `108`, `174`, two colors within one segment |
 
 ## The limit-guard bridge
 
@@ -230,7 +245,13 @@ The gate is located in this order:
 
 1. `BOBBY_STATUSLINE_LIMIT_GUARD`, an explicit path.
 2. A sibling directory: `../limit-guard/hooks/limit-guard-gate.py`.
-3. One glob under `${CLAUDE_CONFIG_DIR:-~/.claude}/plugins/cache/*/limit-guard/*/hooks/`.
+3. One glob under `${CLAUDE_CONFIG_DIR:-~/.claude}/plugins/cache/*/limit-guard/*/hooks/`,
+   taking the highest version. Plain string order would put `0.9.0` after `0.10.0` and pin
+   an old copy forever, so the version directory is compared as numbers.
+
+The pause state is read through `limit-guard`'s own `load_state()` when the import succeeds.
+The fallback reads the file directly and honors `LIMIT_GUARD_HOME`, the same variable
+`limit-guard` uses, so a relocated state directory does not silently report "not paused".
 
 Degradation, in order:
 
@@ -251,7 +272,10 @@ badge, and this script swallows the output so it cannot land in the middle of th
 | `[STE]` | `${CLAUDE_CONFIG_DIR:-~/.claude}/.ste-active` | `ste` |
 
 Both readers refuse symlinks, cap the read at 64 bytes, and strip every character outside
-`[a-z0-9-]`. An unrecognized value renders nothing rather than echoing the bytes. A local
+`[a-z0-9-]`. Text taken from the session JSON, such as a model or agent name, cannot use that
+whitelist, so it is stripped of C0 and C1 control characters, `DEL`, and the bidi override
+marks. C1 matters because `0x9b` is a second `CSI` introducer in some terminals, and a bidi
+override can visually reorder a row so that a low percentage reads as a high one. An unrecognized value renders nothing rather than echoing the bytes. A local
 attacker who can plant a file must not be able to have the status line print
 `~/.ssh/id_rsa`, or an ANSI escape sequence, on every keystroke.
 
@@ -299,10 +323,12 @@ cd plugins/bobby-statusline && python3 -m unittest discover -s tests -p 'test_*.
 python3 bin/bobby-statusline.py --selftest
 ```
 
-62 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
+82 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
 oversize, escape bytes, whitelist), the billing modes, the color thresholds, both layouts,
-the configuration layers, the pause state, and the `limit-guard` bridge including an old
-gate and a raising gate.
+the configuration layers, the pause state, the `limit-guard` bridge including an old gate
+and a raising gate, the slash command's contract, and one regression test for every defect
+the 2026-09-06 audit found. Each of those twelve fails against the code as it stood before
+that audit.
 
 Every test isolates `CLAUDE_CONFIG_DIR` into a temporary directory and pins the clock with
 `BOBBY_STATUSLINE_NOW`, so a run reads none of the developer's own session state and the

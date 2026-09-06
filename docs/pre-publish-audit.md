@@ -34,7 +34,7 @@ results are what to check, not what to type verbatim.
 
 | # | Plugin | Do | Expect |
 |---|---|---|---|
-| 1 | all | `claude plugin list` | 5 `@skill-bazaar` entries enabled; no `caveman@caveman` |
+| 1 | all | `claude plugin list` | 6 `@skill-bazaar` entries enabled; no `caveman@caveman` |
 | 2 | ste | start a session, ask "which writing rules are active?" | STE prompt injected (SessionStart); caveman NOT active |
 | 3 | ste | `/ste status` | reports ste on, caveman off, last mode |
 | 4 | ste | `/ste off`, then ask for a paragraph | no STE discipline; `~/.config/ste/state.json` has `"ste": false` |
@@ -45,7 +45,9 @@ results are what to check, not what to type verbatim.
 | 9 | caveman | `stop caveman` | plain style; config.json → `"off"`; next session starts without caveman |
 | 10 | caveman | write "how do I `stop caveman` in docs?" | mode unchanged, config.json unchanged |
 | 11 | caveman | `/caveman-help` | loads only on explicit call (user-only skill) |
-| 12 | limit-guard | look at the statusline | `[5h NN%↻…]` badge after the caveman badge |
+| 12 | limit-guard | look at the statusline | with limit-guard's own wrapper: `[5h NN%↻…]` badge after the caveman badge. With bobby-statusline installed instead: one row, badges first, then `5h NN% >HH:MM` |
+| 12b | bobby-statusline | `bobby-statusline.py demo`, then `--selftest` | rows at six widths; end-to-end p95 under 50ms |
+| 12c | bobby-statusline | `python3 -m unittest discover -s tests -p 'test_*.py'` in the plugin | 82 tests pass |
 | 13 | limit-guard | `limit-guard status` in Bash | exit 0, one line with window percentages |
 | 14 | limit-guard | `limit-guard selftest` | PASS |
 | 15 | limit-guard | `limit-guard resume` from the model | DENIED by the PreToolUse hook (only the human may unpause) |
