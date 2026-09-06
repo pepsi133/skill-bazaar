@@ -426,6 +426,33 @@ class TestRobustness(Base):
         self.assertIn("ctx ?%", BS.render("[1, 2, 3]"))
 
 
+class TestSlashCommand(unittest.TestCase):
+    """The install command is a prompt, so what is testable is its contract."""
+
+    def setUp(self):
+        import tomllib
+
+        path = os.path.join(ROOT, "commands", "install.toml")
+        with open(path, "rb") as fh:
+            self.command = tomllib.load(fh)
+
+    def test_has_a_description_and_a_prompt(self):
+        self.assertTrue(self.command["description"].strip())
+        self.assertTrue(self.command["prompt"].strip())
+
+    def test_sets_both_required_keys(self):
+        for key in ("statusLine", "hideVimModeIndicator"):
+            self.assertIn(key, self.command["prompt"])
+
+    def test_refuses_to_replace_an_existing_statusline_silently(self):
+        prompt = self.command["prompt"]
+        self.assertIn("already set", prompt)
+        self.assertIn("Ask", prompt)
+
+    def test_confines_the_edit_to_settings_json(self):
+        self.assertIn("do not edit files outside", self.command["prompt"])
+
+
 class TestCommandLine(unittest.TestCase):
     def run_script(self, *args, stdin=""):
         env = dict(os.environ, NO_COLOR="1", COLUMNS="200", TZ="UTC")

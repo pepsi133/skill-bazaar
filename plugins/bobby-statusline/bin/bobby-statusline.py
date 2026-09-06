@@ -622,6 +622,9 @@ A plugin cannot set the main statusLine: that key is the user's own, and only
 `agent` and `subagentStatusLine` are plugin-settable. So this command prints the
 snippet and changes nothing.
 
+To have Claude make the edit instead, with the change shown first, run the slash
+command /bobby-statusline:install.
+
 Add to %s:
 
 {

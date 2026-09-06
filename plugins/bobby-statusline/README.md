@@ -51,8 +51,20 @@ CLAUDE_CONFIG_DIR=/tmp/bobby-test COLUMNS=$COLUMNS \
 ## Install
 
 A plugin cannot set the main `statusLine`. That key belongs to the user, and only `agent`
-and `subagentStatusLine` are plugin-settable. So the install command prints the snippet and
-changes nothing:
+and `subagentStatusLine` are plugin-settable, so nothing is wired up by installing the
+plugin. There are two ways to finish the job.
+
+**Let Claude do it.** Run the slash command:
+
+```
+/bobby-statusline:install
+```
+
+It locates the script, runs `install` to get the resolved path, shows you the diff, and
+writes it. If `statusLine` is already set to something else, it stops and asks rather than
+replacing what you or another plugin put there.
+
+**Or paste it yourself.** The script only ever prints:
 
 ```bash
 python3 /path/to/plugins/bobby-statusline/bin/bobby-statusline.py install
@@ -73,6 +85,9 @@ Add what it prints to `~/.claude/settings.json`:
 `hideVimModeIndicator` removes the built-in `-- INSERT --` row, because this status line
 renders the vim mode itself. Without it the mode appears twice, and on a short terminal the
 extra row is the one that gets cut off.
+
+The status line updates on the next assistant message. A settings change is itself a refresh
+trigger, so no restart is needed.
 
 ## What it renders
 

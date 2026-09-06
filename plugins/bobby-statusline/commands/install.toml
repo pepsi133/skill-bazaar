@@ -1,0 +1,42 @@
+description = "Wire bobby-statusline into the user's settings.json, with the change shown before it is made"
+
+prompt = """
+Set up bobby-statusline as the user's status line. Edit their settings.json for them, but
+show the change first and never guess at a path.
+
+1. Locate the script. Try these in order, and stop at the first that exists:
+   - `${CLAUDE_PLUGIN_ROOT}/bin/bobby-statusline.py`
+   - a glob under `${CLAUDE_CONFIG_DIR:-~/.claude}/plugins/cache/*/bobby-statusline/*/bin/bobby-statusline.py`, newest version
+   - `plugins/bobby-statusline/bin/bobby-statusline.py` under the current repository
+   If none exists, say so and stop. Do not write a path you have not confirmed.
+
+2. Run `python3 <path> install` and read what it prints. That output is the source of truth
+   for the snippet, including the absolute path it resolved. Do not retype the snippet from
+   memory.
+
+3. Read `${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json`. If the file does not exist, create
+   it containing only the two keys below. If it exists, preserve every existing key exactly,
+   including comments if the file has any.
+
+4. Set `statusLine` to `{"type": "command", "command": "python3 <resolved path>"}` and
+   `hideVimModeIndicator` to `true`. The second key removes the built-in `-- INSERT --` row,
+   because this status line renders the vim mode itself; without it the mode appears twice.
+
+5. If `statusLine` is already set to something else, stop and show the user the current
+   value and the proposed value side by side. Ask which they want. A status line someone
+   configured on purpose, or a chain another plugin set up, must not be replaced silently.
+
+6. Show the user the exact diff before writing, then write it.
+
+7. Afterwards, tell them three things, briefly:
+   - The status line updates on the next assistant message. A settings change is itself a
+     refresh trigger, so no restart is needed.
+   - `python3 <path> demo` renders the row at several widths in a throwaway config
+     directory, if they want to see the drop order.
+   - Preferences live in `${CLAUDE_CONFIG_DIR:-~/.claude}/bobby-statusline.json`. The
+     plugin README lists every key. The common ones are `billing` (`auto`, `plan`, `cost`,
+     `both`), `layout` (`one-row`, `two-row`), and `segments`.
+
+Do not change any other setting, do not install anything, and do not edit files outside
+settings.json.
+"""
