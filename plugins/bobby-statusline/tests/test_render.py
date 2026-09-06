@@ -451,6 +451,31 @@ class TestCommandLine(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertNotIn("Traceback", result.stderr)
 
+    def test_demo_runs_and_shows_several_widths(self):
+        result = self.run_script("demo")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("COLUMNS 120", result.stdout)
+        self.assertIn("COLUMNS 80", result.stdout)
+        self.assertIn("temporary", result.stdout)
+
+    def test_demo_writes_nothing_to_the_config_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["CLAUDE_CONFIG_DIR"] = tmp
+            try:
+                result = self.run_script("demo")
+            finally:
+                del os.environ["CLAUDE_CONFIG_DIR"]
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(os.listdir(tmp), [])
+
+    def test_demo_names_a_fixture(self):
+        self.assertIn("$1.37", self.run_script("demo", "cost-only").stdout)
+
+    def test_demo_rejects_an_unknown_fixture(self):
+        result = self.run_script("demo", "nope")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("fixtures:", result.stderr)
+
     def test_version(self):
         self.assertIn("bobby-statusline", self.run_script("--version").stdout)
 

@@ -12,6 +12,9 @@ Entry points, selected by argv[1]:
                (two when the two-row layout is configured).
   install      Prints the settings.json snippet with this file's path filled in.
                Touches no file.
+  demo [name]  Renders a fixture at several widths in a throwaway config
+               directory, so the row can be looked at before anything is
+               installed. Writes nothing outside that directory.
   --selftest   Renders the built-in fixtures and reports p95 render time.
 
 Design invariants:
@@ -667,6 +670,63 @@ def run_install() -> int:
 
 
 # --------------------------------------------------------------------------
+# demo
+# --------------------------------------------------------------------------
+
+DEMO_WIDTHS = (200, 160, 120, 80, 60)
+
+
+def run_demo(argv: list) -> int:
+    """Render the fixtures in a throwaway config directory, so nothing is installed.
+
+    Looking at the row before editing settings.json is the point. This builds a
+    temporary CLAUDE_CONFIG_DIR, plants sample badge flags in it, and renders
+    there, so the real configuration directory is neither read nor written and
+    limit-guard's cache is left alone.
+
+    `demo` uses the real terminal size, because a shell does not export COLUMNS
+    to a child process. Claude Code does set it, which is why a render trusts it.
+    """
+    import shutil
+    import tempfile
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    wanted = argv[2] if len(argv) > 2 else "full"
+    path = os.path.join(root, "tests", "fixtures", "%s.json" % wanted)
+    if not os.path.isfile(path):
+        names = sorted(
+            os.path.basename(f)[:-5]
+            for f in glob.glob(os.path.join(root, "tests", "fixtures", "*.json"))
+        )
+        sys.stderr.write("no such fixture: %s\nfixtures: %s\n" % (wanted, ", ".join(names)))
+        return 1
+    payload = read_text(path) or "{}"
+
+    with tempfile.TemporaryDirectory(prefix="bobby-statusline-demo-") as tmp:
+        os.environ["CLAUDE_CONFIG_DIR"] = tmp
+        # An absent path, so the demo never imports limit-guard and never writes
+        # a cache. The row still shows the windows: they come from stdin.
+        os.environ["BOBBY_STATUSLINE_LIMIT_GUARD"] = os.path.join(tmp, "absent.py")
+        for name, content in ((CAVEMAN_FLAG, "full"), (STE_FLAG, "on")):
+            with open(os.path.join(tmp, name), "w", encoding="utf-8") as fh:
+                fh.write(content)
+
+        real = shutil.get_terminal_size(fallback=(80, 24)).columns
+        widths = [real] + [w for w in DEMO_WIDTHS if w != real]
+        sys.stdout.write(
+            "fixture %s, config dir %s (temporary, removed on exit)\n\n" % (wanted, tmp)
+        )
+        for width in widths:
+            os.environ["COLUMNS"] = str(width)
+            label = "%d%s" % (width, " <- this terminal" if width == real else "")
+            sys.stdout.write("COLUMNS %s\n" % label)
+            for row in render(payload).split("\n"):
+                sys.stdout.write("  %s\n" % row)
+            sys.stdout.write("\n")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # selftest
 # --------------------------------------------------------------------------
 
@@ -739,6 +799,8 @@ def main(argv: list) -> int:
     arg = argv[1] if len(argv) > 1 else ""
     if arg == "install":
         return run_install()
+    if arg == "demo":
+        return run_demo(argv)
     if arg == "--selftest":
         return run_selftest()
     if arg in ("--version", "-V"):

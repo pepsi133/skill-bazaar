@@ -28,6 +28,26 @@ end to end      median 30.1ms   p95 32.7ms   max 34.8ms
 Run `bin/bobby-statusline.py --selftest` to reproduce both numbers. It fails when the
 end-to-end p95 exceeds 50 milliseconds.
 
+## Look at it before you install
+
+```bash
+python3 /path/to/plugins/bobby-statusline/bin/bobby-statusline.py demo
+python3 /path/to/plugins/bobby-statusline/bin/bobby-statusline.py demo cost-only
+```
+
+`demo` renders a fixture at your terminal width and at five fixed widths, so the drop order
+is visible. It builds a throwaway `CLAUDE_CONFIG_DIR`, plants sample badge flags in it, and
+removes it on exit, so your real configuration directory is neither read nor written and
+`limit-guard`'s cache is untouched. Any fixture name under `tests/fixtures/` works.
+
+To try the real thing against your own session without editing `settings.json`, point the
+whole plugin at a scratch configuration directory:
+
+```bash
+CLAUDE_CONFIG_DIR=/tmp/bobby-test COLUMNS=$COLUMNS \
+  python3 bin/bobby-statusline.py < tests/fixtures/full.json
+```
+
 ## Install
 
 A plugin cannot set the main `statusLine`. That key belongs to the user, and only `agent`
@@ -220,8 +240,15 @@ Both readers refuse symlinks, cap the read at 64 bytes, and strip every characte
 attacker who can plant a file must not be able to have the status line print
 `~/.ssh/id_rsa`, or an ANSI escape sequence, on every keystroke.
 
-`ste` does not write `.ste-active` yet. Until it does, the `[STE]` badge stays absent. See
-`roadmap/private/backlog/ste-status-flag.md`.
+`ste` does not write `.ste-active` yet, so the `[STE]` badge stays absent until it does.
+The change is about ten lines in a hook `ste` already runs: write `on` to the flag on
+`/ste on`, remove the file on `/ste off`, refuse a symlink at the path, and write
+atomically at mode 0600. Absence is the "off" signal, matching `caveman`, so a reader that
+finds no file renders nothing rather than empty brackets.
+
+Reading `ste`'s own `$XDG_CONFIG_HOME/ste/state.json` instead was the alternative. One read
+path won: one hardening routine rather than two, one fixture shape, and `caveman` and `ste`
+then look identical to any future status line.
 
 ## The countdown is a snapshot
 
@@ -245,7 +272,10 @@ cost is one `python3` start every 30 seconds while the session sits idle.
 - **Your actual bill.** `cost.total_cost_usd` is computed client-side at list price and
   resets on `/clear`.
 - **Spend outside this session.** Today, this week, and other sessions are not in the
-  payload. See `roadmap/private/backlog/bobby-statusline-spend-history.md`.
+  payload. Session transcripts under `~/.claude/projects/` do record per-message token
+  counts and timestamps, with no dollar field, so a figure means summing tokens against a
+  price table. Scanning that per render costs far more than the budget allows, so it needs
+  a cached sidecar and is not part of this version.
 
 ## Tests
 
