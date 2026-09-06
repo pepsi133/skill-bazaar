@@ -641,7 +641,12 @@ def paint_row(segments: list, sep: str, color: bool) -> str:
 # --------------------------------------------------------------------------
 
 
-def render(stdin_text: str) -> str:
+def render(stdin_text: str, now: float | None = None) -> str:
+    """Render the row. `now` exists so a caller can pin the clock.
+
+    The tests pass it, and `demo` anchors it to the fixture so the sample rows
+    do not go stale. A live render leaves it unset and reads the real clock.
+    """
     try:
         data = json.loads(stdin_text) if stdin_text.strip() else {}
         if not isinstance(data, dict):
@@ -650,7 +655,8 @@ def render(stdin_text: str) -> str:
         data = {}
 
     cfg = load_config()
-    now = _num(os.environ.get("BOBBY_STATUSLINE_NOW"), 0.0) or time.time()
+    if now is None:
+        now = time.time()
 
     mod = limit_guard_module()
     if data:
@@ -741,6 +747,27 @@ def run_install() -> int:
 DEMO_WIDTHS = (200, 160, 120, 80, 60)
 
 
+def fixture_now(payload: str) -> float | None:
+    """A clock that makes a fixture's rate-limit windows look live.
+
+    Fixtures carry absolute `resets_at` timestamps. Rendered against the real
+    clock they eventually fall in the past, and the row correctly but uselessly
+    shows `5h ?%`. Anchoring an hour before the earliest reset keeps the sample
+    readable for as long as the fixture exists. Returns None when the payload
+    has no window, in which case the real clock is right.
+    """
+    try:
+        limits = (json.loads(payload) or {}).get("rate_limits") or {}
+    except (ValueError, AttributeError):
+        return None
+    resets = [
+        win["resets_at"]
+        for win in limits.values()
+        if isinstance(win, dict) and isinstance(win.get("resets_at"), (int, float))
+    ]
+    return min(resets) - 3600 if resets else None
+
+
 def run_demo(argv: list) -> int:
     """Render the fixtures in a throwaway config directory, so nothing is installed.
 
@@ -785,7 +812,7 @@ def run_demo(argv: list) -> int:
             os.environ["COLUMNS"] = str(width)
             label = "%d%s" % (width, " <- this terminal" if width == real else "")
             sys.stdout.write("COLUMNS %s\n" % label)
-            for row in render(payload).split("\n"):
+            for row in render(payload, now=fixture_now(payload)).split("\n"):
                 sys.stdout.write("  %s\n" % row)
             sys.stdout.write("\n")
     return 0
@@ -820,9 +847,10 @@ def run_selftest() -> int:
     inner = []
     for path in paths:
         payload = read_text(path) or "{}"
+        pinned = fixture_now(payload)
         for _ in range(20):
             start = time.perf_counter()
-            render(payload)
+            render(payload, now=pinned)
             inner.append((time.perf_counter() - start) * 1000)
     inner.sort()
     sys.stdout.write(

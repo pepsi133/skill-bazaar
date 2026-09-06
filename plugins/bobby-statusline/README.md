@@ -330,9 +330,16 @@ and a raising gate, the slash command's contract, and one regression test for ev
 the 2026-09-06 audit found. Each of those twelve fails against the code as it stood before
 that audit.
 
-Every test isolates `CLAUDE_CONFIG_DIR` into a temporary directory and pins the clock with
-`BOBBY_STATUSLINE_NOW`, so a run reads none of the developer's own session state and the
-expectations do not drift with the date.
+Every test isolates `CLAUDE_CONFIG_DIR` into a temporary directory, including the tests that
+run the script as a subprocess, so a run reads none of the developer's own session state and
+writes nothing into their real `limit-guard` cache. The clock is pinned by passing
+`render(payload, now=...)`, so the expectations do not drift with the date and nothing in the
+environment can freeze a real session's countdown.
+
+The performance test asserts that the selftest measures, not that this machine was fast. The
+50 millisecond budget is checked by `--selftest` itself, where a person or CI reads the
+number; asserting it inside the suite makes a loaded laptop fail a run, which teaches people
+to ignore red.
 
 ## Not in this version
 

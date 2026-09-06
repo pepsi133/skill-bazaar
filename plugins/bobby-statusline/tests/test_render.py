@@ -23,8 +23,9 @@ FIXTURES = os.path.join(HERE, "fixtures")
 EXPECTED = os.path.join(HERE, "expected")
 
 # The clock every fixture was generated against. Rate-limit resets are absolute
-# timestamps, so a floating "now" would make the expectations drift daily.
-NOW = "1789000000"
+# timestamps, so a floating "now" would make the expectations drift daily. The
+# renderer takes it as an argument, so nothing in the environment pins it.
+NOW = 1789000000
 
 ANSI = re.compile(r"\033\[[0-9;]*m")
 
@@ -55,17 +56,13 @@ class Base(unittest.TestCase):
                 "NO_COLOR": "1",
                 "COLUMNS": "200",
                 "CLAUDE_CONFIG_DIR": self.config,
-                "BOBBY_STATUSLINE_NOW": NOW,
                 # A real limit-guard would write into the temporary config dir,
                 # which is harmless, but the bridge is tested on its own terms.
                 "BOBBY_STATUSLINE_LIMIT_GUARD": os.path.join(self.config, "absent.py"),
             }
         )
         for key in list(os.environ):
-            if key.startswith("BOBBY_STATUSLINE_") and key not in (
-                "BOBBY_STATUSLINE_NOW",
-                "BOBBY_STATUSLINE_LIMIT_GUARD",
-            ):
+            if key.startswith("BOBBY_STATUSLINE_") and key != "BOBBY_STATUSLINE_LIMIT_GUARD":
                 del os.environ[key]
         time.tzset()
         self.addCleanup(self.restore)
@@ -78,7 +75,7 @@ class Base(unittest.TestCase):
 
     def render(self, fixture: str, **env) -> str:
         os.environ.update({k: str(v) for k, v in env.items()})
-        return BS.render(read_fixture(fixture))
+        return BS.render(read_fixture(fixture), now=NOW)
 
     def plain(self, text: str) -> str:
         return ANSI.sub("", text)
@@ -326,16 +323,16 @@ class TestPaused(Base):
             json.dump(fields, fh)
 
     def test_paused_renders_first(self):
-        self.write_state(paused=True, until=int(NOW) + 1800)
+        self.write_state(paused=True, until=NOW + 1800)
         line = self.render("full.json")
         self.assertTrue(line.startswith("PAUSED >"))
 
     def test_manual_pause_is_labeled(self):
-        self.write_state(paused=True, manual=True, until=int(NOW) + 1800)
+        self.write_state(paused=True, manual=True, until=NOW + 1800)
         self.assertIn("PAUSED(manual)", self.render("full.json"))
 
     def test_paused_survives_a_narrow_terminal(self):
-        self.write_state(paused=True, until=int(NOW) + 1800)
+        self.write_state(paused=True, until=NOW + 1800)
         self.assertIn("PAUSED", self.render("full.json", COLUMNS=30))
 
     def test_not_paused_renders_nothing(self):
@@ -403,7 +400,7 @@ class TestLimitGuardBridge(Base):
             "    with open(%r, 'w') as fh:\n"
             "        fh.write('x')\n" % marker
         )
-        BS.render("")
+        BS.render("", now=NOW)
         self.assertFalse(os.path.exists(marker))
 
 
@@ -412,18 +409,18 @@ class TestRobustness(Base):
         self.assertIn("ctx ?%", self.render("malformed.json"))
 
     def test_empty_stdin_still_renders(self):
-        self.assertIn("ctx ?%", BS.render(""))
+        self.assertIn("ctx ?%", BS.render("", now=NOW))
 
     def test_control_bytes_in_model_name_are_stripped(self):
         payload = json.dumps({"model": {"display_name": "Opus\033[31m evil"}})
-        self.assertNotIn("\033[31m", BS.render(payload))
+        self.assertNotIn("\033[31m", BS.render(payload, now=NOW))
 
     def test_long_model_name_is_capped(self):
         payload = json.dumps({"model": {"display_name": "M" * 500}})
-        self.assertLessEqual(len(self.plain(BS.render(payload))), 200)
+        self.assertLessEqual(len(self.plain(BS.render(payload, now=NOW))), 200)
 
     def test_json_array_is_not_a_session(self):
-        self.assertIn("ctx ?%", BS.render("[1, 2, 3]"))
+        self.assertIn("ctx ?%", BS.render("[1, 2, 3]", now=NOW))
 
 
 class TestAuditRegressions(Base):
@@ -448,14 +445,14 @@ class TestAuditRegressions(Base):
         d = os.path.join(self.config, "limit-guard")
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "state.json"), "w") as fh:
-            json.dump({"paused": True, "until": int(NOW) + 1800}, fh)
+            json.dump({"paused": True, "until": NOW + 1800}, fh)
 
     def test_expired_window_shows_no_stale_time(self):
         """A window past its reset carries a stale percentage and a past clock."""
         line = self.render_payload(
             rate_limits={
-                "five_hour": {"used_percentage": 88, "resets_at": int(NOW) - 60},
-                "seven_day": {"used_percentage": 14, "resets_at": int(NOW) + 86400},
+                "five_hour": {"used_percentage": 88, "resets_at": NOW - 60},
+                "seven_day": {"used_percentage": 14, "resets_at": NOW + 86400},
             }
         )
         self.assertIn("5h ?%", line)
@@ -486,18 +483,18 @@ class TestAuditRegressions(Base):
         home = os.path.join(self.config, "elsewhere")
         os.makedirs(home)
         with open(os.path.join(home, "state.json"), "w") as fh:
-            json.dump({"paused": True, "until": int(NOW) + 600}, fh)
+            json.dump({"paused": True, "until": NOW + 600}, fh)
         os.environ["LIMIT_GUARD_HOME"] = home
         self.assertIn("PAUSED", self.render("full.json"))
 
     def test_c1_control_characters_are_stripped(self):
         """0x9b is a CSI introducer in some terminals."""
-        line = BS.render(self.payload(agent={"name": "a\u009b31mred"}))
+        line = BS.render(self.payload(agent={"name": "a\u009b31mred"}), now=NOW)
         self.assertNotIn("\u009b", line)
 
     def test_bidi_overrides_are_stripped(self):
         """A right-to-left override can reorder a percentage on screen."""
-        line = BS.render(self.payload(agent={"name": "a\u202eb"}))
+        line = BS.render(self.payload(agent={"name": "a\u202eb"}), now=NOW)
         self.assertNotIn("\u202e", line)
 
     def test_version_key_orders_ten_above_nine(self):
@@ -508,7 +505,7 @@ class TestAuditRegressions(Base):
         self.assertEqual(max(paths, key=BS._version_key), paths[1])
 
     def render_payload(self, **fields) -> str:
-        return BS.render(self.payload(**fields))
+        return BS.render(self.payload(**fields), now=NOW)
 
 
 class TestMultiColorSegments(Base):
@@ -560,8 +557,23 @@ class TestSlashCommand(unittest.TestCase):
 
 
 class TestCommandLine(unittest.TestCase):
-    def run_script(self, *args, stdin=""):
-        env = dict(os.environ, NO_COLOR="1", COLUMNS="200", TZ="UTC")
+    def setUp(self):
+        # Without this, `--selftest` renders against the developer's real
+        # CLAUDE_CONFIG_DIR, imports the sibling limit-guard, and writes to the
+        # actual rate-limit cache. Its capture also unpauses an expired window,
+        # so a test run could clear a real pause.
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def run_script(self, *args, stdin="", config=None):
+        env = dict(
+            os.environ,
+            NO_COLOR="1",
+            COLUMNS="200",
+            TZ="UTC",
+            CLAUDE_CONFIG_DIR=config or self.tmp.name,
+            BOBBY_STATUSLINE_LIMIT_GUARD=os.path.join(self.tmp.name, "absent.py"),
+        )
         return subprocess.run(
             [sys.executable, SCRIPT, *args],
             input=stdin, capture_output=True, text=True, env=env,
@@ -569,11 +581,7 @@ class TestCommandLine(unittest.TestCase):
 
     def test_install_prints_and_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
-            os.environ["CLAUDE_CONFIG_DIR"] = tmp
-            try:
-                result = self.run_script("install")
-            finally:
-                del os.environ["CLAUDE_CONFIG_DIR"]
+            result = self.run_script("install", config=tmp)
             self.assertEqual(result.returncode, 0)
             self.assertIn("hideVimModeIndicator", result.stdout)
             self.assertIn("statusLine", result.stdout)
@@ -593,11 +601,7 @@ class TestCommandLine(unittest.TestCase):
 
     def test_demo_writes_nothing_to_the_config_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
-            os.environ["CLAUDE_CONFIG_DIR"] = tmp
-            try:
-                result = self.run_script("demo")
-            finally:
-                del os.environ["CLAUDE_CONFIG_DIR"]
+            result = self.run_script("demo", config=tmp)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(os.listdir(tmp), [])
 
@@ -612,10 +616,18 @@ class TestCommandLine(unittest.TestCase):
     def test_version(self):
         self.assertIn("bobby-statusline", self.run_script("--version").stdout)
 
-    def test_selftest_meets_the_budget(self):
+    def test_selftest_reports_both_measurements(self):
+        """Asserts that it measures, not that this machine was fast.
+
+        The budget check lives in the command itself, where a person or CI
+        reads the number. Asserting the exit code here makes a loaded laptop
+        fail the suite, which teaches people to ignore a red run.
+        """
         result = self.run_script("--selftest")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("render only", result.stdout)
+        self.assertIn("end to end", result.stdout)
         self.assertIn("p95", result.stdout)
+        self.assertIn(result.returncode, (0, 1))
 
 
 if __name__ == "__main__":
