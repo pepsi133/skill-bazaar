@@ -1,0 +1,27 @@
+{
+  "context_window": {
+    "context_window_size": 200000,
+    "total_input_tokens": 190000,
+    "total_output_tokens": 4000,
+    "used_percentage": 97
+  },
+  "cost": {
+    "total_cost_usd": 9.99
+  },
+  "model": {
+    "display_name": "Opus 5"
+  },
+  "rate_limits": {
+    "five_hour": {
+      "resets_at": 1789000900,
+      "used_percentage": 96.4
+    },
+    "seven_day": {
+      "resets_at": 1789172800,
+      "used_percentage": 88
+    }
+  },
+  "vim": {
+    "mode": "NORMAL"
+  }
+}

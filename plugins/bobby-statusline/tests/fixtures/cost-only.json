@@ -1,0 +1,24 @@
+{
+  "context_window": {
+    "context_window_size": 1000000,
+    "remaining_percentage": 87,
+    "total_input_tokens": 128000,
+    "total_output_tokens": 4000,
+    "used_percentage": 13
+  },
+  "cost": {
+    "total_cost_usd": 1.37,
+    "total_lines_added": 12,
+    "total_lines_removed": 4
+  },
+  "effort": {
+    "level": "medium"
+  },
+  "model": {
+    "display_name": "Opus 5"
+  },
+  "prompt_cache": {
+    "hit_ratio": 0.0,
+    "warm": false
+  }
+}

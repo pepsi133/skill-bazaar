@@ -37,7 +37,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 # --------------------------------------------------------------------------
 # Paths
@@ -839,9 +839,15 @@ def badge(cache: dict | None, state: dict, now: float) -> str:
     return " [" + " | ".join(chunks) + "]"
 
 
-def run_capture(stdin_text: str) -> int:
-    """Write the cache, print the badge. Never raises, never exits non-zero:
-    a statusline that fails is worse than a statusline with no badge."""
+def capture(stdin_text: str):
+    """Write the cache and advance the pause state. Prints nothing. Never raises.
+
+    Split out of `run_capture` so another statusline can do the capture in its
+    own process instead of paying for a second python3 start: bobby-statusline
+    imports this module and calls this function. Returns (cache, state, now) so
+    `run_capture` can render its badge without repeating the work, or None when
+    the capture could not complete.
+    """
     try:
         payload = json.loads(stdin_text) if stdin_text.strip() else {}
         if not isinstance(payload, dict):
@@ -873,7 +879,7 @@ def run_capture(stdin_text: str) -> int:
             save_state(state)
             append_log({"event": "unpaused_time", "source": "statusline"})
         write_status(cache, state, now)
-        sys.stdout.write(badge(cache, state, now))
+        return cache, state, now
     except Exception as exc:
         append_log(
             {
@@ -881,6 +887,22 @@ def run_capture(stdin_text: str) -> int:
                 "error": clean("%s: %s" % (type(exc).__name__, exc), 300),
             }
         )
+        return None
+
+
+def run_capture(stdin_text: str) -> int:
+    """Statusline entry point: capture, then print the badge.
+
+    Never raises, never exits non-zero: a statusline that fails is worse than a
+    statusline with no badge.
+    """
+    result = capture(stdin_text)
+    if result is None:
+        return 0
+    try:
+        sys.stdout.write(badge(*result))
+    except Exception:
+        pass
     return 0
 
 

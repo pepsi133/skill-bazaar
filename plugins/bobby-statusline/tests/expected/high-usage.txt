@@ -1,0 +1,1 @@
+NORMAL | ctx 194k/200k (97%) | 5h 96% >00:41 | 7d 88% >Sat 00:26 | cache ? | Opus 5

@@ -1,0 +1,27 @@
+{
+  "context_window": {
+    "context_window_size": 1000000,
+    "remaining_percentage": 87,
+    "total_input_tokens": 128000,
+    "total_output_tokens": 4000,
+    "used_percentage": 13
+  },
+  "cost": {
+    "total_cost_usd": 0.02,
+    "total_lines_added": 0,
+    "total_lines_removed": 0
+  },
+  "model": {
+    "display_name": "Sonnet 5"
+  },
+  "rate_limits": {
+    "five_hour": {
+      "resets_at": 1789003600,
+      "used_percentage": 26
+    },
+    "seven_day": {
+      "resets_at": 1789345600,
+      "used_percentage": 14
+    }
+  }
+}

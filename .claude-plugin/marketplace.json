@@ -27,6 +27,11 @@
       "description": "Pause a Claude Code session before it burns through the 5-hour or 7-day usage window, wait for the reset without spending tokens, and resume automatically."
     },
     {
+      "name": "bobby-statusline",
+      "source": "./plugins/bobby-statusline",
+      "description": "One status line row for caveman, ste, and limit-guard: badges, vim mode, context, usage windows or session cost, prompt cache, model, agent, and PR. One python3 process, no chaining."
+    },
+    {
       "name": "ste",
       "source": "./plugins/ste",
       "description": "Simple Technical English (ASD-STE100) bridged to caveman: caveman's compressed style stays the default, and STE takes over on exactly the turns caveman itself says to drop compression. Toggle with /ste on|off|status."

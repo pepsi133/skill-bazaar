@@ -1,0 +1,13 @@
+{
+  "context_window": {
+    "context_window_size": 200000,
+    "current_usage": null,
+    "used_percentage": null
+  },
+  "cost": {
+    "total_cost_usd": 0.0
+  },
+  "model": {
+    "display_name": "Opus 5"
+  }
+}

@@ -1,0 +1,1 @@
+ctx 132k/1M (13%) | $1.37 | cache cold | Opus 5 | medium effort | +12/-4

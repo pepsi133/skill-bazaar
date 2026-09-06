@@ -1,0 +1,1 @@
+INSERT | ctx 132k/1M (13%) | 5h 26% >01:26 | 7d 14% >Mon 00:26 | cache warm 91% | Opus 5 1M | high effort | fast+think | @general-purpose | #1234 pending | +156/-23
