@@ -5,6 +5,106 @@ Run this before a push that makes new content public. Two independent runs of th
 findings diffed. Then the **functional gate** in a fresh Claude Code session with the plugins
 installed from this marketplace. Both must pass before the push.
 
+## How to run it
+
+**The rule for every agent working in this repository: prepare, never publish.** An agent
+runs the gate and writes the report. It does not run `git commit` or `git push` for the
+publication step. It ends by printing the two snippets in "Hand-off" below, for a person to
+read, decide on, and paste. `--no-verify` is never in a snippet an agent prints.
+
+### Step 0 — know what the push would publish
+
+```bash
+git fetch origin
+git log --oneline origin/main..HEAD          # every commit this push makes public
+git diff --stat origin/main..HEAD            # every file
+```
+
+If that list is not what you expect, stop here. The rest of the gate audits this set.
+
+### Step 1 — content gate, run twice, independently
+
+The point of two runs is disagreement. One agent that misses a finding is a passed gate; two
+that miss the same finding is unlikely. Do not let the second run see the first one's output.
+
+1. Open a **fresh** agent or a separate Claude instance, with no history of this work.
+2. Paste the prompt under "Content gate" verbatim, with `<PATH>` replaced by the repository
+   root.
+3. Save the table it returns to `/tmp/audit-content-1.md`.
+4. Repeat in a **second** fresh agent. Save to `/tmp/audit-content-2.md`.
+5. Diff them: `diff /tmp/audit-content-1.md /tmp/audit-content-2.md`.
+
+Any line that appears in one report and not the other is unresolved, not a false alarm.
+Investigate it by hand until you can say why it is `OK-example` or fix it. A single `BLOCK`
+in either report stops the push.
+
+The prompt tells the agent to scan the tracked tree at HEAD, which is wider than the commits
+you are about to push. That is deliberate: a file that became public in an earlier push is
+still public now.
+
+### Step 2 — functional gate
+
+Start a **new** Claude Code session, so `SessionStart` hooks and the status line load fresh.
+Work the numbered table below in order and record PASS or FAIL with the output you actually
+saw, not what you expected. A FAIL on rows 2, 7, 9, 12, or 15 blocks the push.
+
+Rows 12b, 12c, 18, 19, and 20 are plain commands and can be run in any shell:
+
+```bash
+python3 scripts/validate-skills.py
+cd plugins/bobby-statusline && python3 -m unittest discover -s tests -p 'test_*.py'
+python3 bin/bobby-statusline.py --selftest
+cd ../limit-guard/tests && python3 -m unittest discover -s . -p 'test_*.py'
+```
+
+### Step 3 — write the report
+
+Save both content-gate tables, their diff, and the functional table with PASS or FAIL per row
+to `roadmap/private/` with the date in the filename. That directory is excluded from git, so
+the report stays local. Record the exact commit range audited, because the report is only
+valid for that range: one more commit means one more thing nobody read.
+
+### Step 4 — enable the push reminder, once
+
+`.githooks/pre-push` prints what a push would publish and asks for a typed answer. It is
+optional and off until you link it, because a hook in a contributor's clone guards nothing.
+It is not on `main` yet; it lives on `feat/pre-push-audit-reminder`. Once that lands, enable
+it as `.githooks/README.md` and `AGENTS.md` describe:
+
+```bash
+ln -s ../../.githooks/pre-push .git/hooks/pre-push
+```
+
+The hook scans nothing, replaces no part of this audit, and `git push --no-verify` skips it.
+It exists to make the audit a deliberate act rather than an assumption. GitHub push
+protection is the enforcement layer, not this.
+
+## Hand-off — what an agent prints instead of pushing
+
+When the gate passes, the agent stops and prints these two snippets, unmodified, and says
+which commit range the report covers. The person reads the report, decides, and pastes.
+
+**Snippet 1 — commit the audit fixes, if the gate produced any:**
+
+```bash
+git add -A <paths the gate changed>
+git commit -m "fix(<area>): <what the audit found>"
+```
+
+**Snippet 2 — publish, after you have read the report:**
+
+```bash
+git log --oneline origin/main..HEAD     # read this list one more time
+git push origin main
+```
+
+If the pre-push hook is enabled it will ask; type `audited`. In a non-interactive shell it
+refuses and tells you to use `SKILL_BAZAAR_AUDIT_PASSED=1`. Setting that variable is a claim
+that you ran this gate. Do not set it to make a hook be quiet.
+
+**If the gate did not pass**, the agent prints no push snippet at all. It prints the findings
+and stops.
+
 ## Content gate — paste verbatim, replace `<PATH>`
 
 > You are auditing a git repository tree before it is published to a public GitHub remote.
@@ -59,3 +159,13 @@ results are what to check, not what to type verbatim.
 
 Record each row as PASS/FAIL with the observed output; a FAIL on 2, 7, 9, 12 or 15 blocks the
 push.
+
+## Known open items that block a publication push
+
+Check these before starting, because either one makes the gate fail work you could have
+avoided:
+
+| Item | State | Where |
+|---|---|---|
+| `ste` does not write `.ste-active` | open, on hold | `roadmap/private/backlog/ste-status-flag.md`. Until it lands, `bobby-statusline`'s `[STE]` badge cannot appear |
+| `skills/offline-html-report` has a manifest and no marketplace entry | open | `roadmap/private/backlog/offline-html-report.md`. Not on `main`, so `validate-skills` passes there; it fails on `harness-support-skills` and `test/pre-push-hook` |

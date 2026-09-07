@@ -99,6 +99,12 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
 
 ## Repo hygiene — this repo is public
 
+**Prepare, never publish.** An agent working here does not run `git push`, and does not run
+the `git commit` that completes a publication step. It runs the audit, writes the report, and
+prints the commit and push snippets for a person to read and paste. `docs/pre-publish-audit.md`
+has the runbook and the exact hand-off wording. An agent never prints `--no-verify`, and never
+sets `SKILL_BAZAAR_AUDIT_PASSED`: that variable is a person's claim that they ran the gate.
+
 Write every file as if it were already public, because it is. Skills here are written from
 real work, and that is the leak path: private detail travelling here as context.
 De-identify at the point of writing, not in a later sweep.
