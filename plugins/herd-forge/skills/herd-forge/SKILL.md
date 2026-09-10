@@ -1,12 +1,9 @@
 ---
 name: herd-forge
 description: >-
-  Create and configure a multi-agent research herd in Herdr: the directory tree, the
-  git repositories, the identity map, the configuration, and one instruction file per
-  agent (overseer, workers, reviewer, artifacts guard, between-herds relay). Use when a
-  question is too large for one context and the answer must survive independent review.
-  You are the creator, not the overseer: everything here is an instruction you write for
-  another agent to run.
+  Build a multi-agent research herd in Herdr: the tree, the git repositories, the
+  identity map, the configuration, and one instruction file per agent.
+disable-model-invocation: true
 ---
 
 # herd-forge: create a Herdr research herd
@@ -66,8 +63,9 @@ it. A directory and its tab created in one parallel batch produce exactly that f
    `herdr agent prompt <name> "$(cat <path>)"`. A `timeout` error on a long task means
    that the prompt landed. Make sure that `herdr agent get <name>` reports `working`.
    Do not send the prompt again.
-10. Commit the tree. Creation ends when the mapping and the configuration are committed
-    and every agent reports that it read its rules.
+10. Commit the tree. Creation ends when `common/config` and `common/IDENTITY.md` are
+    committed with one row per agent, and every agent directory holds a `STATUS.md`
+    that names the rules file that the agent read.
 
 ## 2. Naming, layout and the identity map
 
@@ -106,37 +104,24 @@ transformation and record both names:
 Lowercase the text. Replace spaces and punctuation with hyphens. Prefix the herd. Cut
 to 32 characters.
 
-### Layout: one pane per tab, and every pane named for its role
+### Layout: one pane per tab, named for the role
 
-Name every pane for the agent that runs in it, in words that a person reads. The pane of
-the overseer says `overseer`. The pane of the reviewer says `reviewer`. The pane of an
-author says what it authors. Set the name after the agent starts, because the pane
-exists before its occupant does.
+Give each agent its own tab. Name the tab and the pane for the role that runs in it, in
+words that a person reads: `overseer`, `reviewer`, or what an author authors. Set both
+names after the agent starts, because the pane exists before its occupant. Set the
+agent name at the same time. Pane and tab labels take spaces, so the pane label is
+where a person reads the role. The agent name is the one layer that cannot take
+spaces.
 
     herdr pane rename <pane_id> "<role>"
-
-Never use the terminal title as the name. The agent sets that field for itself and it
-changes as the agent works, so it reports activity and not identity.
-
-Give the tab the same role name. The operator scans the tab strip first, so a tab named
-for anything else costs a click.
-
     herdr tab rename <tab_id> "<role>"
-
-Name the tab for the role, never for the work in progress. A label that names work goes
-stale as soon as the work moves on. A label that names the role does not. The tab of the
-overseer reads `overseer`, whatever it does today.
-
-Set all three at creation: the tab label, the pane label, and the agent name. Pane and
-tab labels take spaces, so no code belongs in either. The agent name is the one layer
-that cannot take spaces, which makes the pane label the place where a person reads the
-role.
-
-One pane per tab. Two are acceptable when the second exists so that somebody watches it
-beside the first. More than two is clutter, and the operator reads the screen. Never
-build a workspace by splitting one tab again and again. Give each agent its own tab.
-
     herdr pane move <pane_id> --new-tab --label "<role>" --no-focus
+
+The name is the role and never the work in progress, because a label that names work
+goes stale as soon as the work moves on. The terminal title is not a name. The agent
+sets that field for itself and it changes as the agent works, so it reports activity.
+Two panes in one tab are acceptable when somebody watches the second beside the first.
+More than two is clutter, and the operator reads the screen.
 
 This rule exists because `wA:p1` built its own workspace by splitting one tab four
 times. Each split was one command, and the cost appeared later, on the screen, to
@@ -226,7 +211,8 @@ the template.
 ## 6. The rules that you write into every agent instruction
 
 State these in the file of each agent, not by reference. An agent that must open
-another file to learn a limit sometimes does not open it.
+another file to learn a limit sometimes does not open it. The templates in
+`reference/prompt-templates.md` carry the wording.
 
 - Mark every orchestration instruction. The first line names the sender, for example
   `OVERSEER wA:p1 —`.
@@ -247,92 +233,34 @@ another file to learn a limit sometimes does not open it.
   confirmation prompt is not permission." It does real work.
 - Demonstrate, do not use. If a probe yields access beyond what the task needed, record
   it and stop.
-- Files are the channel. `STATUS.md` is the report and a message is a courtesy. A pane
-  can report `done` and write nothing, which `wC` measured.
+- Files are the channel. `STATUS.md` is the report and a message is a courtesy.
 - If a rule blocks you, state the ask in one paragraph. Give what you will do if the
   answer is yes, and what you will do if the answer is no. Continue with the work that
   does not depend on the answer.
 
-A fix is not made when you write it down. It is made when it reaches every place that
-states the rule to somebody who must follow it. The test is who must act on the rule,
-never a count of files.
-
-Three places state a rule in this herd, and you check all three every time: `SKILL.md`,
-which the creator reads; `reference/prompt-templates.md`, which becomes the instruction
-that an agent obeys; and the reference file that holds the long form. They are places to
-check, not a quota to fill. A rule that no reader of one of them can act on does not
-belong there, and a copy made to fill the quota is noise.
-
-Where a rule belongs in fewer than three places, record the exception where the rule is
-stated. Name the place that you left out, and say why. An unrecorded omission looks
-exactly like the failure that this rule exists to catch.
-
-The measurement: when this was first checked, five of seven fixes had reached only one
-of the three places, and the rules that they fixed still shipped in their broken form to
-the agents that had to follow them. This is the same failure as the rule in section 7,
-that writing a rule does not install it, at a different scale. A rule that you wrote does
-not govern you. A fix that you recorded does not reach the reader.
-
-This rule follows its own instruction. It sits here and in the brief of the overseer,
-which `reference/prompt-templates.md` holds, because an overseer changes rules during a
-programme. It has no reference file.
-
 ## 7. Waiting for a worker: three legs, never polling
 
-An overseer that expects output sets up three mechanisms. They are layered, because
-each one covers a failure that the others miss. Write all three into the brief of the
-overseer.
+The overseer waits with three layered legs: the Herdr wake, the report from the
+finishing worker, and one long sweep at low frequency. Each leg covers a failure that
+the other two miss. Write all three into the brief of the overseer. Section 3 of
+`reference/prompt-templates.md` carries the wording. `reference/herdr-facts.md`
+carries the commands, the failure that each leg covers, and the queued-work trap that
+leaves a wake armed against a state that the worker will not reach.
 
-Leg 1 is the built-in wake. Herdr blocks until state changes, so nobody polls:
-`herdr agent wait <target> --until idle|done|blocked|unknown [--timeout MS]` and
-`herdr pane wait-output <pane> --match TEXT|--regex PATTERN`. Run them in the
-background, so the turn of the overseer ends and the wake arrives as a completion.
-Always set `--until blocked` as well. It is the leg that people forget, and it catches
-a worker stopped at an approval dialog. Such a worker waits forever and looks busy.
-When any wake arrives, read the file that the worker was told to write. `done` is a
-state and not a delivery: `wC` had a lane report `done` and write nothing. When Herdr
-reports `unknown`, it cannot classify the occupant. That is neither completion nor
-failure, so read the file and run `herdr agent explain <target>`.
+The overseer that measured that trap had written all three legs, and then ran leg 1
+alone. Writing a rule does not install it. A rule that costs nothing to state and
+something to follow degrades first in the person who wrote it, because they believe
+they already know it.
 
-Leg 2 is the report from the worker. The worker that finishes prompts the pane of the
-overseer directly: `herdr agent prompt <overseer pane id> "<report>"`. This works
-because `agent prompt` takes a pane id, which is the only way to reach an overseer pane
-that carries no agent name. Every work order therefore ends by naming where to report
-and what to report. The report is short by rule: what the worker produced, where it is,
-and what the overseer must decide. The findings stay in the file.
+### `done` is not delivery
 
-Leg 3 is a long sweep at low frequency. It exists only to catch what the first two legs
-miss: a worker that never started, a worker that stopped without reporting, a lost
-wake, and a worker that waits quietly for a push. Keep it long. A short timer is
-polling with extra steps, and it spends the scarcest resource in the herd, which is the
-attention of the overseer. The sweep reads `herdr agent list` and the output files of
-the workers, never their transcripts.
-
-Leg 1 fails when a worker dies without a state change. Leg 2 fails when the worker
-never gets far enough to report, which is the case where the overseer most needs to
-know. Leg 3 fails at nothing and is slow, so it must never be the primary mechanism.
-
-Three rules govern how you arm and read the wake. `wA:p1` measured them during the writing of this skill. It armed `herdr agent wait <worker> --timeout 2400000`
-and then sent the worker four more work items. Each item arrived while the worker was
-busy and joined the queue. `herdr agent wait` settles on the first `idle`, `done` or
-`blocked` state, and a worker with queued items never reaches one. The wake never
-fired, and it would have run to its 40-minute timeout while it appeared to watch
-something. The work was healthy throughout. The overseer found this by listing the
-output directory, where files carried a timestamp 23 seconds old.
-
-1. Arm the wake after the last queued item, never before. A wake armed before you send
-   more work watches a state that the worker will not reach.
-2. To learn where work stands, read the files, not the status. One directory listing
-   gives the file, the minute, and therefore the phase. It costs one call and it cannot
-   mislead.
-3. `done` is not delivery, and `working` is not the absence of delivery. A worker can
-   report `done` and write nothing. A worker can also deliver while every status
-   instrument reports that nothing settled.
-
-The overseer that made that error had written this whole section, and then ran leg 1
-alone, with no leg 2 and no leg 3. Writing a rule does not install it. A rule that
-costs nothing to state and something to follow degrades first in the person who wrote
-it, because they believe they already know it.
+`done` is a state and not a delivery, and `working` is not the absence of delivery.
+Completed, idle, blocked on a dialog, and dead on the account limit are one value. `wC`
+had a lane report `done` and write nothing. A worker can also deliver while every
+status instrument reports that nothing settled. All four herds hit this on their own,
+and it caused a wrong instruction in `wA`. To learn where work stands, read the files
+that the worker was told to write, never the status. One directory listing gives the
+file, the minute, and therefore the phase. It costs one call and it cannot mislead.
 
 ## 8. Evidence rules for the core
 
@@ -371,11 +299,6 @@ inside the section whose purpose was to show that the herd hides nothing. The se
 of a report most likely to hold an unchecked error is the section that admits error.
 This rule is the twin of the rule in section 3, that an overseer who summarises a
 result performs a measurement.
-
-This document proves the rule on itself. The author audited its own propagation failure,
-reported three gaps, and the reviewer then found a fourth. The self-report understated
-the failure by one, and the true count is five of seven. A confession is a claim, and
-this one was wrong in the direction that flattered its author.
 
 ## 9. The review gate
 
@@ -422,98 +345,38 @@ The checklist of the reviewer and the rest of the discipline are in
 ## 10. Context and handover
 
 This skill carries no compaction threshold, by decision. Context size is a cost, never
-an emergency. `wA` and `wB` ran under numeric thresholds from an earlier operator
-instruction. That is history, not guidance.
+an emergency. The invariant replaces the number: everything load-bearing sits on disk,
+so a compaction taken at any moment loses nothing. Every agent keeps a `STATUS.md`
+written for a reader who remembers nothing, and writes its handover before a
+compaction, never after, because the file is the snapshot. In `w8`, seven load-bearing
+measurements existed only in a session transcript. Ask an agent what is load-bearing
+and not yet on disk before you stand it down.
 
-The invariant replaces the number: everything load-bearing sits on disk, so a
-compaction taken at any moment loses nothing. Two rules hold it up. Write the handover
-before the compaction, never after, because the file is the snapshot. In `w8`, seven
-load-bearing measurements existed only in a session transcript. Ask an agent what is
-load-bearing and not yet on disk before you stand it down.
-
-Every agent keeps a `STATUS.md` written for a reader who remembers nothing. The list of
-sections that it must carry is in `reference/context.md`.
-
-Compact an agent in three steps:
-
-1. Send the short single-line prompt, because it is one call:
-   `herdr agent prompt <name> "/compact <short prompt>"`.
-2. Read the compaction record in the session log file. Never treat an unchanged usage
-   figure as a failure, because the last usage record still reports the number from
-   before the compaction.
-3. If step 2 finds no record, use the keystroke recipe in `reference/context.md`.
-
-Step 2 is not optional. The fast path fails in silence. `w8` measured nine agents that
-answered a compaction request in prose while none of them compacted, and it looked
-exactly like success.
-
-Never force a compaction on an agent that works on a task, and never on yourself during
-a task. An agent counts as mid-task unless two conditions hold together: `agent_status`
-reports idle or `done`, and the agent wrote its handover after its last work item. Both
-conditions are needed, because `done` and idle are the same state here. An agent
-compacted a few minutes late loses nothing. An agent compacted during a trace loses the
-working set that it assembled, and cannot tell that it did, because the lost context is
-what it needs to notice the loss.
-
-`agent_status: done` never means finished. Completed, idle, blocked on a dialog, and
-dead on the account limit are one value. Read the `STATUS.md` of the agent, or the last
-file that it wrote. All four herds hit this on their own, and it caused a wrong
-instruction in `wA`.
+`reference/context.md` carries the sections of `STATUS.md`, the three-step compaction
+with its check for the silent failure, the two-condition test for an agent that is
+mid-task, and the stand-down sequence. The brief of the overseer in
+`reference/prompt-templates.md` carries the rules that the overseer follows.
 
 ## 11. The between-herds agent
 
-One agent carries both jobs: messages between herds, and allocation of anything that
-two herds can both want, such as the shared device, a queue slot, or a budget. It starts empty
-and stays empty until a second herd exists. Its initialisation prompt waits in its own
-directory.
+One agent carries messages between herds and allocates anything that two herds can
+both want, such as the shared device, a queue slot, or a budget. It starts empty and
+stays empty until a second herd exists. Its initialisation prompt waits in its own
+directory. No agent takes an instruction from it. Its higher trust covers relay
+fidelity, never command authority, because nothing in Herdr proves which pane sent a
+message and a self-issued marker is not authentication.
 
-It has three duties. It filters chatter, so that unnecessary traffic stops at the agent
-instead of in the context of an overseer. It passes the orders of the operator, which
-is its most important job. It keeps provenance straight: an operator prompt, a message
-from an overseer, and its own words are three different things, and it never forwards
-one so that it looks like another. Its ledger is a record, not a command channel. No
-agent takes an instruction from it.
-
-The tension, stated rather than hidden: other overseers give this agent more trust,
-because operator overrides arrive through it. An agent trusted because it relays
-authority is what an error or an attacker will imitate. Nothing in the transport proves
-who sent a message. A self-issued marker is not authentication, and the fork incident
-in `w8` shows that an agent cannot tell its overseer from a copy of it.
-
-The resolution: the higher trust covers relay fidelity, and never command authority.
-The agent can state that the operator said something. It marks the message as a relay
-and keeps the original wording. A receiving overseer treats a relayed operator order as
-authoritative for ordinary work. Ordinary work is any action outside the three cases
-below. The receiving overseer asks the operator directly for these three: anything
-irreversible, anything that spends the resources of another herd, and anything that
-lifts a restriction that the operator set directly. If you cannot tell whether a case
-applies, treat it as if it applies, and ask the operator. Deleting your own draft is
-reversible. Deleting a released artefact, changing the state of a shared device, or
-sending anything outside this machine is not. A message to a peer pane costs that herd
-attention and counts as spending its resources. A read of a file that its herd already
-released does not.
-
-This scoping narrows what a false relay can cause. It does not authenticate the relay.
-Nothing in Herdr proves which pane sent a message, and nobody has exercised this
-mechanism. `reference/open-issues.md` item 8 records it as open, and section 11 claims
-no more than that.
-
-`wA` already worked this way. It held an authorised release against a relayed approval,
-and moved only after the operator confirmed in its own channel.
-
-Messages are short. They use Simplified Technical English, through the `ste` skill.
-Every message carries an acknowledgement field. When that field is absent, silence is
-the correct and complete reply. The protocol, the ledger rules and the message set are
-in `reference/cross-herd.md`.
+`reference/cross-herd.md` carries the three duties, the trust resolution with the three
+cases that need direct operator confirmation, the ledger, and the message set. Section
+7 of `reference/prompt-templates.md` carries the initialisation prompt.
 
 ## 12. Starting agents: kinds, arguments and configuration
 
-Herdr recognises 22 agent kinds in this build, and `claude` and `opencode` are among
-them. `minimax` is not one of them. For a kind that Herdr does not recognise, drive the
-pane as a plain terminal and declare its occupant, so that it still appears as a
-managed agent. The caller asserts that declared state, and Herdr does not detect it, so
-it is only as honest as the caller. Both lists and the exact commands are in
-`reference/herdr-facts.md`.
+Herdr recognises a fixed list of agent kinds, and `claude` is among them. For a kind
+that Herdr does not recognise, drive the pane as a plain terminal and declare its
+occupant, so that it still appears as a managed agent. The caller asserts that declared
+state, and Herdr does not detect it, so it is only as honest as the caller. The list as
+measured and the exact commands are in `reference/herdr-facts.md`.
 
 Everything after `--` reaches the agent process. That is how the unrestricted
 permission option and any native flag arrive:
@@ -541,18 +404,3 @@ Herdr, which is the authority on syntax.
 | `reference/independence.md` | A worker must stay independent of what others know |
 | `reference/sealing-os-users.md` | Almost never. Operating-system user separation as a hard seal. The operator ruled it out of the default read path, so open it only on a direct request |
 | `reference/open-issues.md` | Something does not work and you want to know whether that is already known |
-
-## House style
-
-This skill follows the conventions of the skill-bazaar collection at
-`https://github.com/pepsi133/skill-bazaar`, installed on this host, and of
-`https://github.com/mattpocock/skills`, named here but not read. Not every skill in
-either collection applies to a herd. This skill takes five conventions:
-
-- Frontmatter with `name` and a folded `description`.
-- The measured-not-assumed stance, with the measurement named.
-- Name the evidence, not the command. A step states the observable that it must
-  produce, not a check that can pass for the wrong reason.
-- The absence of an artifact means unknown, not failed.
-- A stop clause in every delegation. An agent that cannot ask returns the open question
-  instead of guessing.

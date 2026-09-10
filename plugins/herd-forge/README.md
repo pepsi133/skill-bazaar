@@ -1,7 +1,7 @@
 # herd-forge
 
-Build a multi-agent research herd in Herdr: the tree, the git repositories, the names, the
-configuration, and the instruction file that each agent receives.
+Build a multi-agent research herd in Herdr: the tree, the git repositories, the identity
+map, the configuration, and one instruction file per agent.
 
 ## Why it exists
 
@@ -23,7 +23,7 @@ is real, and every expensive practice in the skill states its cost beside it.
 | path | holds |
 |---|---|
 | `skills/herd-forge/SKILL.md` | the core. The creator reads all of it once |
-| `skills/herd-forge/reference/` | eleven files, opened when the task points at one: instruction templates, the configuration template, measured Herdr facts, the caveats, evidence and review discipline, context and handover, the cross-herd protocol, independence, sealing, and open issues |
+| `skills/herd-forge/reference/` | opened when the task points at one: instruction templates, the configuration template, measured Herdr facts, the caveats, evidence and review discipline, context and handover, the cross-herd protocol, independence, sealing, and open issues |
 
 ## Requirements
 
@@ -50,6 +50,15 @@ skill.
 /plugin marketplace add /path/to/skill-bazaar
 /plugin install herd-forge@skill-bazaar
 ```
+
+## Where a rule lives
+
+A rule that a created agent must obey has one source: the template for that agent in
+`skills/herd-forge/reference/prompt-templates.md`. `SKILL.md` states the step that installs
+it, and a reference file holds the story behind it. When you change a rule, change the
+template, then make sure that the step and the story still agree with it. An earlier
+version stated every rule in all three files, and five of seven fixes reached only one of
+them.
 
 ## The evidence
 

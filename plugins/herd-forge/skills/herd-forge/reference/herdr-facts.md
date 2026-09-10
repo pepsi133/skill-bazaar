@@ -130,6 +130,30 @@ The wake tells you to look. The file tells you whether anything is there.
 completion nor failure. `herdr agent explain <target>` reports how Herdr classified the
 occupant of a pane, and it is the right next command.
 
+Three rules govern how you arm and read the wake. `wA:p1` measured them during the
+writing of this skill. It armed `herdr agent wait <worker> --timeout 2400000` and then
+sent the worker four more work items. Each item arrived while the worker was busy and
+joined the queue. `herdr agent wait` settles on the first `idle`, `done` or `blocked`
+state, and a worker with queued items never reaches one. The wake never fired, and it
+would have run to its 40-minute timeout while it appeared to watch something. The work
+was healthy throughout. The overseer found this by listing the output directory, where
+files carried a timestamp 23 seconds old.
+
+1. Arm the wake after the last queued item, never before. A wake armed before you send
+   more work watches a state that the worker will not reach.
+2. To learn where work stands, read the files, not the status. One directory listing
+   gives the file, the minute, and therefore the phase. It costs one call and it cannot
+   mislead.
+3. `done` is not delivery, and `working` is not the absence of delivery. A worker can
+   report `done` and write nothing. A worker can also deliver while every status
+   instrument reports that nothing settled.
+
+The three legs of the overseer cover each other. Leg 1, the wake, fails when a worker
+dies without a state change. Leg 2, the report from the finishing worker, fails when
+the worker never gets far enough to report, which is the case where the overseer most
+needs to know. Leg 3, the long sweep, fails at nothing and is slow, so it must never be
+the primary mechanism.
+
 ## Reach an agent, and reach an overseer
 
 `herdr agent prompt <target> "<text>"` takes a pane id as well as a name. That is the

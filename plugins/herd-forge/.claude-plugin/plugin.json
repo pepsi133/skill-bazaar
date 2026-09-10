@@ -1,6 +1,6 @@
 {
   "name": "herd-forge",
-  "description": "Create and configure a multi-agent research herd in Herdr: the directory tree, the git repositories, the naming and identity map, the configuration file, and one instruction file per agent for the overseer, the workers, the standing reviewer, the artifacts guard and the between-herds relay. Written for the agent that builds the herd rather than the one that runs it, and every rule carries the incident that four herds paid for it.",
+  "description": "Build a multi-agent research herd in Herdr: the tree, the git repositories, the identity map, the configuration, and one instruction file per agent.",
   "version": "0.1.0",
   "author": { "name": "pepsi133", "url": "https://github.com/pepsi133" },
   "license": "MIT",

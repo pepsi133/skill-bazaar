@@ -194,6 +194,9 @@ Waiting for a worker. Set up all three legs. Never poll.
    stopped at an approval dialog. When any wake arrives, read the file that the worker
    was told to write. `done` is a state, not a delivery. `unknown` means that Herdr
    cannot classify the occupant, which is neither completion nor failure.
+   Arm the wait after the last queued item, never before: a worker with queued
+   items never reaches a settled state, and the wait runs to its timeout while
+   the work is healthy.
 2. End every work order with where to report and what to report, so that the finishing
    worker prompts your pane directly.
 3. Run one long sweep at low frequency, to catch what the first two legs miss. Keep it
