@@ -35,6 +35,11 @@
       "name": "ste",
       "source": "./plugins/ste",
       "description": "Simple Technical English (ASD-STE100) bridged to caveman: caveman's compressed style stays the default, and STE takes over on exactly the turns caveman itself says to drop compression. Toggle with /ste on|off|status."
+    },
+    {
+      "name": "herd-forge",
+      "source": "./plugins/herd-forge",
+      "description": "Create and configure a multi-agent research herd in Herdr: the directory tree, the git repositories, the naming and identity map, the configuration file, and one instruction file per agent for the overseer, the workers, the standing reviewer, the artifacts guard, and the between-herds relay."
     }
   ]
 }
