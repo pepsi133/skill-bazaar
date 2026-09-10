@@ -323,16 +323,18 @@ cd plugins/bobby-statusline && python3 -m unittest discover -s tests -p 'test_*.
 python3 bin/bobby-statusline.py --selftest
 ```
 
-82 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
+83 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
 oversize, escape bytes, whitelist), the billing modes, the color thresholds, both layouts,
 the configuration layers, the pause state, the `limit-guard` bridge including an old gate
 and a raising gate, the slash command's contract, and one regression test for every defect
-the 2026-09-06 audit found. Each of those twelve fails against the code as it stood before
-that audit.
+found in review before release. Each of those twelve fails against the code as it stood
+before its fix.
 
 Every test isolates `CLAUDE_CONFIG_DIR` into a temporary directory, including the tests that
 run the script as a subprocess, so a run reads none of the developer's own session state and
-writes nothing into their real `limit-guard` cache. The clock is pinned by passing
+writes nothing into their real `limit-guard` cache. `--selftest` does the same from a shell:
+it points `LIMIT_GUARD_HOME` at a temporary directory for the run, so the captures it measures
+never touch the real cache or pause state. The clock is pinned by passing
 `render(payload, now=...)`, so the expectations do not drift with the date and nothing in the
 environment can freeze a real session's countdown.
 

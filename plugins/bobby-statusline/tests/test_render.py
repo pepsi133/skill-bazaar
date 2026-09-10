@@ -424,7 +424,7 @@ class TestRobustness(Base):
 
 
 class TestAuditRegressions(Base):
-    """One test per defect found in the 2026-09-06 audit of these commits."""
+    """One test per defect found in review before release. Each fails on the code before its fix."""
 
     def payload(self, **fields) -> str:
         base = {"model": {"display_name": "Opus 5"}}
@@ -628,6 +628,34 @@ class TestCommandLine(unittest.TestCase):
         self.assertIn("end to end", result.stdout)
         self.assertIn("p95", result.stdout)
         self.assertIn(result.returncode, (0, 1))
+
+    def test_selftest_writes_nothing_to_the_real_limit_guard_state(self):
+        """With the real gate wired in, every selftest render runs the capture,
+        which writes a cache and can lift a pause. That must land in a
+        throwaway directory, not in the one LIMIT_GUARD_HOME names."""
+        gate = os.path.join(
+            os.path.dirname(ROOT), "limit-guard", "hooks", "limit-guard-gate.py"
+        )
+        if not os.path.isfile(gate):
+            self.skipTest("sibling limit-guard checkout not present")
+        with tempfile.TemporaryDirectory() as home:
+            env = dict(
+                os.environ,
+                NO_COLOR="1",
+                COLUMNS="200",
+                TZ="UTC",
+                CLAUDE_CONFIG_DIR=self.tmp.name,
+                LIMIT_GUARD_HOME=home,
+                BOBBY_STATUSLINE_LIMIT_GUARD=gate,
+            )
+            result = subprocess.run(
+                [sys.executable, SCRIPT, "--selftest"],
+                capture_output=True, text=True, env=env,
+            )
+            self.assertIn("end to end", result.stdout)
+            self.assertIn("temporary, removed on exit", result.stdout)
+            self.assertEqual(os.listdir(home), [])
+            self.assertEqual(os.listdir(self.tmp.name), [])
 
 
 if __name__ == "__main__":

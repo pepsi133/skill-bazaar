@@ -838,12 +838,34 @@ def run_selftest() -> int:
     the python3 start, which is the larger half of the cost and the reason this
     plugin forks nothing during a render. The budget applies to the second one.
     """
+    import tempfile
+
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     paths = sorted(glob.glob(os.path.join(root, "tests", "fixtures", "*.json")))
     if not paths:
         sys.stderr.write("no fixtures found under %s\n" % root)
         return 1
 
+    # Every render below calls limit-guard's capture, which writes its cache and
+    # advances its pause state. Point that at a throwaway directory, for the
+    # in-process renders and, through the inherited environment, for the child
+    # processes. CLAUDE_CONFIG_DIR stays real: it is only read, and locating
+    # limit-guard through it is part of what is measured.
+    previous = os.environ.get("LIMIT_GUARD_HOME")
+    with tempfile.TemporaryDirectory(prefix="bobby-statusline-selftest-") as tmp:
+        home = os.path.join(tmp, "limit-guard")
+        os.environ["LIMIT_GUARD_HOME"] = home
+        sys.stdout.write("limit-guard state %s (temporary, removed on exit)\n" % home)
+        try:
+            return _measure(root, paths)
+        finally:
+            if previous is None:
+                os.environ.pop("LIMIT_GUARD_HOME", None)
+            else:
+                os.environ["LIMIT_GUARD_HOME"] = previous
+
+
+def _measure(root: str, paths: list) -> int:
     inner = []
     for path in paths:
         payload = read_text(path) or "{}"
