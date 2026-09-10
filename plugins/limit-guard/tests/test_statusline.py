@@ -147,7 +147,16 @@ class TestBadge(TempHome):
 
     def test_badge_shows_both_windows(self):
         out = self.badge_for(live(23.5, 41.2))
+        self.assertRegex(out, r"^ \[5h 24% >\d\d:\d\d \| 7d 41% >\w{3} \d\d:\d\d\]$")
+
+    def test_badge_is_ascii_unless_unicode_is_opted_in(self):
+        """↻ and ⏸ are ambiguous-width; some terminals draw them over the next
+        character. ASCII is the default, LIMIT_GUARD_UNICODE=1 restores them."""
+        self.assertNotIn("↻", self.badge_for(live(23.5, 41.2)))
+        out = self.badge_for(live(23.5, 41.2), env={"LIMIT_GUARD_UNICODE": "1"})
         self.assertRegex(out, r"^ \[5h 24%↻\d\d:\d\d \| 7d 41%↻\w{3} \d\d:\d\d\]$")
+        self.write("config.json", {"UNICODE": 1})
+        self.assertIn("↻", self.badge_for(live(23.5, 41.2)))
 
     def test_badge_is_empty_without_rate_limits(self):
         self.assertEqual(self.badge_for({"model": {"display_name": "Opus"}}), "")
@@ -165,9 +174,10 @@ class TestBadge(TempHome):
             {"paused": True, "since": 1, "until": until, "window": "five_hour"},
         )
         out = self.badge_for(live(99, 10))
-        self.assertIn("PAUSED", out)
-        self.assertIn("⏸", out)
+        self.assertIn("[PAUSED >", out)
         self.assertNotIn("5h 99%", out)
+        out = self.badge_for(live(99, 10), env={"LIMIT_GUARD_UNICODE": "1"})
+        self.assertIn("[⏸ PAUSED→", out)
 
     def test_expired_pause_clears_itself_on_a_statusline_run(self):
         """The statusline re-runs when a window resets, which is exactly when a

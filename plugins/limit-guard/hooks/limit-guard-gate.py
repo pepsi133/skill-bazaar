@@ -221,6 +221,10 @@ DEFAULTS = {
     "MAX_FIVE_HOUR_HORIZON_S": 28800.0,  # 8h
     "MAX_SEVEN_DAY_HORIZON_S": 691200.0,  # 8d
     "DISABLED": 0.0,
+    # 1 draws the badge with ↻, ⏸ and → instead of ASCII. Off by default: those
+    # glyphs are ambiguous-width, and some terminals paint them over the next
+    # character, so "10%↻Fri" loses its F.
+    "UNICODE": 0.0,
 }
 
 
@@ -819,10 +823,26 @@ def colorize(text: str, pct: float) -> str:
     return color + text + RESET
 
 
-def badge(cache: dict | None, state: dict, now: float) -> str:
+GLYPHS = {
+    # window: "5h 24% >14:05"; pause: "[PAUSED >14:05]". Same shapes bobby-statusline uses.
+    "ascii": {"reset": " >", "pause": "", "until": " >"},
+    # window: "5h 24%↻14:05"; pause: "[⏸ PAUSED→14:05]". LIMIT_GUARD_UNICODE=1.
+    "unicode": {"reset": "↻", "pause": "⏸ ", "until": "→"},
+}
+
+
+def glyphs(cfg: dict | None = None) -> dict:
+    if cfg is None:
+        cfg = load_config()
+    return GLYPHS["unicode" if cfg.get("UNICODE", 0.0) >= 1 else "ascii"]
+
+
+def badge(cache: dict | None, state: dict, now: float, cfg: dict | None = None) -> str:
+    g = glyphs(cfg)
     if state["paused"]:
         tag = "PAUSED(manual)" if state["manual"] else "PAUSED"
-        return " " + colorize("[⏸ %s→%s]" % (tag, fmt_short(state["until"], now)), 100.0)
+        text = "[%s%s%s%s]" % (g["pause"], tag, g["until"], fmt_short(state["until"], now))
+        return " " + colorize(text, 100.0)
     chunks = []
     for name, label in (("five_hour", "5h"), ("seven_day", "7d")):
         win = window_of(cache, name)
@@ -830,7 +850,8 @@ def badge(cache: dict | None, state: dict, now: float) -> str:
             continue
         chunks.append(
             colorize(
-                "%s %.0f%%↻%s" % (label, win["pct"], fmt_short(win["resets_at"], now)),
+                "%s %.0f%%%s%s"
+                % (label, win["pct"], g["reset"], fmt_short(win["resets_at"], now)),
                 win["pct"],
             )
         )

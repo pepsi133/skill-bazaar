@@ -176,6 +176,7 @@ Every threshold is settable by environment variable (`LIMIT_GUARD_<KEY>`) or by
 | `WAKE_CAP_S` | 3600 | cap on a single `ScheduleWakeup` hop |
 | `WAKE_PAD_S` | 60 | wake this long after the reset |
 | `DISABLED` | 0 | `1` turns the gate off entirely |
+| `UNICODE` | 0 | `1` draws the badge with `↻`, `⏸`, and `→`. Off by default: those glyphs are ambiguous-width, and some terminals paint them over the next character. ASCII is `5h 24% >14:05` and `[PAUSED >14:05]` |
 
 Also: `LIMIT_GUARD_HOME` (state directory), `LIMIT_GUARD_PYTHON`, `LIMIT_GUARD_INNER`,
 `NO_COLOR` / `LIMIT_GUARD_NO_COLOR`.
@@ -375,7 +376,7 @@ among the refresh triggers, which is what makes a pause lift without a tool call
 be forced in a test. As a safety net the gate also unpauses on `now ≥ until` on the next
 tool call, so a missed refresh delays the badge, not the resume.
 
-**Test suite.** 110 tests, `python3 -m unittest discover -s plugins/limit-guard/tests`, no
+**Test suite.** 111 tests, `python3 -m unittest discover -s plugins/limit-guard/tests`, no
 network, every test against a throwaway `HOME` / `CLAUDE_CONFIG_DIR`. Covers all decision
 branches, the deny text, exemptions, corrupt and symlinked state, fail-open, file modes, the
 badge, inner-statusline chaining, and the CLI. Runs in about 9s. One test waits on a
