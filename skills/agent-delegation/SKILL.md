@@ -141,12 +141,19 @@ and prompting the positive rather than the prohibition. At minimum, state:
 ### Name the evidence, not the command
 
 A check that passes for the wrong reason manufactures false confidence, which is worse than
-no check, because it removes the doubt that finds the failure. Confirming a
-remote merge with `git rev-parse main origin/main` and no preceding `git fetch` compares a
-local ref to a possibly stale local copy of the remote. It can report success while proving
+no check, because it removes the doubt that finds the failure. Confirming a remote merge
+with `git rev-parse main origin/main` and no preceding `git fetch` compares a local ref to a
+possibly stale local copy of the remote. It can report success while proving
 nothing. State the evidence a step must produce ("the remote's HEAD, fetched fresh, matches
 local main"), and leave the command to the agent. The evidence is yours to name. The command
 is the agent's to choose.
+
+Then confirm that the target agent holds a tool that can produce that evidence. Evidence from
+a test run, a build, or a git command needs a shell tool. An agent whose toolset stops at
+reading and editing files stops and reports that it cannot comply, and the fault sits in the
+prompt, not in the agent. Read the tool list in the agent's own definition, which is the one
+place it stays current. See *Platform execution notes* for where that list lives in Claude
+Code.
 
 ## Artifact verification: missing means unknown
 
@@ -214,6 +221,11 @@ you rely on it. Not measured: agent teams, non-interactive parents, other harnes
   attached to the next tool result, marked as coming from an agent and not from the user. The
   parent treats it as an agent report, never as user approval. To forward the question to the
   human, the parent uses its own `AskUserQuestion`, and the subagent never sees that step.
+- **The target agent's toolset**: a preset agent declares its tools in the `tools:`
+  frontmatter of its own Markdown definition, under `agents/` in the plugin that ships it.
+  Read that file before you name evidence that needs a command. The preset
+  `cavecrew-builder`, for one, declares `Read, Edit, Write, Grep, Glob` and ships no shell
+  tool, so it can produce file content as evidence and never a test result.
 - **Enforcing the delegation default**: `PreToolUse` hook input carries `agent_id` only
   inside a subagent, which the hooks documentation names as the way to tell a subagent call
   from a main-session one. A hook on `Edit|Write|NotebookEdit` that sees no `agent_id` gates
