@@ -99,11 +99,14 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
 
 ## Repo hygiene — this repo is public
 
-**Prepare, never publish.** An agent working here does not run `git push`, and does not run
-the `git commit` that completes a publication step. It runs the audit, writes the report, and
-prints the commit and push snippets for a person to read and paste. `docs/pre-publish-audit.md`
-has the runbook and the exact hand-off wording. An agent never prints `--no-verify`, and never
-sets `SKILL_BAZAAR_AUDIT_PASSED`: that variable is a person's claim that they ran the gate.
+**Prepare, never publish.** An agent working here does not run `git push`. It prepares the
+change, commits it, and prints the push command for a person to read and paste. It never
+prints `--no-verify`. The audit that runs before a push is a maintainer procedure and is not
+part of this repository. A plugin or skill ships its functionality and its documentation,
+nothing else: no audit reports, no process notes, no work logs.
+
+`.githooks/pre-push` lists what a push would publish and asks `Push? [y/N]`. It is off until
+you link it in your clone: `ln -s ../../.githooks/pre-push .git/hooks/pre-push`.
 
 Write every file as if it were already public, because it is. Skills here are written from
 real work, and that is the leak path: private detail travelling here as context.
@@ -119,9 +122,9 @@ De-identify at the point of writing, not in a later sweep.
 The maintainer's public GitHub identity (`pepsi133`, `@pepsi133` in `CODEOWNERS`) is
 deliberate and stays.
 
-The check is manual: `docs/pre-publish-audit.md` is the content gate. Note that a
-`git ls-files` sweep skips **untracked** files, which is exactly where new writing lives.
-Check the file you are about to add, not only the ones already in.
+The check is manual and runs before every push. Note that a `git ls-files` sweep skips
+**untracked** files, which is exactly where new writing lives. Check the file you are about
+to add, not only the ones already in.
 
 ## Network egress policy — no endpoint the author chose
 

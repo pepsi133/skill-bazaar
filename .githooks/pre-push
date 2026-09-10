@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# pre-push: this repository is public. Ask once before anything leaves the machine.
+#
+# Enable, once per clone:   ln -s ../../.githooks/pre-push .git/hooks/pre-push
+# Skip for one push:        git push --no-verify
+#
+# The hook scans nothing. It lists the commits the push would publish and asks
+# for a y/N answer on the terminal. No terminal means no push.
+#
+# Git passes the remote name and URL as arguments, and one line per ref on
+# stdin: <local ref> <local sha> <remote ref> <remote sha>.
+
+set -u
+
+remote="${1:-origin}"
+url="${2:-}"
+
+commits=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -n "${local_sha:-}" ] || continue
+    # An all-zero local sha deletes a remote branch. Nothing becomes public.
+    case "$local_sha" in *[!0]*) ;; *) continue ;; esac
+    # An all-zero remote sha creates a branch. Listing "$local_sha" alone would
+    # walk the whole history, so exclude what any remote-tracking ref has.
+    case "$remote_sha" in
+        *[!0]*) found=$(git log --oneline --no-decorate "${remote_sha}..${local_sha}" 2>/dev/null) ;;
+        *)      found=$(git log --oneline --no-decorate "$local_sha" --not --remotes 2>/dev/null) ;;
+    esac
+    [ -n "$found" ] || continue
+    commits="${commits}${commits:+$'\n'}${found}"
+done
+
+# Nothing to publish: stay out of the way.
+[ -n "$commits" ] || exit 0
+
+count=$(printf '%s\n' "$commits" | wc -l | tr -d ' ')
+{
+    printf '\nPUBLIC REPOSITORY. This push publishes %s commit(s) to %s %s\n\n' "$count" "$remote" "$url"
+    printf '%s\n' "$commits" | head -n 20 | sed 's/^/    /'
+    if [ "$count" -gt 20 ]; then
+        printf '    ... and %s more\n' "$((count - 20))"
+    fi
+    printf '\n'
+} >&2
+
+if ! { exec 3</dev/tty; } 2>/dev/null; then
+    printf 'No terminal to ask on. Push cancelled. Run it from a terminal, or git push --no-verify.\n' >&2
+    exit 1
+fi
+printf 'Push? [y/N] ' >&2
+read -r answer <&3 || answer=""
+exec 3<&-
+case "$answer" in
+    y|Y|yes|YES|Yes) exit 0 ;;
+    *) printf 'Push cancelled.\n' >&2; exit 1 ;;
+esac

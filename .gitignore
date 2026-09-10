@@ -15,3 +15,6 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Maintainer-local audits and scoping notes, never published
+roadmap/private/
