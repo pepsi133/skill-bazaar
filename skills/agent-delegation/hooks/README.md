@@ -18,6 +18,12 @@ from "fix it inline" into "write a spec and delegate".
 A turn is one `prompt_id`. The set of paths clears when that id changes. State lives in
 `scratchpad_dir`, which the host supplies per session, so two sessions never share a counter.
 
+The ask carries two texts. The short line goes in `systemMessage`, which the host displays,
+and the full reason goes in `permissionDecisionReason`. On Claude Code 2.1.269 the permission
+prompt for an `ask` decision showed the file name alone, and no part of
+`permissionDecisionReason`. A gate that asks without saying why teaches the habit of
+answering yes.
+
 ## What it does not do
 
 A Bash-based edit (`sed -i`, a heredoc, a patch applied by a script) never reaches the

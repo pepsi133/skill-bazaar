@@ -95,16 +95,20 @@ def decide(payload: dict, state: dict, limit: int) -> tuple[str | None, dict]:
     return ask_reason(paths), {**state, "asked": True}
 
 
-def ask_reason(paths: list[str]) -> str:
+def ask_reason(paths: list[str]) -> tuple[str, str]:
+    """The short line for the user, and the long reason for the record."""
     first = Path(paths[0]).name
     current = Path(paths[-1]).name
-    return (
-        f"agent-delegation: this turn is now editing a second file in the main session "
-        f"({first}, then {current}). The delegate-by-default rule sends a multi-file change "
-        f"to a subagent with a written spec, and keeps a one-line fix inline. Allow to "
-        f"continue here, or deny and delegate the change. Note that a Bash edit does not "
-        f"reach this gate."
+    headline = (
+        f"agent-delegation: second file this turn ({first}, then {current}). "
+        f"A multi-file change belongs in a subagent with a written spec."
     )
+    detail = (
+        f"{headline} The delegate-by-default rule keeps a one-line fix inline and sends a "
+        f"multi-file change to a subagent. Allow to continue in the main session, or deny "
+        f"and delegate the change. A Bash edit does not reach this gate."
+    )
+    return headline, detail
 
 
 def state_file(payload: dict) -> Path:
@@ -132,15 +136,23 @@ def save_state(path: Path, state: dict) -> None:
         pass
 
 
-def emit_ask(reason: str) -> None:
+def emit_ask(headline: str, detail: str) -> None:
+    """`systemMessage` reaches the user. `permissionDecisionReason` reaches the record.
+
+    Measured on Claude Code 2.1.269: the permission prompt for an `ask` decision showed
+    the file name alone, and no part of `permissionDecisionReason`. A gate that asks
+    without saying why teaches the habit of answering yes, so the short line is sent
+    through the field that the host displays.
+    """
     sys.stdout.write(
         json.dumps(
             {
+                "systemMessage": headline,
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "ask",
-                    "permissionDecisionReason": reason,
-                }
+                    "permissionDecisionReason": detail,
+                },
             }
         )
     )
@@ -156,7 +168,7 @@ def run() -> None:
     reason, state = decide(payload, load_state(path), threshold())
     save_state(path, state)
     if reason:
-        emit_ask(reason)
+        emit_ask(*reason)
 
 
 def selftest() -> int:
@@ -189,6 +201,8 @@ def selftest() -> int:
 
     reason, state3 = decide(call(path="/repo/b.py"), state, 2)
     check("the second distinct file asks", bool(reason), True)
+    check("the ask carries a short line and a long one", len(reason or ()), 2)
+    check("the short line names the gate", (reason or ("",))[0].startswith("agent-delegation:"), True)
     check("the ask is recorded", state3["asked"], True)
 
     reason, state4 = decide(call(path="/repo/c.py"), state3, 2)
@@ -217,7 +231,7 @@ def selftest() -> int:
 
     for line in failures:
         sys.stdout.write(f"FAIL {line}\n")
-    total = 15
+    total = 17
     sys.stdout.write(
         f"agent-delegation-gate selftest: {total - len(failures)}/{total} checks passed\n"
     )

@@ -148,11 +148,12 @@ default in either direction.
       correction landed in `SKILL.md`.)
 - [x] `skills/agent-delegation/hooks/` ships a `PreToolUse` hook that emits the JSON contract
       under *Platform execution notes*, defaulted to ask mode.
-- [ ] A probe confirms the trigger. One edit to one file in a turn raises no ask. An edit to a
-      second distinct file in the same turn raises one ask. (Synthetic payloads through the
-      hook's own stdin path pass. A run inside a live session is still open.)
-- [ ] A probe confirms that an edit from inside a subagent raises no ask. (Synthetic pass.
-      A run inside a live session is still open.)
+- [x] A probe confirms the trigger. One edit to one file in a turn raises no ask. An edit to a
+      second distinct file in the same turn raises one ask. (Live, 2026-09-12, Claude Code
+      2.1.269, in accept-edits mode and in auto mode. The third file of the turn stayed
+      silent, as designed.)
+- [x] A probe confirms that an edit from inside a subagent raises no ask. (Live, 2026-09-12.
+      A general-purpose subagent wrote two files with no ask, in both modes.)
 - [x] The hook documentation states that a Bash-based edit bypasses the matcher in either mode.
 - [x] `AGENTS.md` carries the D6 condition, in the same commit as the hook. (Skill rule 10.)
 - [x] `SKILL.md` carries a toolset-check step next to "Name the evidence, not the command", and
