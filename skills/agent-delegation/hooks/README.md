@@ -18,11 +18,12 @@ from "fix it inline" into "write a spec and delegate".
 A turn is one `prompt_id`. The set of paths clears when that id changes. State lives in
 `scratchpad_dir`, which the host supplies per session, so two sessions never share a counter.
 
-The ask carries two texts. The short line goes in `systemMessage`, which the host displays,
-and the full reason goes in `permissionDecisionReason`. On Claude Code 2.1.269 the permission
-prompt for an `ask` decision showed the file name alone, and no part of
-`permissionDecisionReason`. A gate that asks without saying why teaches the habit of
-answering yes.
+**The prompt does not show why.** On Claude Code 2.1.269 the permission prompt for an `ask`
+decision read `Do you want to create <file>?` and nothing more. Neither
+`permissionDecisionReason` nor `systemMessage` reached the screen, measured twice. The gate
+sends both fields anyway, because they cost nothing and another client or a later version can
+render them. Until one does, the prompt names the file and you supply the reason: a second
+file this turn means the change turned multi-file.
 
 ## What it does not do
 

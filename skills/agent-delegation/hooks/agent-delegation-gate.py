@@ -137,12 +137,13 @@ def save_state(path: Path, state: dict) -> None:
 
 
 def emit_ask(headline: str, detail: str) -> None:
-    """`systemMessage` reaches the user. `permissionDecisionReason` reaches the record.
+    """Both fields carry the reason. Neither is displayed on Claude Code 2.1.269.
 
-    Measured on Claude Code 2.1.269: the permission prompt for an `ask` decision showed
-    the file name alone, and no part of `permissionDecisionReason`. A gate that asks
-    without saying why teaches the habit of answering yes, so the short line is sent
-    through the field that the host displays.
+    Measured twice: the permission prompt for an `ask` decision showed the file name
+    alone, with no part of `permissionDecisionReason` and none of `systemMessage`. Both
+    are sent anyway, because they cost nothing and another client can render them. A gate
+    that asks without saying why teaches the habit of answering yes, so re-check this on
+    a version bump.
     """
     sys.stdout.write(
         json.dumps(
