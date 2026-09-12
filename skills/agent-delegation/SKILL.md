@@ -202,6 +202,10 @@ you rely on it. Not measured: agent teams, non-interactive parents, other harnes
 - **Wall 2.** A GUI elevation prompt returned success within milliseconds, before the human
   responded. Approval, denial and "nobody looked" were indistinguishable from the caller's
   side. Only the artifact the elevated process wrote showed what happened.
+- **The hook contract** (Claude Code 2.1.269). A logging `PreToolUse` hook saw `agent_id` and
+  `agent_type` on a background subagent's `Write`, and saw neither on a main-session `Write`.
+  A hook whose script path did not exist blocked every matched call rather than allowing it,
+  because the interpreter exited 2. See *Platform execution notes*.
 
 ## Platform execution notes
 
@@ -227,14 +231,26 @@ you rely on it. Not measured: agent teams, non-interactive parents, other harnes
   `cavecrew-builder`, for one, declares `Read, Edit, Write, Grep, Glob` and ships no shell
   tool, so it can produce file content as evidence and never a test result.
 - **Enforcing the delegation default**: `PreToolUse` hook input carries `agent_id` only
-  inside a subagent, which the hooks documentation names as the way to tell a subagent call
-  from a main-session one. A hook on `Edit|Write|NotebookEdit` that sees no `agent_id` gates
-  the call by printing this on stdout and exiting 0. A wrong or non-executable script path
-  fails open, and the gate is then silently off:
+  inside a subagent, so a hook on `Edit|Write|NotebookEdit` that sees no `agent_id` knows the
+  call came from the main session. It gates the call by printing this on stdout and exiting 0:
 
   ```json
-  {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}
+  {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"..."}}
   ```
+
+  `permissionDecision` takes `allow`, `deny` or `ask`. Prefer `ask`, because a Bash-based edit
+  (`sed -i`, a heredoc, a patch script) bypasses the matcher in either mode, and a deny that
+  is routed around trains the workaround. The same input carries `prompt_id`, which changes
+  with each user turn, so one hook can count the distinct files a turn has touched without a
+  companion `UserPromptSubmit` hook. It also carries `agent_type`, `permission_mode` and
+  `scratchpad_dir`, which is a per-session directory and the natural home for hook state.
+  This skill ships such a gate under `hooks/`.
+- **A failing hook script fails in the direction of its exit code**: exit code 2 from a
+  `PreToolUse` hook blocks the call. A Python hook aimed at a missing path exits 2, because
+  that is Python's own code for a file it cannot open, so it blocks every matched call until
+  someone fixes the path. A missing command exits 127 and a non-executable file exits 126,
+  and neither blocks. Write a hook that catches its own faults and exits 0 on purpose, and
+  check the configured path after any move or rename.
 - **Subagent transcripts**: a subagent's tool results, secrets included, are written to
   `~/.claude/projects/<project>/<session>/subagents/agent-<id>.jsonl`. Removing the symlink
   under the session's `tasks/` directory leaves that file in place.
