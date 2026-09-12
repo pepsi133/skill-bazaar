@@ -79,8 +79,8 @@ first file passes in silence. The second distinct file raises one ask. Later fil
 turn pass in silence, because the human already decided for that turn. This maps onto the word
 "multi-file" in the skill, and it keeps the allowed one-line fix silent.
 
-The measurement of 2026-09-12 removed this decision's second hook. `prompt_id` arrives in the
-`PreToolUse` input itself, so no `UserPromptSubmit` hook is needed.
+A measurement on Claude Code 2.1.269 removed this decision's second hook. `prompt_id`
+arrives in the `PreToolUse` input itself, so no `UserPromptSubmit` hook is needed.
 
 **D4. The splitting rule is dropped from this item.** Reason: it anchored on one builder
 agent's file limit, which is a preset property. The skill description states that the skill is
@@ -97,8 +97,8 @@ and the gate is then silently off.
 **Measured on 2026-09-12, Claude Code 2.1.269.** Claim 1 holds. Claim 2 is false for a Python
 hook: a missing script path exits 2, which is the block signal, so every matched call is
 blocked. The direction of the failure belongs to the exit code. The hook therefore catches its
-own faults and exits 0 on purpose, and it ships a self-test. Record:
-`roadmap/private/delegation-gate-probe/MEASUREMENT.md`. The correction landed in `SKILL.md`.
+own faults and exits 0 on purpose, and it ships a self-test. The full record is
+maintainer-local. The correction landed in `SKILL.md`.
 
 **D6. `AGENTS.md` gains a written condition for hooks under `skills/<name>/`.** Reason: the
 directory map puts hooks under `plugins/<name>/hooks/` only, and skill rule 5 keeps a skill
@@ -143,17 +143,18 @@ default in either direction.
 
 ## Acceptance criteria
 
-- [x] The measurement in D5 is recorded in `roadmap/private/` with harness version and date,
-      and it covers both claims. (2026-09-12, Claude Code 2.1.269. Claim 2 was false, and the
-      correction landed in `SKILL.md`.)
+- [x] The measurement in D5 is recorded, with the harness version, and it covers both
+      claims. (Claude Code 2.1.269. Claim 2 was false, and the correction landed in
+      `SKILL.md`.)
 - [x] `skills/agent-delegation/hooks/` ships a `PreToolUse` hook that emits the JSON contract
       under *Platform execution notes*, defaulted to ask mode.
 - [x] A probe confirms the trigger. One edit to one file in a turn raises no ask. An edit to a
       second distinct file in the same turn raises one ask. (Live, 2026-09-12, Claude Code
       2.1.269, in accept-edits mode and in auto mode. The third file of the turn stayed
       silent, as designed.)
-- [x] A probe confirms that an edit from inside a subagent raises no ask. (Live, 2026-09-12.
-      A general-purpose subagent wrote two files with no ask, in both modes.)
+- [x] A probe confirms that an edit from inside a subagent raises no ask. (Live, Claude
+      Code 2.1.269. A general-purpose subagent wrote two files with no ask, in both
+      modes.)
 - [x] The hook documentation states that a Bash-based edit bypasses the matcher in either mode.
 - [x] `AGENTS.md` carries the D6 condition, in the same commit as the hook. (Skill rule 10.)
 - [x] `SKILL.md` carries a toolset-check step next to "Name the evidence, not the command", and
