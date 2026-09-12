@@ -73,10 +73,14 @@ either mode. Ask mode still puts a human in the path. Deny mode gives a false se
 and it closes nothing more.
 
 **D3. The ask triggers on the second distinct file path in a turn.** Reason: the rule in the
-skill is about size, and the tool name carries no size. A `UserPromptSubmit` hook clears the
-set at the start of each turn. The `PreToolUse` hook adds each `file_path` to the set. The
-first file passes in silence. The second distinct file raises the ask. This maps onto the word
+skill is about size, and the tool name carries no size. The `PreToolUse` hook adds each file
+path to a set, and it clears the set when `prompt_id` changes, which marks a new turn. The
+first file passes in silence. The second distinct file raises one ask. Later files in the same
+turn pass in silence, because the human already decided for that turn. This maps onto the word
 "multi-file" in the skill, and it keeps the allowed one-line fix silent.
+
+The measurement of 2026-09-12 removed this decision's second hook. `prompt_id` arrives in the
+`PreToolUse` input itself, so no `UserPromptSubmit` hook is needed.
 
 **D4. The splitting rule is dropped from this item.** Reason: it anchored on one builder
 agent's file limit, which is a preset property. The skill description states that the skill is
@@ -88,8 +92,13 @@ What remained was generic work splitting, which carries no delegation-specific f
 section, and it tells its readers to measure before they trust. Two claims under *Platform
 execution notes* carry no measurement in this repository. Claim 1: hook input carries
 `agent_id` only inside a subagent. Claim 2: a wrong or non-executable script path fails open,
-and the gate is then silently off. Claim 2 decides whether the hook needs a self-test, because
-a silent failure leaves the user in trust of a gate that is off.
+and the gate is then silently off.
+
+**Measured on 2026-09-12, Claude Code 2.1.269.** Claim 1 holds. Claim 2 is false for a Python
+hook: a missing script path exits 2, which is the block signal, so every matched call is
+blocked. The direction of the failure belongs to the exit code. The hook therefore catches its
+own faults and exits 0 on purpose, and it ships a self-test. Record:
+`roadmap/private/delegation-gate-probe/MEASUREMENT.md`. The correction landed in `SKILL.md`.
 
 **D6. `AGENTS.md` gains a written condition for hooks under `skills/<name>/`.** Reason: the
 directory map puts hooks under `plugins/<name>/hooks/` only, and skill rule 5 keeps a skill
@@ -114,8 +123,9 @@ default in either direction.
   lowers the ask rate, and it does not remove the habit.
 - A Bash-based edit bypasses an `Edit|Write|NotebookEdit` matcher in either mode. The hook
   cannot see it.
-- A wrong or non-executable script path fails open. The user is then in trust of a gate that is
-  off. D5 measures this before the ship.
+- A wrong script path fails in the direction of the interpreter's exit code. A Python hook
+  exits 2 and blocks every matched call. A missing command exits 127 and blocks nothing. Both
+  directions are silent, so the hook ships a self-test and a documented path check.
 - A tool list copied into the skill goes stale when a preset changes. The toolset check points
   at the agent definition file instead, so one source of truth stays.
 
@@ -125,14 +135,17 @@ default in either direction.
   a host contract. Confirm the ask value against the current host documentation before the hook
   ships. `plugins/limit-guard/hooks/limit-guard-gate.py` is the working reference in this
   repository.
-- The turn reset in D3 needs a `UserPromptSubmit` hook. Confirm that the event exists, and that
-  it fires before the first tool call of a turn.
+- The turn reset in D3 reads `prompt_id` from the `PreToolUse` input. Measured present on
+  2.1.269. Re-measure on a harness that does not carry it, and fall back to a
+  `UserPromptSubmit` hook there.
 - The state file must be per session. Two sessions in one project must not share a counter.
+  `scratchpad_dir` in the hook input is per session and serves.
 
 ## Acceptance criteria
 
-- [ ] The measurement in D5 is recorded in `roadmap/private/` with harness version and date,
-      and it covers both claims.
+- [x] The measurement in D5 is recorded in `roadmap/private/` with harness version and date,
+      and it covers both claims. (2026-09-12, Claude Code 2.1.269. Claim 2 was false, and the
+      correction landed in `SKILL.md`.)
 - [ ] `skills/agent-delegation/hooks/` ships a `PreToolUse` hook that emits the JSON contract
       under *Platform execution notes*, defaulted to ask mode.
 - [ ] A probe confirms the trigger. One edit to one file in a turn raises no ask. An edit to a
