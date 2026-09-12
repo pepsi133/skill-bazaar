@@ -18,6 +18,7 @@ skills/<name>/                   — Standalone, cross-tool skills (the portable
   ├── SKILL.md                   — The skill itself; portable to any SKILL.md tool
   ├── .claude-plugin/
   │   └── plugin.json            — Packages the skill as a one-skill Claude Code plugin
+  ├── hooks/                     — Rare: only under skill rule 10
   └── references/                — Optional supplementary docs
 plugins/<name>/                  — Self-contained plugin packages
   ├── .claude-plugin/
@@ -56,6 +57,17 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
    scoping. Put that in `roadmap/` (a backlog item for the skill), or in a place of your
    own outside this repo. Test: if the agent never needs the file to do the job the skill
    describes, it is not a reference.
+
+10. **A skill ships hooks only when its own subject is a harness mechanism.** The default
+    stands: a hook is tool-specific, a skill is portable, and hooks live under
+    `plugins/<name>/hooks/`. One exception, and it carries four conditions, all of which must
+    hold. The skill's subject must already be harness-specific, so portability is spent
+    before the hook arrives. The core text above *Platform execution notes* must stay
+    tool-agnostic. The hook must be named in *Platform execution notes*. The skill must read
+    correctly for a tool that cannot run the hook, which makes the hook optional rather than
+    load-bearing. `skills/agent-delegation/hooks/` is the one case in the tree: that skill
+    documents `PreToolUse`, `agent_id` and the subagent transcript path already, and the hook
+    enforces a rule the skill states in prose.
 
 ## Plugin Authoring Rules
 

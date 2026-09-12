@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-delegation-gate.py\"",
+            "timeout": 10,
+            "statusMessage": "agent-delegation: counting the files this turn"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -244,7 +244,9 @@ you rely on it. Not measured: agent teams, non-interactive parents, other harnes
   with each user turn, so one hook can count the distinct files a turn has touched without a
   companion `UserPromptSubmit` hook. It also carries `agent_type`, `permission_mode` and
   `scratchpad_dir`, which is a per-session directory and the natural home for hook state.
-  This skill ships such a gate under `hooks/`.
+  This skill ships such a gate at `hooks/agent-delegation-gate.py`. It asks once, when a
+  turn in the main session starts editing a second file, and `hooks/README.md` carries
+  the install steps and the limits.
 - **A failing hook script fails in the direction of its exit code**: exit code 2 from a
   `PreToolUse` hook blocks the call. A Python hook aimed at a missing path exits 2, because
   that is Python's own code for a file it cannot open, so it blocks every matched call until

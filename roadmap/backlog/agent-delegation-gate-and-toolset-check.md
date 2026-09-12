@@ -146,13 +146,15 @@ default in either direction.
 - [x] The measurement in D5 is recorded in `roadmap/private/` with harness version and date,
       and it covers both claims. (2026-09-12, Claude Code 2.1.269. Claim 2 was false, and the
       correction landed in `SKILL.md`.)
-- [ ] `skills/agent-delegation/hooks/` ships a `PreToolUse` hook that emits the JSON contract
+- [x] `skills/agent-delegation/hooks/` ships a `PreToolUse` hook that emits the JSON contract
       under *Platform execution notes*, defaulted to ask mode.
 - [ ] A probe confirms the trigger. One edit to one file in a turn raises no ask. An edit to a
-      second distinct file in the same turn raises one ask.
-- [ ] A probe confirms that an edit from inside a subagent raises no ask.
-- [ ] The hook documentation states that a Bash-based edit bypasses the matcher in either mode.
-- [ ] `AGENTS.md` carries the D6 condition, in the same commit as the hook.
-- [ ] `SKILL.md` carries a toolset-check step next to "Name the evidence, not the command", and
+      second distinct file in the same turn raises one ask. (Synthetic payloads through the
+      hook's own stdin path pass. A run inside a live session is still open.)
+- [ ] A probe confirms that an edit from inside a subagent raises no ask. (Synthetic pass.
+      A run inside a live session is still open.)
+- [x] The hook documentation states that a Bash-based edit bypasses the matcher in either mode.
+- [x] `AGENTS.md` carries the D6 condition, in the same commit as the hook. (Skill rule 10.)
+- [x] `SKILL.md` carries a toolset-check step next to "Name the evidence, not the command", and
       it points at the agent definition file for the tool list.
-- [ ] `python3 scripts/validate-skills.py` passes.
+- [x] `python3 scripts/validate-skills.py` passes.
