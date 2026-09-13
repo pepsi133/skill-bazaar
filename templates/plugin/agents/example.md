@@ -1,5 +1,5 @@
 ---
-name: example-agent
+name: example
 description: When to hand work to this agent, written so the main thread can tell whether it fits. This text is the whole routing decision.
 tools: Read, Grep, Glob
 model: sonnet

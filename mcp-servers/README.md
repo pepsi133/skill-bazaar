@@ -38,7 +38,11 @@ This format is recognized by:
 ## Adding a server config
 
 ```bash
-cp -r templates/mcp-server/ mcp-servers/your-server-name/
+mkdir -p mcp-servers/your-server-name
+cp templates/mcp-server/mcp.json mcp-servers/your-server-name/mcp.json
 ```
+
+`templates/mcp-server/TEMPLATE.md` documents the template itself and says why the file is
+`mcp.json` rather than `.mcp.json`. Do not copy it across.
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for details.
