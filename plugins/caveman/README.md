@@ -136,13 +136,16 @@ unless `ste` is installed, which manages `defaultMode` for you (see above).
 2. **`mcp-servers/caveman-shrink` is left out entirely.** `plugin.json` never registers it.
    If it is wanted it needs its own review pass — an MCP server is a different threat model
    from a hook — and its own `UPSTREAM.md` file-table entry.
-3. **Do `commands/*.toml` register slash commands in current Claude Code?** Upstream commits
-   after this pin assert Claude Code scans only `commands/*.md` and ignores `.toml` (Codex
-   and Gemini read the `.toml`), contradicting an earlier upstream commit. **UNVERIFIED.**
-   If true, the three vendored `.toml` files register nothing and `/caveman`,
-   `/caveman-commit`, `/caveman-review` work only because the `UserPromptSubmit` hook regex
-   intercepts the raw prompt text — which it does independently, so the commands work either
-   way. Worth settling before anyone debugs a "missing" slash command.
+3. **Do `commands/*.toml` register slash commands in current Claude Code? No — settled.**
+   The later upstream commits were right: Claude Code globs `commands/` for `.md` and skips
+   every other extension without reporting it, so the three vendored `.toml` files registered
+   nothing. Measured, not inferred: an equivalent `.toml` command in a sibling plugin never
+   appeared, while `claude plugin validate` passed the plugin and reported no components
+   either way. `/caveman`, `/caveman-commit` and `/caveman-review` kept working throughout,
+   because the `UserPromptSubmit` hook regex reads the raw prompt text and never consulted
+   those files. The three files are therefore dropped — see the exclusions table in
+   `UPSTREAM.md`. Codex and Gemini do read `.toml`, so restore them if this plugin is ever
+   packaged for a harness other than Claude Code.
 4. **The candidate cherry-picks have not landed.** `UPSTREAM.md` lists the upstream fixes
    worth taking on top of this pin (session-scoped mode, the 5s to 30s hook timeout,
    `SKILL.md` correctness fixes including "never drop not/never/no", the `caveman-stats.js`
