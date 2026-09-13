@@ -69,6 +69,21 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
     documents `PreToolUse`, `agent_id` and the subagent transcript path already, and the hook
     enforces a rule the skill states in prose.
 
+11. **A `compatibility` claim does not have to be spotless, but it must be deliberate.** The
+    Agent Skills spec carries six frontmatter fields: `name`, `description`, `license`,
+    `compatibility`, `metadata`, `allowed-tools`. `argument-hint` and
+    `disable-model-invocation` are Claude Code's own. Claude Code ignores a key it does not
+    know, so the two mix without any error, but a strict packager for another destination can
+    reject the file outright. Decide which a skill is and say so, rather than letting the
+    combination happen by accident. The case in this tree:
+    `plugins/ste/skills/simple-english/SKILL.md` claims five tools *and* sets
+    `disable-model-invocation`, and both stay. Its content is genuinely portable — it ships a
+    standalone system-prompt block for harnesses with no SKILL.md support — while the key
+    stops Claude Code from auto-invoking a skill its `SessionStart` hook already injects.
+    Dropping the claim would deny the portability; dropping the key would double-activate the
+    style. If that file is ever packaged for upload elsewhere, strip the Claude-only keys at
+    packaging time, not in the repo.
+
 ## Plugin Authoring Rules
 
 1. Each plugin is a self-contained directory under `plugins/<name>/`.
