@@ -337,8 +337,16 @@ def check_skill_dirs(repo_root: Path) -> list[Problem]:
 
 
 def find_component_dirs(repo_root: Path) -> list[Path]:
-    """Every `commands/` and `agents/` directory the plugin loader reads."""
-    parents = _child_dirs(repo_root / "plugins") + _child_dirs(repo_root / "templates")
+    """Every `commands/` and `agents/` directory the plugin loader reads.
+
+    `skills/` is scanned too: each standalone skill there ships its own
+    plugin manifest, so it can carry commands and agents like any other plugin.
+    """
+    parents = (
+        _child_dirs(repo_root / "plugins")
+        + _child_dirs(repo_root / "skills")
+        + _child_dirs(repo_root / "templates")
+    )
     return [
         parent / name
         for parent in parents

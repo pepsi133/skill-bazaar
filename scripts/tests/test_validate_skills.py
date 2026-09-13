@@ -370,6 +370,68 @@ class SkillMdTests(unittest.TestCase):
         self.assertEqual([str(p) for p in problems], [])
 
 
+class ComponentFileTests(unittest.TestCase):
+    """`check_component_files` is the only layer that catches a component the
+    loader skips, so a regression in it is as silent as the bug it guards."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def _write_component(self, parent: str, kind: str, filename: str, content: str) -> Path:
+        path = self.root / parent / "sample" / kind / filename
+        write(path, content)
+        return path
+
+    def test_toml_command_is_reported(self):
+        self._write_component(
+            "plugins", "commands", "install.toml", 'description = "x"\nprompt = "y"\n'
+        )
+        problems = validate_skills.check_component_files(self.root)
+        self.assertTrue(any("never loaded" in p.message for p in problems))
+
+    def test_markdown_command_with_description_passes(self):
+        self._write_component(
+            "plugins", "commands", "install.md", "---\ndescription: Does a thing.\n---\n\nBody.\n"
+        )
+        self.assertEqual(validate_skills.check_component_files(self.root), [])
+
+    def test_command_without_frontmatter_is_reported(self):
+        self._write_component("plugins", "commands", "install.md", "Body with no frontmatter.\n")
+        problems = validate_skills.check_component_files(self.root)
+        self.assertTrue(any("frontmatter" in p.message for p in problems))
+
+    def test_command_with_empty_description_is_reported(self):
+        self._write_component("plugins", "commands", "install.md", "---\ndescription:  \n---\n\nB.\n")
+        problems = validate_skills.check_component_files(self.root)
+        self.assertTrue(any("missing required 'description'" in p.message for p in problems))
+
+    def test_agents_directory_is_checked_too(self):
+        self._write_component("plugins", "agents", "helper.yaml", "name: helper\n")
+        problems = validate_skills.check_component_files(self.root)
+        self.assertTrue(any("never loaded" in p.message for p in problems))
+
+    def test_gitkeep_is_ignored(self):
+        self._write_component("plugins", "commands", ".gitkeep", "")
+        self.assertEqual(validate_skills.check_component_files(self.root), [])
+
+    def test_templates_are_checked(self):
+        """A wrong scaffold reproduces the bug in every plugin copied from it."""
+        self._write_component("templates", "commands", "example.toml", 'description = "x"\n')
+        problems = validate_skills.check_component_files(self.root)
+        self.assertTrue(any("never loaded" in p.message for p in problems))
+
+    def test_standalone_skills_are_checked(self):
+        self._write_component("skills", "commands", "run.toml", 'description = "x"\n')
+        problems = validate_skills.check_component_files(self.root)
+        self.assertTrue(any("never loaded" in p.message for p in problems))
+
+    def test_repo_without_component_dirs_is_clean(self):
+        make_valid_repo(self.root)
+        self.assertEqual(validate_skills.check_component_files(self.root), [])
+
+
 class PluginTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
