@@ -281,7 +281,7 @@ attacker who can plant a file must not be able to have the status line print
 
 `ste` does not write `.ste-active` yet, so the `[STE]` badge stays absent until it does.
 The change is about ten lines in a hook `ste` already runs: write `on` to the flag on
-`/ste on`, remove the file on `/ste off`, refuse a symlink at the path, and write
+`/ste:ste on`, remove the file on `/ste:ste off`, refuse a symlink at the path, and write
 atomically at mode 0600. Absence is the "off" signal, matching `caveman`, so a reader that
 finds no file renders nothing rather than empty brackets.
 

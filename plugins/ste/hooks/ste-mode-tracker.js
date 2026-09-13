@@ -3,8 +3,9 @@
 //
 // Two jobs:
 //
-//   1. Own the /ste command. `/ste on`, `/ste off`, `/ste status` update this
-//      plugin's state file and confirm through additionalContext. `/ste on`
+//   1. Own the /ste:ste command. `/ste:ste on`, `/ste:ste off`, `/ste:ste status`
+//      update this plugin's state file and confirm through additionalContext. On
+//      `/ste:ste on` it
 //      re-injects the full ruleset so the change takes effect on this turn
 //      instead of the next session.
 //
@@ -253,7 +254,7 @@ function cavemanModeFrom(prompt) {
 // toggle changes `state` for this turn while writing nothing at all.
 //
 // It performs no writes itself; the only read it makes is this plugin's own
-// bundled prompt file, on the `/ste on` path, plus caveman's config through
+// bundled prompt file, on the `/ste:ste on` path, plus caveman's config through
 // cavemanIntentFrom. The tests drive every branch through this function.
 function decide(prompt, state) {
   const text = String(prompt || '').trim().toLowerCase();

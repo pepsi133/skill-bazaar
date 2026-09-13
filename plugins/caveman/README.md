@@ -109,7 +109,7 @@ turns. The rule, as `ste` states it:
 `ste` also **manages caveman's `defaultMode`**: set the mode with `/caveman <mode>`; ste
 observes it and persists it as `defaultMode`. Do not also set it through
 `CAVEMAN_DEFAULT_MODE` or `$XDG_CONFIG_HOME/caveman/config.json`, or the two will fight.
-`ste` itself exposes only `/ste on|off|status` — it has no mode argument of its own.
+`ste` itself exposes only `/ste:ste on|off|status` — it has no mode argument of its own.
 
 ## What it writes
 

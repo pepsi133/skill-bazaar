@@ -41,7 +41,7 @@ claude plugin install mikrotik-routeros@skill-bazaar  # MikroTik RouterOS design
 claude plugin install agent-delegation@skill-bazaar   # Protocol for briefing a subagent that cannot ask you mid-run
 claude plugin install caveman@skill-bazaar            # Vendored, pinned caveman: ultra-compressed replies, ~75% fewer output tokens
 claude plugin install limit-guard@skill-bazaar        # Pause a session before it burns the 5-hour or 7-day usage window, resume after the reset
-claude plugin install ste@skill-bazaar                # Simple Technical English bridged to caveman; toggle with /ste on|off|status
+claude plugin install ste@skill-bazaar                # Simple Technical English bridged to caveman; toggle with /ste:ste on|off|status
 ```
 
 The same commands are available as slash commands inside a session
