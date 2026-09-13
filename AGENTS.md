@@ -25,6 +25,8 @@ plugins/<name>/                  — Self-contained plugin packages
   │   └── plugin.json            — Plugin manifest
   ├── .mcp.json                  — Optional: plugin-scoped MCP servers (plugin root)
   ├── skills/                    — Plugin-scoped skills
+  ├── commands/<name>.md         — Slash commands. Markdown with frontmatter only
+  ├── agents/<name>.md           — Subagents. Markdown with frontmatter only
   └── hooks/                     — Plugin-scoped hooks (tool-specific)
 mcp-servers/<name>/              — Shared MCP server configurations
 templates/                       — Skeleton files for new contributions
@@ -76,7 +78,8 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
     know, so the two mix without any error, but a strict packager for another destination can
     reject the file outright. Decide which a skill is and say so, rather than letting the
     combination happen by accident. The case in this tree:
-    `plugins/ste/skills/simple-english/SKILL.md` claims five tools *and* sets
+    `plugins/ste/skills/simple-english/SKILL.md` names five harnesses in `compatibility`
+    *and* sets
     `disable-model-invocation`, and both stay. Its content is genuinely portable — it ships a
     standalone system-prompt block for harnesses with no SKILL.md support — while the key
     stops Claude Code from auto-invoking a skill its `SessionStart` hook already injects.
@@ -91,6 +94,17 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
    `version`, and a matching entry in `.claude-plugin/marketplace.json`.
 3. Plugin-scoped skills follow the same rules as top-level skills.
 4. Hooks and slash commands are inherently tool-specific — document which tool(s) they target.
+5. **Commands and agents load only as `.md` with frontmatter.** Claude Code globs
+   `commands/` and `agents/` for `.md` and skips every other file without reporting it, so a
+   command shipped as `.toml` or `.yaml` is not rejected — it never registers, and
+   `claude plugin validate` still passes the plugin. `scripts/validate-skills.py` is the only
+   layer that catches this; run it. A command's name comes from the plugin name plus the file
+   name (`commands/install.md` in `my-plugin` is `/my-plugin:install`), and an agent's from
+   its file name, which its `name` field must match.
+6. **Confirm a component registered, rather than that nothing errored.**
+   `claude plugin details <name>` counts skills, agents and hooks; a count of 0 where you
+   shipped one means it did not load. No CLI lists commands, so prove a command by loading
+   the plugin with `claude --plugin-dir <path>` and running it once.
 
 ## MCP Server Config Rules
 
@@ -118,7 +132,9 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
 - Before opening a PR, run the structural validator locally:
   `python3 scripts/validate-skills.py`. It checks SKILL.md frontmatter (`name`
   matches its directory, `description` is present and within the length
-  limit), plugin manifests, `.claude-plugin/marketplace.json`, and roadmap
+  limit), every file under a `commands/` or `agents/` directory (Markdown with
+  frontmatter, since the loader silently skips anything else), plugin manifests,
+  `.claude-plugin/marketplace.json`, and roadmap
   frontmatter, and prints `path: message` for every problem it finds — the
   same check CI runs on every PR and push to `main`
   (`.github/workflows/validate-skills.yml`). It does not check prose quality
