@@ -55,11 +55,15 @@ Default state on a machine that has never used it: **STE on, caveman off.**
 
 ## Commands
 
+This plugin ships no `commands/` directory. The toggle is the `ste` skill, so the command
+carries the plugin namespace: `/ste:ste`. The rest of this document writes `/ste …` for
+brevity.
+
 | Command | Effect |
 |---|---|
-| `/ste on` | Turn the bridge on. Re-injects the ruleset immediately, so it applies to the current turn. |
-| `/ste off` | Turn the bridge off. `SessionStart` then emits nothing at all. |
-| `/ste status` | Report both values: `ste` and the caveman mode the bridge believes is active. |
+| `/ste:ste on` | Turn the bridge on. Re-injects the ruleset immediately, so it applies to the current turn. |
+| `/ste:ste off` | Turn the bridge off. `SessionStart` then emits nothing at all. |
+| `/ste:ste status` | Report both values: `ste` and the caveman mode the bridge believes is active. |
 
 A bare `/ste`, or an argument the plugin does not recognise, reports rather than toggles. A
 typo must not silently flip the style. Extra words after a good argument (`/ste on junk`) are

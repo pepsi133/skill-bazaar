@@ -35,7 +35,7 @@
     {
       "name": "ste",
       "source": "./plugins/ste",
-      "description": "Simple Technical English (ASD-STE100) bridged to caveman: caveman's compressed style stays the default, and STE takes over on exactly the turns caveman itself says to drop compression. Toggle with /ste on|off|status."
+      "description": "Simple Technical English (ASD-STE100) bridged to caveman: caveman's compressed style stays the default, and STE takes over on exactly the turns caveman itself says to drop compression. Toggle with /ste:ste on|off|status."
     },
     {
       "name": "herd-forge",
