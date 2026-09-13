@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""Validate SKILL.md frontmatter, plugin manifests, the marketplace manifest, and
-roadmap frontmatter across the repo.
+"""Validate SKILL.md frontmatter, command and agent files, plugin manifests, the
+marketplace manifest, and roadmap frontmatter across the repo.
+
+Some checks are deliberately stricter than Claude Code itself; each is marked
+"House style" where it is enforced. Checks that guard *loadability* — whether the
+platform will read a file at all — are not style, and are marked as such.
 
 Python 3 standard library only — no third-party dependencies (no PyYAML). This
 script implements a tiny parser for the `key: value` frontmatter subset this
@@ -41,6 +45,7 @@ import re
 import sys
 from pathlib import Path, PurePosixPath
 
+COMPONENT_DIRS = ("commands", "agents")
 KEBAB_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 ROADMAP_TYPES = {"skill", "mcp", "plugin", "meta"}
@@ -258,6 +263,9 @@ def check_skill_md(path: Path, repo_root: Path) -> list[Problem]:
     if not name:
         problems.append(Problem(rel, "frontmatter missing required 'name' field"))
     else:
+        # House style, stricter than the platform: Claude Code treats `name` as a
+        # display label only and takes the invocable name from the directory, so a
+        # mismatch loads fine. Required to match here so the two cannot drift.
         if name != dirname:
             problems.append(
                 Problem(rel, f"frontmatter name '{name}' does not match directory '{dirname}'")
@@ -275,6 +283,8 @@ def check_skill_md(path: Path, repo_root: Path) -> list[Problem]:
     else:
         if description.strip() == "":
             problems.append(Problem(rel, "'description' is empty"))
+        # House style, stricter than the platform's 1536: a description this long
+        # is being used as documentation rather than as a routing decision.
         if len(description) > 1024:
             problems.append(Problem(rel, f"'description' is {len(description)} characters, max is 1024"))
 
@@ -323,6 +333,51 @@ def check_skill_dirs(repo_root: Path) -> list[Problem]:
             problems.append(
                 Problem(str(skill_dir.relative_to(repo_root)), "directory has no SKILL.md")
             )
+    return problems
+
+
+def find_component_dirs(repo_root: Path) -> list[Path]:
+    """Every `commands/` and `agents/` directory the plugin loader reads."""
+    parents = _child_dirs(repo_root / "plugins") + _child_dirs(repo_root / "templates")
+    return [
+        parent / name
+        for parent in parents
+        for name in COMPONENT_DIRS
+        if (parent / name).is_dir()
+    ]
+
+
+def check_component_files(repo_root: Path) -> list[Problem]:
+    """Commands and agents load only as Markdown carrying frontmatter.
+
+    Claude Code globs these directories for `.md` and ignores every other file
+    without reporting it, so a command shipped as `.toml` is not rejected — it
+    never registers at all. `claude plugin validate` does not enumerate these
+    directories either, and a test that parses the file itself will agree with
+    the mistake, so this is the only layer that catches a wrong extension.
+    """
+    problems: list[Problem] = []
+    for comp_dir in find_component_dirs(repo_root):
+        for path in sorted(comp_dir.iterdir()):
+            if not path.is_file() or path.name == ".gitkeep":
+                continue
+            rel = str(path.relative_to(repo_root))
+            if path.suffix != ".md":
+                problems.append(
+                    Problem(
+                        rel,
+                        f"'{path.suffix or path.name}' is never loaded from "
+                        f"{comp_dir.name}/; the loader reads .md only",
+                    )
+                )
+                continue
+            fields, _body, fm_problems = load_frontmatter(path)
+            problems.extend(fm_problems)
+            if fields is None:
+                continue
+            if not (fields.get("description") or "").strip():
+                problems.append(Problem(rel, "frontmatter missing required 'description' field"))
+
     return problems
 
 
@@ -567,6 +622,7 @@ def main(argv: list[str]) -> int:
     for skill_md in find_skill_md_files(repo_root):
         problems.extend(check_skill_md(skill_md, repo_root))
 
+    problems.extend(check_component_files(repo_root))
     problems.extend(check_plugins(repo_root))
     problems.extend(check_marketplace_json(repo_root))
     problems.extend(check_roadmap(repo_root))
