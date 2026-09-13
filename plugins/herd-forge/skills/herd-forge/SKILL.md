@@ -18,7 +18,7 @@ the context of the created agents small, not yours. An overseer gets what an ove
 needs. A worker gets what its question needs. You hold the whole picture while you
 build.
 
-Four herds ran on one host in September 2026: `wA` (static, ten panes), `w8` (owner of
+Four herds ran on one host: `wA` (static, ten panes), `w8` (owner of
 the only device), `wB` (static, independent workers), `wC` (field notes). One of them
 paid for every rule that carries a story. The story is the evidence. A rule with no
 story rests on argument that four herds agreed with. That is weaker, and you must know

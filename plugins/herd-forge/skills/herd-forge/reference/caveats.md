@@ -4,7 +4,7 @@ Every entry below produced a confident wrong reading, not an error. A tool that 
 loudly costs you minutes. A tool that lies costs the operation its credibility. (`w8`,
 `wB`.)
 
-Four herds ran on one host in September 2026 and produced this list: `wA` (static, probe
+Four herds ran on one host and produced this list: `wA` (static, probe
 run), `w8` (owner of the only device), `wB` (static, independent workers), `wC`
 (youngest, field notes, unreviewed as documents). That is the whole sample. Read
 "always" and "never" as always and never inside that sample. Expect a second programme

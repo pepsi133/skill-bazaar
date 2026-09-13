@@ -5,7 +5,7 @@ map, the configuration, and one instruction file per agent.
 
 ## Why it exists
 
-Four herds ran on one host in September 2026 against related questions. They disagreed
+Four herds ran on one host against related questions. They disagreed
 about twelve practices, and the operator ruled on each one. This skill is what survived
 that comparison, with the disagreements resolved and the evidence attached.
 

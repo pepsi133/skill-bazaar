@@ -1,6 +1,6 @@
 # Open issues: what does not work
 
-These problems remain unsolved across four herds run on one host in September 2026,
+These problems remain unsolved across four herds run on one host,
 updated after the rulings of the operator. Each entry states a problem, not a solution,
 because a fix that nobody tested is worse than a recorded gap. Each entry names the
 herd that hit it.
