@@ -533,11 +533,18 @@ class TestSlashCommand(unittest.TestCase):
     """The install command is a prompt, so what is testable is its contract."""
 
     def setUp(self):
-        import tomllib
-
-        path = os.path.join(ROOT, "commands", "install.toml")
-        with open(path, "rb") as fh:
-            self.command = tomllib.load(fh)
+        # Markdown with frontmatter, because Claude Code's loader globs
+        # commands/ for .md and silently ignores every other extension. This
+        # file shipped as .toml once, and the command simply never registered.
+        path = os.path.join(ROOT, "commands", "install.md")
+        self.assertTrue(os.path.isfile(path), "the command must be a .md file to load")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        _, frontmatter, body = text.split("---\n", 2)
+        self.command = {
+            "description": frontmatter.split("description:", 1)[1].strip(),
+            "prompt": body,
+        }
 
     def test_has_a_description_and_a_prompt(self):
         self.assertTrue(self.command["description"].strip())

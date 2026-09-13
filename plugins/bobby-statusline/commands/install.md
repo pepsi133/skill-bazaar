@@ -1,6 +1,7 @@
-description = "Wire bobby-statusline into the user's settings.json, with the change shown before it is made"
+---
+description: Wire bobby-statusline into the user's settings.json, with the change shown before it is made
+---
 
-prompt = """
 Set up bobby-statusline as the user's status line. Edit their settings.json for them, but
 show the change first and never guess at a path.
 
@@ -39,4 +40,3 @@ show the change first and never guess at a path.
 
 Do not change any other setting, do not install anything, and do not edit files outside
 settings.json.
-"""
