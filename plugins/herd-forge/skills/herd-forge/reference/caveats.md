@@ -188,28 +188,33 @@ that paid for it.
 
 ## 4. Shell, filesystem and environment
 
-37. `grep` is a shell function here, not a program. It rewrites every call with
-    binary-skipping, gitignore-obeying and directory-excluding flags. Every filter
-    exits 1 with empty output, which is byte-for-byte a real no-match. Measured: 66 of
-    557 files read in one tree without the override. `-a` alone does not disable the
-    ignore file. For any count that you publish, use Python `os.walk` with
-    `bytes in data`, or `/usr/bin/grep` by absolute path. (`w8`, `wB`, `wA`.)
+37. `grep` may be a shell function rather than a program. Run `type grep` before you
+    trust a count. Where it is a function, it can rewrite every call with
+    binary-skipping, gitignore-obeying and directory-excluding flags, and every filter
+    then exits 1 with empty output, which is byte-for-byte a real no-match. Measured on
+    the host these herds ran on: 66 of 557 files read in one tree without the override.
+    `-a` alone does not disable the ignore file. For any count that you publish, use
+    Python `os.walk` with `bytes in data`, or `/usr/bin/grep` by absolute path.
+    (`w8`, `wB`, `wA`.)
 
 38. The audit command that checks for entry 37 can produce a false retraction, because
     the fix flags belong to different programs, and a rejected flag prints nothing and
     exits non-zero. Read the exit status of every audit command before you believe its
     result. (`wB`, `w8`.)
 
-39. `find` is also a shell function here. It agrees with the real binary today. It
-    belongs to the same family, and the next agent must not assume that it stays
-    honest. Cross-check any publishable count with an absolute path or with Python.
-    (`wB`.)
+39. `find` may be wrapped the same way, so check it the same way. Where it was wrapped
+    on the host these herds ran on, it agreed with the real binary at the time of
+    measurement. It belongs to the same family, and the next agent must not assume that
+    it stays honest. Cross-check any publishable count with an absolute path or with
+    Python. (`wB`.)
 
-40. The interactive shell is zsh, not bash. Unquoted `set -- $var` does not word-split,
-    so a path built from it did not exist, and `os.walk` on a path that does not exist
-    yields a clean "0 files, 0 errors" that reads as success. zsh arrays start at 1, so
-    a bash-style loop used the wrong elements in silence. Make every walker refuse a
-    root that does not exist. (`wB`.)
+40. The interactive shell may not be bash. Check with `echo $0` before you rely on
+    bash word-splitting or bash array indexing. Under zsh, which is what these herds
+    ran under, unquoted `set -- $var` does not word-split, so a path built from it did
+    not exist, and `os.walk` on a path that does not exist yields a clean
+    "0 files, 0 errors" that reads as success. zsh arrays also start at 1, so a
+    bash-style loop used the wrong elements in silence. Make every walker refuse a root
+    that does not exist. (`wB`.)
 
 41. `${VAR:-default}` substitutes on an empty value as well as an unset one. An
     explicit empty value became the default in silence. In one case an empty vendor
