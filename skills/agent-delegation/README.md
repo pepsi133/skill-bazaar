@@ -1,5 +1,10 @@
 # agent-delegation
 
+<p align="center">
+  <img src="../../docs/images/agent-delegation-header.png" width="720"
+       alt="Pixel-art shop screen titled Skill Bazaar. A shopkeeper and three adventurers browse a grid of adventuring gear. Two subagent speech bubbles: one reports a flaw, the other tells the orchestrator to ask The Operator. A dialog box from The Operator reads Acknowledge? Y/N, next to a portrait stamped PAUSED.">
+</p>
+
 A protocol for handing work to a subagent that cannot ask the human mid-run. The skill itself
 is [`SKILL.md`](SKILL.md), written for the agent. This file is for the human: what the skill
 does, how to install it, why it says what it says, and what is known about the harnesses it

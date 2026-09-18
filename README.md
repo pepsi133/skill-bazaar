@@ -1,5 +1,10 @@
 # Skill Bazaar
 
+<p align="center">
+  <img src="docs/images/skill-bazaar-header.png" width="800"
+       alt="Pixel-art shop screen titled Skill Bazaar. A one-eyed shopkeeper behind a counter, three adventurers browsing, and a grid of stall items with Polish bazaar names: katana, petardy, apteczka, bimber.">
+</p>
+
 A curated library of AI agent skills, MCP server configurations, and plugin packages — designed to work across **all** major coding agents.
 
 ## Supported Tools
