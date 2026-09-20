@@ -195,7 +195,7 @@ transcript afterwards.
 ## Harness facts
 
 Facts about the tools, as observed. Harnesses change, so re-measure before you rely on one.
-The dated runs behind them, with counts and versions, are in
+The measured runs behind them, with counts and versions, are in
 [`roadmap/done/agent-delegation-relay-pause-resume.md`](../../roadmap/done/agent-delegation-relay-pause-resume.md)
 and
 [`roadmap/done/agent-delegation-gate-and-toolset-check.md`](../../roadmap/done/agent-delegation-gate-and-toolset-check.md).
