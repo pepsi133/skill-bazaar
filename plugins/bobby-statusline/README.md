@@ -326,8 +326,8 @@ python3 bin/bobby-statusline.py --selftest
 83 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
 oversize, escape bytes, whitelist), the billing modes, the color thresholds, both layouts,
 the configuration layers, the pause state, the `limit-guard` bridge including an old gate
-and a raising gate, the slash command's contract, and one regression test for every defect
-found in review before release. Each of those twelve fails against the code as it stood
+and a raising gate, the slash command's contract, and one regression test per fixed defect
+(`TestAuditRegressions`, nine tests). Each of those fails against the code as it stood
 before its fix.
 
 Every test isolates `CLAUDE_CONFIG_DIR` into a temporary directory, including the tests that

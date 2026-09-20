@@ -424,7 +424,7 @@ class TestRobustness(Base):
 
 
 class TestAuditRegressions(Base):
-    """One test per defect found in review before release. Each fails on the code before its fix."""
+    """One test per fixed defect. Each fails on the code before its fix."""
 
     def payload(self, **fields) -> str:
         base = {"model": {"display_name": "Opus 5"}}
