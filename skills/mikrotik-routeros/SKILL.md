@@ -226,12 +226,19 @@ It follows the llmstxt standard: `- [Title](URL.md): description`, ~1400 entries
 scratch file and grep that file; do not ship or cache a copy in the skill, the
 live index is the current one.
 
+The index is step one, a specific page is step two. Do not fetch
+`https://manual.mikrotik.com/llms-full.txt` (the whole manual, about 6 MB) as a
+substitute for either. Pull it once, into a scratch file for grep, only when the
+task is strictly MikroTik work and large enough that you would otherwise fetch
+many pages, for example a full multi-device config review.
+
 Workflow for any version-sensitive syntax, property name, default, or "does this
 feature exist / how is it configured" question:
 
 1. **Grep the index** for the topic to find the canonical page URL
-   (e.g. `curl -s https://manual.mikrotik.com/llms.txt -o llms.txt` once, then
-   `grep -i capsman llms.txt`).
+   (e.g. `curl -s https://manual.mikrotik.com/llms.txt -o <scratch>/llms.txt`
+   once, then `grep -i capsman <scratch>/llms.txt`; use an absolute scratch path,
+   the shell's working directory does not persist between calls).
 2. **Fetch the `.md` URL live** — the docs serve clean markdown at those paths.
    Use whatever fetch primitive this runtime provides (see *Platform execution
    notes*). Read the current page rather than reciting from memory.
