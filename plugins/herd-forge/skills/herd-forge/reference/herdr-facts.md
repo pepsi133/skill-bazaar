@@ -1,7 +1,7 @@
-# Herdr facts, measured on this host
+# Herdr facts, measured
 
-Every answer below comes from running the command on the installed binary on
-this host. Nothing here is recalled or inferred from documentation. Where an error
+Every answer below comes from running the command on an installed binary.
+Nothing here is recalled or inferred from documentation. Where an error
 proved a rule, the error text is exact. `herdr --skill` prints the agent skill of Herdr
 and is the authority on syntax. Read it rather than trusting a copy, including this
 one.
@@ -36,7 +36,7 @@ workspaces in one response, and `herdr session list` shows one session, `default
 its own socket. The namespace therefore covers the Herdr session and spans every
 workspace in it.
 
-Not measured: what a second session does. Nobody has run two sessions on this host, so
+Not measured: what a second session does. Two sessions on one host have not been run, so
 nobody has measured whether two sessions share one namespace or hold separate ones. Do
 not assume either. An earlier version of this file said "host-wide" and took it from
 the report of `wC`, not from a measurement. A later version said that a second session

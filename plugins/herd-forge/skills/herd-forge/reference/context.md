@@ -4,11 +4,6 @@
 one invariant replaces it. Everything load-bearing sits on disk, so a compaction taken
 at any moment loses nothing. This file holds the detail.
 
-History, recorded once so that nobody reinvents it. `wA` and `wB` ran under numeric
-thresholds from an earlier operator instruction: 200k hard and 150k advisory. Those
-numbers are what two herds did. They are not guidance, and the operator ruled them out
-of this skill as a default and as a fallback.
-
 ## The `STATUS.md` that a cold reader can resume from
 
 Every agent writes one at every pause, stop and finish. Its first lines say that a
