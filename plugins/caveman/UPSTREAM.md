@@ -31,7 +31,7 @@ Check the pin at any time — it exits 0 when the vendored bytes still match ups
 scripts/vendor-sync.sh plugins/caveman
 ```
 
-## Vendored files (29) — SHA-256 of the bytes in this repo
+## Vendored files (26) — SHA-256 of the bytes in this repo
 
 | Path | SHA-256 |
 |---|---|
