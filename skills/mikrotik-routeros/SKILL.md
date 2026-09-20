@@ -1,6 +1,5 @@
 ---
 name: mikrotik-routeros
-disable-model-invocation: true
 description: >-
   Design, configure, audit, and troubleshoot MikroTik RouterOS networks —
   CAPsMAN/wifi, VLANs and multi-subnet segmentation (IoT, IoT-restricted, guest,
