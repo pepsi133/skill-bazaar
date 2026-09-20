@@ -38,6 +38,7 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
 1. **Every skill MUST have valid YAML frontmatter** with `name` and `description` fields.
 2. **`name` must match the containing directory name** (lowercase, kebab-case).
 3. **`description` must include trigger conditions** — when should the agent activate this skill?
+   It is capped at 1024 characters (house style, stricter than the platform's 1536).
 4. **Keep SKILL.md self-contained.** Use `references/` for large supplementary docs; keep the main file focused on procedure.
 5. **No tool-specific assumptions in the core instructions.** If a skill has tool-specific notes (e.g., "in Claude Code, use WebFetch"), put them in a clearly marked `## Platform execution notes` section at the end.
 6. **Include validation steps.** Every non-trivial skill should tell the agent how to verify its output.
@@ -114,10 +115,10 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
 
 ## Naming Conventions
 
-- Directories: `lowercase-kebab-case`
-- SKILL.md `name` field: must match directory name
-- Roadmap files: subject-only, see [roadmap/README.md](roadmap/README.md)
-- Standalone skill layout and manifests: see [skills/README.md](skills/README.md)
+- Directory name and SKILL.md `name`: skill rule 2 above is the rule. `plugins/<name>/` and
+  `mcp-servers/<name>/` follow the same lowercase kebab-case casing
+- Roadmap filenames: [roadmap/README.md](roadmap/README.md)
+- Standalone skill layout and manifests: [skills/README.md](skills/README.md)
 
 ## Commit Conventions
 
@@ -127,18 +128,18 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
 ## Quality Expectations
 
 - Skills should be **tested by the author** with at least one agent before submitting.
-- Skills should be **documented** — the SKILL.md itself serves as documentation.
-- Don't submit placeholder/stub skills — every merged skill must be functional.
+- Every merged skill is **functional**: it does the job its `description` claims. No
+  placeholder or stub skills.
+- Every skill is **documented**: the `SKILL.md` itself serves as its documentation.
 - Before opening a PR, run the structural validator locally:
-  `python3 scripts/validate-skills.py`. It checks SKILL.md frontmatter (`name`
-  matches its directory, `description` is present and within the length
-  limit), every file under a `commands/` or `agents/` directory (Markdown with
-  frontmatter, since the loader silently skips anything else), plugin manifests,
-  `.claude-plugin/marketplace.json`, and roadmap
-  frontmatter, and prints `path: message` for every problem it finds — the
-  same check CI runs on every PR and push to `main`
-  (`.github/workflows/validate-skills.yml`). It does not check prose quality
-  or run the skill itself, only structure.
+  `python3 scripts/validate-skills.py`. It checks `SKILL.md` frontmatter (`name` present, kebab-case,
+  matching its directory; `description` present and within the 1024-character cap), plugin
+  manifests, `.claude-plugin/marketplace.json`, roadmap frontmatter (which `roadmap/README.md`
+  defines, not this file), and the rule that every file under `commands/` and `agents/` is
+  Markdown with frontmatter — the loader silently skips
+  anything else. It prints `path: message` for every problem it finds — the same check CI runs on
+  every PR and push to `main` (`.github/workflows/validate-skills.yml`). It reads structure
+  only: prose quality and the skill's actual behaviour are yours to test.
 
 ## Repo hygiene — this repo is public
 
