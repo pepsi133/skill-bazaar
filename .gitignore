@@ -18,3 +18,7 @@ __pycache__/
 
 # Maintainer-local audits and scoping notes, never published
 roadmap/private/
+
+# Local secrets. Never tracked.
+.env*
+!.env.example
