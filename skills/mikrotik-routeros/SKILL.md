@@ -4,12 +4,12 @@ description: >-
   Design, configure, audit, and troubleshoot MikroTik RouterOS networks —
   CAPsMAN/wifi, VLANs and multi-subnet segmentation (IoT, IoT-restricted, guest,
   work, private), firewall and complex/multi-layer NAT, bridging with hardware
-  offload, routing, DHCP, QoS, VPNs, and RouterOS scripting (.rsc). Use this
-  whenever the user mentions MikroTik, RouterOS, RouterBOARD, CRS/CCR/hAP/CAP/CHR
-  devices, CAPsMAN, an .rsc script, or asks to plan, generate, review, or debug
-  any MikroTik network config — even if they don't name the skill. Assumes
-  RouterOS 7.20+. Non-MikroTik gear (dumb/managed PoE switches) is out of scope
-  beyond a brief pointer.
+  offload, routing, DHCP, QoS, VPNs, and RouterOS scripting (.rsc). Use when the
+  user asks to plan, generate, review, debug, or explain a RouterOS configuration
+  or .rsc script, pastes RouterOS CLI or /export output, or asks how a RouterOS
+  feature is configured (CAPsMAN, bridge VLAN filtering, firewall, NAT, WireGuard,
+  queues). Do not use for a passing mention of MikroTik with no configuration
+  task, for buying advice, or for non-MikroTik gear. Assumes RouterOS 7.20+.
 ---
 
 # MikroTik RouterOS Network Engineer
