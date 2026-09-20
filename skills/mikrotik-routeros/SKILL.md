@@ -220,22 +220,27 @@ header when version-sensitive behavior is in play.
 
 ## Grounding — reach the live manual, cite it
 
-The bundled index `references/llms.txt` is your router into the official docs. It
-follows the llmstxt standard: `- [Title](URL.md): description`, ~600 entries.
+The official docs publish an index at `https://manual.mikrotik.com/llms.txt`.
+It follows the llmstxt standard: `- [Title](URL.md): description`, ~1400 entries,
+~200 KB. It is too large to read into context. Fetch it once per session into a
+scratch file and grep that file; do not ship or cache a copy in the skill, the
+live index is the current one.
 
 Workflow for any version-sensitive syntax, property name, default, or "does this
 feature exist / how is it configured" question:
 
 1. **Grep the index** for the topic to find the canonical page URL
-   (e.g. `grep -i capsman references/llms.txt`).
+   (e.g. `curl -s https://manual.mikrotik.com/llms.txt -o llms.txt` once, then
+   `grep -i capsman llms.txt`).
 2. **Fetch the `.md` URL live** — the docs serve clean markdown at those paths.
    Use whatever fetch primitive this runtime provides (see *Platform execution
    notes*). Read the current page rather than reciting from memory.
 3. **Cite the source URL** for any syntax/default you took from it. Don't blend
    fetched facts with remembered ones without saying which is which.
 
-If a fetch fails, say so and fall back to best-effort memory *clearly labeled as
-unverified* — never present unverified 7.x syntax as confirmed.
+If a fetch fails — the index or a page — say so and fall back to best-effort
+memory *clearly labeled as unverified* — never present unverified 7.x syntax as
+confirmed.
 
 **A live `/export` is the cheapest syntax oracle you have.** It is emitted by
 the exact firmware you are targeting, so every property name in it is valid on
@@ -252,8 +257,8 @@ assuming — grep the file for `pre-shared-key`, `password`, `secret`, `private-
 — and note that `/export show-sensitive` deliberately defeats this, so never use
 that form for anything destined for version control.
 
-Note: ~40% of index descriptions (mostly CLI-reference tool pages) are
-placeholder dashes — match on the **title/path**, not the description, for those.
+Note: about three quarters of index descriptions (mostly CLI-reference pages)
+are placeholder dashes — match on the **title/path**, not the description.
 
 ---
 
@@ -381,23 +386,14 @@ assumptions the user can override or codify.
 
 ---
 
-## Keeping docs current
-
-`references/llms.txt` is a snapshot. Refresh it periodically from
-`https://manual.mikrotik.com/docs/introduction/` (the llms.txt index) so URLs and
-coverage stay current. Live-fetched page content is always current regardless;
-only the index needs refreshing.
-
----
-
 ## Platform execution notes
 
 This same file runs in more than one agent runtime. Adapt only the mechanics:
 
-- **Claude Code**: fetch docs with the WebFetch tool (or `curl` in bash) against
-  the `.md` URLs from the index. If wired to devices, run SSH/API reads yourself;
-  stage writes and confirm per *Safety*. Bundled `references/llms.txt` is read
-  from the skill dir.
+- **Claude Code**: fetch the index with `curl` in bash into the session's
+  scratch directory and grep it there; WebFetch summarises, which loses the URLs
+  you need. Fetch the `.md` pages with WebFetch or `curl`. If wired to devices,
+  run SSH/API reads yourself; stage writes and confirm per *Safety*.
 - **SSH exec channel quirk** (any runtime): newline- or semicolon-separated
   single-line commands work in one exec call, but **backslash line-continuation
   fails** over exec — it is import-file syntax only. Deliver multi-line
