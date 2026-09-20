@@ -31,11 +31,11 @@ fixes only that a subagent's message is never treated as approval.
 silence. Worktree isolation is the recommended container.
 
 **D5. `README.md` is for the human and is not pointed at from `SKILL.md`**, so it costs no
-context at use time. Dated runs live here, and the README keeps the undated harness facts.
+context at use time. Measured runs live here, and the README keeps the undated harness facts.
 
 ## Runs
 
-Measured 2026-09-17 on a Cowork cloud session (Claude Code Agent tool, foreground calls,
+Measured on a Cowork cloud session (Claude Code Agent tool, foreground calls,
 general-purpose subagents and the `cavecrew-builder` preset). Three subagents, five resumes.
 
 | Subagent | Setup | Observed |
