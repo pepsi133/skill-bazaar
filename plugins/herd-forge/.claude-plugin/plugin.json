@@ -1,8 +1,18 @@
 {
   "name": "herd-forge",
-  "description": "Build a multi-agent research herd in Herdr: the tree, the git repositories, the identity map, the configuration, and one instruction file per agent.",
-  "version": "0.1.0",
-  "author": { "name": "pepsi133", "url": "https://github.com/pepsi133" },
+  "description": "Forge and drive a herd in Herdr: one agent per pane, panes as real terminals for interactive programs that refuse a pipe, Claude panes started with permissions bypassed, other CLI agents on the same goal, and a model and effort choice per role.",
+  "version": "0.2.0",
+  "author": {
+    "name": "pepsi133",
+    "url": "https://github.com/pepsi133"
+  },
   "license": "MIT",
-  "keywords": ["herds", "orchestration", "herdr", "delegation", "research", "multi-agent"]
+  "keywords": [
+    "herds",
+    "orchestration",
+    "herdr",
+    "panes",
+    "terminal",
+    "multi-agent"
+  ]
 }

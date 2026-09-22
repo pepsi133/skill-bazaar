@@ -1,0 +1,20 @@
+{
+  "name": "herd-rigor",
+  "description": "Optional evidence and review discipline for work where a wrong answer costs more than a slow one: measured-or-argued labels, three numbers and a control on every absence claim, predictions recorded before the run, the freeze and review gate with four verdicts, checker independence, and a rule budget that stops the method from eating the work.",
+  "version": "0.1.0",
+  "author": {
+    "name": "pepsi133",
+    "url": "https://github.com/pepsi133"
+  },
+  "license": "MIT",
+  "keywords": [
+    "evidence",
+    "review",
+    "herds",
+    "orchestration",
+    "verification"
+  ],
+  "skills": [
+    "."
+  ]
+}
