@@ -1,67 +1,64 @@
 # herd-forge
 
-Build a multi-agent research herd in Herdr: the tree, the git repositories, the identity
-map, the configuration, and one instruction file per agent.
+Forge and drive a herd in Herdr: one agent per pane, one directory per agent, files as the
+channel.
 
 ## Why it exists
 
-Four herds ran on one host against related questions. They disagreed
-about twelve practices, and the operator ruled on each one. This skill is what survived
-that comparison, with the disagreements resolved and the evidence attached.
+`Bash` gives you a pipe. A pipe has no controlling terminal, so every interactive program
+either refuses to start or runs in a mode that answers nothing. A Herdr pane is a pty, so
+a REPL, an `ssh` password prompt, a TUI installer or a serial console all work there, and a
+human can watch the same pane while an agent drives it.
 
-The reader of the skill **creates** the herd and is normally not its overseer. The rules
-for the overseer and the workers are files that the creator produces, so the skill is
-written that way throughout.
+Three more things follow from that, and the skill covers each:
 
-## When not to use it
+- A Claude pane started with `--dangerously-skip-permissions`, so an unattended herd does
+  not stop on the first prompt.
+- A pane per agent program: Claude in one, Codex or Copilot or Gemini in the next, pointed
+  at one goal.
+- A model and effort choice per role. Judgment work on `fable` or `opus --effort low`. Bulk
+  work on `sonnet --effort high`.
 
-When the question fits in one context, and nobody will challenge the answer. The overhead
-is real, and every expensive practice in the skill states its cost beside it.
+## What it is not
+
+It is not a governance protocol. Evidence discipline, review gates and the rest live in
+**herd-rigor**, as dials an operator turns on when a wrong answer costs more than a slow
+one. herd-forge names no rule the operator did not ask for.
 
 ## Layout
 
 | path | holds |
 |---|---|
-| `skills/herd-forge/SKILL.md` | the core. The creator reads all of it once |
-| `skills/herd-forge/reference/` | opened when the task points at one: instruction templates, the configuration template, measured Herdr facts, the caveats, evidence and review discipline, context and handover, the cross-herd protocol, independence, sealing, and open issues |
+| `skills/herd-forge/SKILL.md` | the core. Read all of it once |
+| `skills/herd-forge/reference/briefs.md` | the file you write for each agent |
+| `skills/herd-forge/reference/interactive-panes.md` | driving an interactive program, console or device from a pane |
+| `skills/herd-forge/reference/herdr-traps.md` | measured Herdr, compaction and account defects |
+| `skills/herd-forge/reference/cross-herd.md` | the relay agent, when a second herd exists |
 
 ## Requirements
 
-This skill drives [Herdr](https://herdr.dev), a terminal agent multiplexer, through its
-`herdr` command-line interface. Herdr is a separate tool and is not bundled with this
-skill.
+This skill drives [Herdr](https://herdr.dev), a terminal multiplexer for coding agents,
+through its `herdr` command-line interface. Herdr is a separate tool and is not bundled
+here.
 
-- **Herdr**, installed and on your `PATH`. Install it from the official project:
+- **Herdr**, installed and on your `PATH`, with `HERDR_ENV=1` inside the pane. Source and
+  documentation: <https://github.com/herdrdev/herdr>.
+- **A coding agent Herdr recognizes.** `herdr agent 2>&1` prints the list your build
+  supports. The list goes to stderr, so a stdout-only capture comes back empty, and
+  `herdr agent --help` does not print it at all.
+- **`git`**, because the forge makes one repository per agent directory.
 
-  ```
-  curl -fsSL https://herdr.dev/install.sh | sh
-  ```
-
-  Source and documentation: <https://github.com/herdrdev/herdr>.
-- **A coding agent that Herdr recognises**, such as Claude Code. The commands here target
-  Herdr on Claude Code. The delegation and evidence rules are portable to any agent kind
-  Herdr supports; the commands and the measured tooling defects are not.
-- **`git`**, because the skill creates one repository per agent directory and the review
-  gate depends on the commit history.
+`herdr --skill` prints the Herdr command reference and is the authority on syntax. The
+skill points at it rather than copying it.
 
 ## Install
 
 ```
-/plugin marketplace add /path/to/skill-bazaar
-/plugin install herd-forge@skill-bazaar
+claude plugin marketplace add /path/to/skill-bazaar
+claude plugin install herd-forge@skill-bazaar
 ```
 
-## Where a rule lives
+## Companion plugins
 
-A rule that a created agent must obey has one source: the template for that agent in
-`skills/herd-forge/reference/prompt-templates.md`. `SKILL.md` states the step that installs
-it, and a reference file holds the story behind it. When you change a rule, change the
-template, then make sure that the step and the story still agree with it. An earlier
-version stated every rule in all three files, and five of seven fixes reached only one of
-them.
-
-## The evidence
-
-Every rule with a story behind it names the herd that paid for it. A rule with no story
-rests on argument, and the skill says which is which. The story sits inline with the rule,
-so the reader sees the evidence next to the practice it supports.
+- **herd-rigor**, for evidence labels, absence controls, the review gate and a rule budget.
+- **static-analysis-controls**, for counting and absence over a corpus of files or binaries.

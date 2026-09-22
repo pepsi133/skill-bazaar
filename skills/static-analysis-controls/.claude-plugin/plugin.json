@@ -1,0 +1,20 @@
+{
+  "name": "static-analysis-controls",
+  "description": "Controls for counting, searching and claiming absence across a corpus of files or binaries: denominators that symlinks inflate, a grep that is a shell function, positive and discrimination controls, indirect references that defeat a direct search, the backward window for a register load, and addresses that shift between versions.",
+  "version": "0.1.0",
+  "author": {
+    "name": "pepsi133",
+    "url": "https://github.com/pepsi133"
+  },
+  "license": "MIT",
+  "keywords": [
+    "analysis",
+    "verification",
+    "counting",
+    "controls",
+    "reverse-engineering"
+  ],
+  "skills": [
+    "."
+  ]
+}

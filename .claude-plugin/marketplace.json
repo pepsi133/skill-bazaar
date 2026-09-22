@@ -10,7 +10,7 @@
     {
       "name": "mikrotik-routeros",
       "source": "./skills/mikrotik-routeros",
-      "description": "Design, configure, audit, and troubleshoot MikroTik RouterOS networks — CAPsMAN/wifi, VLANs, firewall and multi-layer NAT, routing, DHCP, QoS, VPNs, and .rsc scripting."
+      "description": "Design, configure, audit, and troubleshoot MikroTik RouterOS networks \u2014 CAPsMAN/wifi, VLANs, firewall and multi-layer NAT, routing, DHCP, QoS, VPNs, and .rsc scripting."
     },
     {
       "name": "agent-delegation",
@@ -40,7 +40,17 @@
     {
       "name": "herd-forge",
       "source": "./plugins/herd-forge",
-      "description": "Build a multi-agent research herd in Herdr: the tree, the git repositories, the identity map, the configuration, and one instruction file per agent."
+      "description": "Forge and drive a herd in Herdr: one agent per pane, panes as real terminals for interactive programs that refuse a pipe, Claude panes started with permissions bypassed, other CLI agents on the same goal, and a model and effort choice per role."
+    },
+    {
+      "name": "herd-rigor",
+      "source": "./skills/herd-rigor",
+      "description": "Optional evidence and review discipline for work where a wrong answer costs more than a slow one: measured-or-argued labels, three numbers and a control on every absence claim, the freeze and review gate, checker independence, and a rule budget."
+    },
+    {
+      "name": "static-analysis-controls",
+      "source": "./skills/static-analysis-controls",
+      "description": "Controls for counting, searching and claiming absence across a corpus of files or binaries, so a sweep that did not run never reads as a clean zero."
     }
   ]
 }
