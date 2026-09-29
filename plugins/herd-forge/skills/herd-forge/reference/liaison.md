@@ -1,48 +1,58 @@
-# Between herds: the relay agent, the ledger, and the message set
+# The liaison: operator front end, reporter, and the channel between herds
 
-Open this when a second herd exists. Until then the relay agent sits empty and this file
-is not needed.
+The forge copies this file into the herd's `common/` directory. The liaison runs it.
 
-## The agent
+Every herd has one liaison, a single herd included. The forge starts it with the overseer,
+on `-- --model opus --effort medium` in a Claude pane. It has three duties. The overseer
+runs the herd. The liaison carries words and writes the report.
 
-One agent carries messages between herds and allocates anything two herds both want. Create
-it with the first herd and give it no starting context. Leave its initialization prompt in
-its own directory until a second herd appears. An empty terminal costs nothing, and one
-herd has nobody to talk to.
+## Duty 1: operator front end
 
-Three duties:
+The operator talks to the liaison. That keeps the overseer's line quiet, and its context
+stays on routing and judgment.
 
-1. **Filter chatter.** Unnecessary traffic stops here rather than in an overseer's context.
-   That is the reason the role exists.
-2. **Pass the operator's orders.** Its most important job.
-3. **Keep provenance straight.** An operator prompt, an overseer message and the relay
-   agent's own words are three different things. It never forwards one so that it looks
-   like another, and it preserves original wording.
+- **Answer status questions from files on disk.** Read the `STATUS.md` files,
+  `common/IDENTITY.md` and the deliverables. Ask the overseer only for what no file holds.
+- **Pass the operator's instructions to the overseer.** Keep the operator's wording and mark
+  it as the operator's. Use the relay template below.
+- **Keep provenance straight.** An operator prompt, an overseer message and your own words
+  are three different things. Never forward one so that it looks like another.
+- **Filter chatter.** Traffic the overseer will not act on stops here.
 
-## Trust is scoped to relay fidelity, never to command authority
+## Duty 2: the herd report
 
-Overseers extend this agent greater trust precisely because operator overrides arrive
-through it. An agent trusted because it relays authority is exactly what an error
-impersonates. Nothing in Herdr proves which pane sent a message, and a self-issued sender
-line is not authentication.
+One report per herd, updated in place. Write it from the `STATUS.md` files and the
+deliverables, never from memory of a conversation.
 
-So: the relay agent can state that the operator said something. It marks the message as a
-relay and preserves the wording. A receiving overseer treats a relayed operator order as
-authoritative for ordinary work, and asks the operator directly for three things:
+- **A summary is a measurement that carries your name.** Mark every summary as a summary,
+  and link the source file it summarises.
+- Give each claim its source path and the time you read it. A reader checks the file, not
+  you.
+- Revise it when a status file changes a finding, when the operator asks, and at the end of
+  the herd.
 
-1. Anything irreversible.
-2. Anything that spends another herd's resources.
-3. Anything that lifts a restriction the operator set directly.
+**Where it goes.** Always write it as one self-contained HTML file at
+`<herd>/reports/<herd>-report.html`: inline styles, no external scripts, fonts or images.
+Then read the `publish_reports` setting in `common/config`.
 
-When a receiving overseer cannot tell whether a case applies, it treats the case as
-applying and asks. Worked examples: deleting your own draft is reversible, and deleting a
-released artifact is not. A message to a peer pane spends that herd's attention and counts
-as spending its resources. Reading a file the herd already released does not.
+- **yes:** publish the file as a private claude.ai artifact, and update the same artifact
+  on every revision, so the operator keeps one URL. Write that URL to
+  `<herd>/reports/PUBLISHED.md` the moment you have it. A successor liaison needs it to
+  update the same page, and a URL that lives only in a context is lost at the next
+  turnover.
+- **no**, or the harness has no artifact tool: the local file is the report. Tell the
+  operator its path.
 
-No agent takes an order from the relay agent. This scoping narrows what a false relay can
-cause. It does not authenticate the relay, and the mechanism is untested at scale.
+Publishing sends the report off the machine, which is why it needs the operator's yes at
+forge time. Artifacts are private by default. Nothing else leaves the machine on the
+liaison's own decision.
 
-## The ledger
+## Duty 3: between herds
+
+When a second herd exists, the liaison carries messages between herds and allocates
+anything two herds both want. With one herd this duty is idle.
+
+### The ledger
 
 One ledger per shared resource. The ledger is a record, not a command channel.
 
@@ -60,14 +70,14 @@ One ledger per shared resource. The ledger is a record, not a command channel.
   edit made on your behalf: line count and hash against what the writing herd stated.
 - Agree the terms of a joint run before anything runs. Agree the concurrency cap, the halt
   condition, and which witness is primary.
-- Another herd's experiment runs under the local overseer's instruction and marker, with
-  the requesting herd supplying only the source material.
+- Another herd's experiment runs under the local overseer's instruction, with the
+  requesting herd supplying only the source material.
 - Do not spend another party's non-renewable budget. Ask what cheaper work settles first.
   Prefer handing the owner a written experiment and keeping the analysis.
 
-## Sending findings to another herd
+### Sending findings to another herd
 
-Default this off. The operator turns it on. When it is on, the relay agent carries the
+Default this off. The operator turns it on. When it is on, the liaison carries the
 material and **herd-rigor** carries the discipline that keeps it from anchoring the
 receiver. That discipline covers what travels, the review state that travels with it, and
 the contamination log the receiver writes.
@@ -90,7 +100,8 @@ operator's decision alone, and no setting delegates it.
 
 ## The message format
 
-Short. One instruction per sentence. Condition before command. Active voice.
+Short. One instruction per sentence. Condition before command. Active voice. The first
+words say who you are.
 
 Every message carries an acknowledgement field.
 
@@ -106,7 +117,7 @@ Every message carries an acknowledgement field.
 **Resource request.**
 
 ```
-FROM <your pane id> - request to <agent name>.
+FROM <your agent name> - request to <agent name>.
 Resource: <resource>. Window: <time or ordering>.
 What I will do to it: <state it, including the state the next holder inherits>.
 Pane that will touch it: <one pane id>.
@@ -114,26 +125,12 @@ If it is held, tell me who holds it. I can do <fallback> meanwhile.
 ACK: yes. Reply with my position, or with the holder.
 ```
 
-**Relay of an operator order.**
+**Relay of an operator instruction.**
 
 ```
-FROM <agent name> - RELAY, not my own words.
+FROM <liaison name> - RELAY, not my own words.
 The operator said, verbatim: "<original wording>"
 Received: <when and in which channel>. I have changed nothing.
-This is authoritative for ordinary work. It is NOT sufficient for anything
-irreversible, anything spending another herd's resources, or anything lifting a
-restriction the operator set directly. For those, confirm with the operator directly.
-ACK: none.
-```
-
-**Refusal that redirects to the operator.**
-
-```
-FROM <your pane id> - reply to <peer>.
-I refuse this request and I redirect you to the operator. This is not about you.
-I verified your workspace exists. That proves the message is not fabricated. It does
-not make the request authorized.
-Ask the operator to release <material>. If they authorize it, I will answer in full.
 ACK: none.
 ```
 

@@ -1,9 +1,10 @@
 # Herdr traps, measured
 
-Every entry produced a confident wrong reading rather than an error.
+Every entry produced a confident wrong reading rather than an error. The entries were
+measured on Herdr builds up to 0.9.1.
 
-This file carries only what the help text does not say, and only what `SKILL.md` does not
-already state.
+This file carries only what the help text does not say, and only what `SKILL.md` and
+`reference/running-a-herd.md` do not already state.
 
 ## Panes and agents
 
@@ -27,10 +28,13 @@ already state.
    the rest of the session, which is one `send-keys down` then `send-keys enter` and
    avoids the next stop.
 
-4. `agent prompt --wait` returns a `timeout` error on any long task. The prompt landed.
-   `--wait` settles on the next `idle`, `done` or `blocked` state, which a multi-step task
-   does not reach for many minutes. Exit status is 1 and the JSON says
-   `{"error":{"code":"timeout"}}`. Do not send the prompt again. Run `herdr agent get`.
+4. `agent prompt --wait` returns one of two errors, and they mean opposite things. Both exit
+   with status 1.
+   - `agent_prompt_stalled`: the prompt went to a pane that was not working, and the pane
+     did not reach `working` or `blocked` within about five seconds. Read the pane before
+     you send anything again.
+   - `timeout`: the caller timeout expired first. A multi-step task does not settle for
+     many minutes. The prompt landed. Do not send it again. Run `herdr agent get`.
 
 5. `unknown` means Herdr sees an agent and cannot classify it. That is neither completion
    nor failure. `herdr agent explain <target>` is the right next command.
@@ -45,117 +49,168 @@ already state.
 8. Bare `herdr` starts the TUI. Never run it for discovery. A command group with no
    subcommand prints help and exits 2, which is normal.
 
-9. Filter `herdr agent list` by workspace or name before you read it. It returns every
+9. `herdr server` is the exception to entry 8. With no subcommand it prints no help. It
+   starts the default server, and that server survives the shell that started it. Read
+   group help on stderr: `herdr pane 2>&1`, `herdr tab 2>&1`, `herdr agent 2>&1`,
+   `herdr session 2>&1`. Run experiments in a named test session, never in the default
+   one.
+
+10. `herdr status` shows the client version and the server version. After an update the two
+    can differ. Read both before you blame a flag on the documentation.
+
+11. Filter `herdr agent list` by workspace or name before you read it. It returns every
     workspace, interleaved.
 
-10. Use `tab create`, not repeated `pane split`. Repeated splits in one direction give
+12. Use `tab create`, not repeated `pane split`. Repeated splits in one direction give
     unusably narrow columns by about the fourth pane. The new pane id is at
     `.result.root_pane.pane_id`.
 
-11. An agent started by hand carries no Herdr name. `herdr agent rename <pane-id> <name>`
+13. An agent started by hand carries no Herdr name. `herdr agent rename <pane-id> <name>`
     fixes it.
 
-12. `terminal_title` is a separate field the agent process sets for itself. It reports
+14. `terminal_title` is a separate field the agent process sets for itself. It reports
     activity, not identity. Never use it as a name.
 
-13. A pane moved inside its workspace keeps its pane id. A pane moved to another workspace
+15. A pane moved inside its workspace keeps its pane id. A pane moved to another workspace
     receives a new one. Read the id from the response.
 
-14. Agent-to-overseer messaging is not uniform. Some panes send cross-session messages
+16. Agent-to-overseer messaging is not uniform. Some panes send cross-session messages
     directly. Others report that they have none and write to `STATUS.md` instead. Never
     design a workflow that depends on an agent reaching you.
 
-15. Cross-session messages arrive as user turns in the receiving agent and interrupt it, so
+17. Cross-session messages arrive as user turns in the receiving agent and interrupt it, so
     an overseer does not control its own turn boundaries.
 
-16. A fork of the overseer is indistinguishable from the overseer. A fork sent four prompts
+18. A fork of the overseer is indistinguishable from the overseer. A fork sent four prompts
     to a driver pane and the pane obeyed them, because every message arrives through one
-    channel with no source label. The sender-line rule exists for this, and it is also why
-    that line cannot authenticate.
+    channel with no source label. So every agent says who it is when it messages another.
+    An agent that gets an odd instruction asks its overseer before it acts.
 
-17. **A model safeguard can stop a pane mid-run, and the pane then reports `done` with
+19. `herdr agent prompt` has no `--message` flag. With it, nothing is sent and the pane tail
+    shows your own words, which reads exactly like delivery. An inline body that contains a
+    double quote is split by the shell. Herdr receives the first fragment only and still
+    returns `agent_prompted`. Send every body from a file with `"$(cat file)"`, and print the
+    byte count at the sending end. A body file that was never written fails with
+    `empty_agent_prompt`, which you see only if you read the returned field.
+
+20. **A model safeguard can stop a pane mid-run, and the pane then reports `done` with
     nothing written.** A brief whose wording named a specialist field was refused by the
-    model's own safeguards, after the agent did most of the reading. The wake fired, the status read `done`, and the output file did not exist.
-    The work was lost because it lived only in the pane.
+    model's own safeguards, after the agent did most of the reading. The wake fired, the
+    status read `done`, and the output file did not exist. The work was lost because it
+    lived only in the pane.
 
     Two rules follow. Write briefs in the vocabulary of the work itself rather than of a
     specialist field, because the field word is what the classifier reads and the work is
     usually describable without it. And tell every agent to write partial output to its
     file before it stops, so a refusal costs one section rather than a whole run.
 
-## Compaction, in a Claude pane
+## Compaction, the fallback, in a Claude pane
 
-18. A slash command sent to a pane becomes ordinary text. Bracketed paste turns text above
-    a length threshold into `[Pasted text #N]`, and the client never reads a paste block as
-    a command. Nine panes answered a compaction request in prose and none compacted, while
-    the context figure rose.
+Compaction is the fallback to a turnover, at most twice per pane.
+`reference/running-a-herd.md` says when. These entries say how it fails.
 
-19. The delivery that works: `send-keys ctrl+u` twice, because escape does not clear a
-    paste placeholder. Then `send-text "/compact"`. Then `send-text " <short
-    instructions>"`, where the leading space is load-bearing, because Enter with the
-    autocomplete menu open selects the highlighted entry. Then `send-keys enter`. Keep the
-    text short enough to type rather than paste. About 300 characters worked.
+21. A slash command sent with `herdr agent prompt` arrives as a bracketed paste. The client
+    collapses a long paste into `[Pasted text #N]` and never reads a paste block as a
+    command. A 3548-byte `/compact` sent that way was answered in prose, and nothing
+    compacted. Nine panes did the same in another herd while their context rose.
 
-20. Make sure of a compaction through the `isCompactSummary: true` record in the session
-    `.jsonl`. Do not use the pane's return to `done`, and do not use its reply. An agent
-    that answers a command in prose did not run it.
+22. The delivery that works:
+    1. Read the pane. The input box is empty, and no compaction is running.
+    2. Clear the box. `send-keys ctrl+u` clears typed text but not a paste block. One
+       `send-keys backspace` removes a paste block whole, because the block is one token.
+    3. `send-text "/compact"`, then `send-text " <short text>"`. The leading space is
+       load-bearing, because Enter with the autocomplete menu open selects the highlighted
+       entry.
+    4. Read the box back with `--source recent-unwrapped`. It shows the literal text, not
+       `[Pasted text #N]`. `--source visible` truncates a long input line, so a typed
+       command looks absent.
+    5. `send-keys enter`.
 
-21. The last usage record reports the context size of the last request, so it still shows
+    The working ceiling is about 200 characters. 155 stayed inline and 3548 collapsed. A
+    long retention prompt goes first, as an ordinary prompt. The short `/compact` then
+    refers to it.
+
+23. A `/compact` queued behind other work never fires. One pane at ctx 82% held it in the
+    queue until ctx 85%. Before you type it, read the status line for
+    `Press up to edit queued messages`. Forging a replacement does not queue, which is one
+    more reason a turnover wins.
+
+24. Verify a compaction in the session transcript, with this exact pattern:
+
+        grep -c '"isCompactSummary"[[:space:]]*:[[:space:]]*true' <transcript>
+
+    The bare string `isCompactSummary` appears in any transcript that discusses compaction.
+    One session held 11 bare hits, 0 exact hits, and had never compacted. A finished
+    compaction adds one exact hit and one `compact_boundary` whose `preTokens` exceeds its
+    `postTokens`. Find the transcript with `find ~/.claude/projects -name '<session-id>.jsonl'`,
+    because a subdirectory `--cwd` changes the project slug. A compaction can take about four
+    minutes, and one took 235 seconds. Under ten seconds is not a finished compaction. The
+    pane's return to `done` and its reply prove nothing. An agent that answers a command in
+    prose did not run it.
+
+25. The last usage record reports the context size of the last request, so it still shows
     the figure from before the compaction. An unchanged figure is not evidence of failure.
 
-22. Measure pane context from the transcript, not from the client footer. The per-agent
-    figure is the sum of the input and cache token fields of the last usage record in the
-    session file.
+26. For an exact figure, measure pane context from the transcript, not from the client
+    footer. The per-agent figure is the sum of the input and cache token fields of the last
+    usage record in the session file.
 
-23. After a compaction, a queued prompt can sit unsubmitted. It needs an explicit key send.
+27. After a compaction, a queued prompt can sit unsubmitted. It needs an explicit key send.
 
-24. Never force a compaction on an agent mid-task. An agent counts as mid-task unless two
-    conditions hold together. Its status reports idle or `done`, and it wrote its handover
-    after its last work item. An agent compacted during a trace loses the working set it
-    assembled, and cannot tell that it did. The lost context is what it needs to notice the
-    loss.
+28. Compact an agent only at a turn boundary, after it wrote its handover. An agent compacted
+    during a trace loses the working set it assembled, and cannot tell that it did. The lost
+    context is what it needs to notice the loss. Anything not on disk does not survive a
+    compaction. Seven load-bearing measurements in one herd existed only in a session
+    transcript.
 
-25. Anything not on disk does not survive a compaction. Seven load-bearing measurements in
-    one herd existed only in a session transcript.
-
-26. Closing a pane does not destroy its session. A closed pane resumes with
+29. Closing a pane does not destroy its session. A closed pane resumes with
     `claude --resume <id>` in its own directory, takes a new pane id, and comes back
     compacted. Its first instruction must tell it to re-read its rules, its brief and its
-    status file. Record the session id and the model before you close.
+    status file. Record the session id, the session path and the model in
+    `common/IDENTITY.md` before you close. Every agent has its own tab, so the close is
+    `herdr tab close <tab_id>`, and `herdr pane close <pane_id>` closes a single pane. When
+    you start a resumed session by hand, declare it with `herdr pane report-agent`, which
+    takes `--agent-session-id` and `--agent-session-path`.
 
 ## Account and scheduling
 
-27. The token limit is account-wide and stops every agent at once. Six panes hit the weekly
+30. The token limit is account-wide and stops every agent at once. Six panes hit the weekly
     limit within about six minutes. Plan for total stoppage, not for one worker stalling.
 
-28. A rate-limited agent never resumes by itself. The window resets and the pane still sits
+31. A rate-limited agent never resumes by itself. The window resets and the pane still sits
     idle. Somebody prompts every stalled agent, one at a time. Budget that as manual work.
 
-29. A background fork inside a pane fails hard on the rate limit, as an HTTP 429 agent
+32. A pane can carry its own usage pause, shown as `PAUSED(manual)` on its status line. In
+    one herd 14 of 14 panes carried it at once. No pane completes a turn, and a prompt
+    queues while it looks delivered. Read the status line before any wake-up. A compaction
+    verified in a paused pane is complete-but-unwoken, not complete. During a pause every
+    measurement is a read, never an exchange, and silence is not a decision.
+
+33. A background fork inside a pane fails hard on the rate limit, as an HTTP 429 agent
     failure rather than a retryable condition.
 
-30. A session-scoped scheduler fires only while the session lives. It covers a quota pause,
+34. A session-scoped scheduler fires only while the session lives. It covers a quota pause,
     where the process waits. It does not cover process death. Build no `setsid` or `nohup`
     timers: they appear in no list the operator checks, and the UI cannot cancel them.
 
-31. A scheduled wake can fire into the session that scheduled it, with full context. A wake
+35. A scheduled wake can fire into the session that scheduled it, with full context. A wake
     prompt written in "you have no memory" style is then wrong about its own premise. Tell
     the reader to establish current state from documents.
 
-32. Scratchpad logs are session-scoped and do not survive the session. Say so in any file
+36. Scratchpad logs are session-scoped and do not survive the session. Say so in any file
     that points at them.
 
 ## Subagents inside a Claude pane
 
-33. Agent-tool subagents are blocked from writing report files, inconsistently. One wrote
+37. Agent-tool subagents are blocked from writing report files, inconsistently. One wrote
     52 KB without complaint. Another was refused with "Subagents should return findings as
     text". Use panes for anything durable. Have subagents return text and write it
     yourself.
 
-34. Delegated sub-tasks exceed their scope and race on one file. Two of four sub-tasks
+38. Delegated sub-tasks exceed their scope and race on one file. Two of four sub-tasks
     redid parts of the job in parallel. If you find a concurrent write, read the live state
     and merge. Never overwrite and never discard.
 
-35. Where two agents share a directory, give each its own filenames. Two panes wrote
+39. Where two agents share a directory, give each its own filenames. Two panes wrote
     `CLOSEOUT.md` in one directory. One read back its own 60 lines, and the commit carried
     the 67 lines of the other.

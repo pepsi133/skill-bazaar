@@ -111,7 +111,7 @@ that file to the pane doing the run.
 
 ## Releasing material to another party
 
-Open this when `cross_herd_sharing` is on. herd-forge's `reference/cross-herd.md` carries
+Open this when `cross_herd_sharing` is on. herd-forge's `reference/liaison.md` carries
 the channel. This is what must be true of the content.
 
 Three conditions on anything released:

@@ -10,7 +10,7 @@ either refuses to start or runs in a mode that answers nothing. A Herdr pane is 
 a REPL, an `ssh` password prompt, a TUI installer or a serial console all work there, and a
 human can watch the same pane while an agent drives it.
 
-Three more things follow from that, and the skill covers each:
+More follows from that, and the skill covers each:
 
 - A Claude pane started with `--dangerously-skip-permissions`, so an unattended herd does
   not stop on the first prompt.
@@ -18,6 +18,11 @@ Three more things follow from that, and the skill covers each:
   at one goal.
 - A model and effort choice per role. Judgment work on `fable` or `opus --effort low`. Bulk
   work on `sonnet --effort high`.
+- A herd that runs for hours. A pane that has delivered its unit of work is retired and a
+  fresh agent takes over from its handover. Compaction is the fallback. A cheap steward
+  pane sweeps the herd by reading, proposes each turnover, and runs the close test first.
+- A liaison in every herd. The operator talks to it, it writes the herd report, and it
+  carries messages when a second herd exists.
 
 ## What it is not
 
@@ -32,8 +37,9 @@ one. herd-forge names no rule the operator did not ask for.
 | `skills/herd-forge/SKILL.md` | the core. Read all of it once |
 | `skills/herd-forge/reference/briefs.md` | the file you write for each agent |
 | `skills/herd-forge/reference/interactive-panes.md` | driving an interactive program, console or device from a pane |
+| `skills/herd-forge/reference/running-a-herd.md` | turnover, the steward's sweep, the close test and the compaction fallback |
+| `skills/herd-forge/reference/liaison.md` | the liaison: operator front end, the herd report, and the channel between herds |
 | `skills/herd-forge/reference/herdr-traps.md` | measured Herdr, compaction and account defects |
-| `skills/herd-forge/reference/cross-herd.md` | the relay agent, when a second herd exists |
 
 ## Requirements
 
