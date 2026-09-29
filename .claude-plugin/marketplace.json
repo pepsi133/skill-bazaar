@@ -51,6 +51,11 @@
       "name": "static-analysis-controls",
       "source": "./skills/static-analysis-controls",
       "description": "Controls for counting, searching and claiming absence across a corpus of files or binaries, so a sweep that did not run never reads as a clean zero."
+    },
+    {
+      "name": "korad-ka3305p",
+      "source": "./skills/korad-ka3305p",
+      "description": "Drive a Korad KA3305P bench power supply through the korad CLI: guard, read-back on every write, unattended limits."
     }
   ]
 }

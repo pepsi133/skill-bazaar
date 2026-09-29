@@ -1,0 +1,20 @@
+{
+  "name": "korad-ka3305p",
+  "description": "Drive a Korad KA3305P bench power supply safely through the korad CLI from the iot-lab repository: guard first, current limit before voltage, read-back on every write, unattended limits, and exit codes that name the next step.",
+  "version": "0.1.0",
+  "author": {
+    "name": "pepsi133",
+    "url": "https://github.com/pepsi133"
+  },
+  "license": "MIT",
+  "keywords": [
+    "korad",
+    "power-supply",
+    "bench",
+    "hardware",
+    "lab"
+  ],
+  "skills": [
+    "."
+  ]
+}

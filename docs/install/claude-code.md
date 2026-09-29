@@ -42,6 +42,7 @@ claude plugin install agent-delegation@skill-bazaar   # Protocol for briefing a 
 claude plugin install caveman@skill-bazaar            # Vendored, pinned caveman: ultra-compressed replies, ~75% fewer output tokens
 claude plugin install limit-guard@skill-bazaar        # Pause a session before it burns the 5-hour or 7-day usage window, resume after the reset
 claude plugin install ste@skill-bazaar                # Simple Technical English bridged to caveman; toggle with /ste:ste on|off|status
+claude plugin install korad-ka3305p@skill-bazaar      # Drive a Korad KA3305P power supply through the korad CLI (install the tool from iot-lab)
 ```
 
 The same commands are available as slash commands inside a session
