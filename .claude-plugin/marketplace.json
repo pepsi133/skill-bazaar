@@ -58,6 +58,11 @@
       "description": "Controls for counting, searching and claiming absence across a corpus of files or binaries, so a sweep that did not run never reads as a clean zero."
     },
     {
+      "name": "ontrak-adu218",
+      "source": "./skills/ontrak-adu218",
+      "description": "Drive an Ontrak ADU218 relay and opto-input box through the adu CLI: a channel is resolved from the operator's own wiring map or refused, the guard narrows the bench to one session's channels, and every write is read back."
+    },
+    {
       "name": "korad-ka3305p",
       "source": "./skills/korad-ka3305p",
       "description": "Drive a Korad KA3305P bench power supply through the korad CLI: guard, read-back on every write, unattended limits."
