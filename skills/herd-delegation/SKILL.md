@@ -61,14 +61,20 @@ Your own location arrives in the environment: `$HERDR_WORKSPACE_ID`, `$HERDR_TAB
 
 ## The spawn sequence
 
-`herdr --skill` carries the call forms for `tab create`, `agent start` and `agent prompt`, the
-readiness semantics, and the JSON paths the identifiers come from. Three things it does not say
-hold here.
+`herdr --skill` carries the call forms for `agent start` and `agent prompt`, the readiness
+semantics, and the JSON paths the identifiers come from. Three things it does not say hold here.
 
-**One tab per unit of work, never a half pane.** This overrides the official skill, which
-defaults to a sibling pane in the current tab. A split halves the rows you came to read, and two
-agents in one tab compete for the same screen. Create as many tabs as the work needs, and move a
-pane that already sits in a split:
+**One tab per unit of work, never a half pane.** This is the first of two overrides of the
+official skill, which defaults to a sibling pane in the current tab and tells you to create no
+tab at all. So it carries no `tab create` form either, and the form lives here:
+
+```bash
+herdr tab create --cwd "$PWD" --label <short-role-name> --no-focus
+```
+
+A split halves the rows you came to read, and two agents in one tab compete for the same screen.
+Pass `--cwd` on every tab, because a new tab does not inherit yours. Create as many tabs as the
+work needs, and move a pane that already sits in a split:
 
 ```bash
 herdr pane move <pane-id> --new-tab --label <short-role-name> --no-focus
@@ -101,7 +107,9 @@ Two additions, both because a pane is a screen rather than a return value:
 
 - **Scope the unit so that it ends.** A pane that never finishes cannot be retired.
 - **Send a long report to a file.** Ask for Markdown at a named path and a pane reply of that
-  path alone. The alternate-screen limit in `herdr --skill` is why.
+  path alone. The alternate-screen limit in `herdr --skill` is why. This is the second override:
+  the official skill keeps file output as a fallback and says not to request it in the initial
+  prompt, and a brief that asks for it up front never reaches the unreadable case.
 
 The gate does not disappear because the agent is reachable. A question answered mid-run costs a
 read, a reply and a stalled pane; a decision resolved before the spawn costs nothing.
@@ -111,24 +119,19 @@ read, a reply and a stalled pane; a decision resolved before the spawn costs not
 `agent-delegation` owns this duty in full: when a review is owed, the seven-item
 safety-critical path list, the brief-to-break-it rule, the attempted-and-not-attempted
 reporting, where findings go, what makes a fix substantial, and that a nil return is still
-reported. Read it there. A pane changes three things.
+reported. Read it there. A pane changes two things and leaves a third alone.
 
 **Inline work takes a pane, not a subagent.** Where the parent itself runs in a pane, the author
 is the parent pane, and a review never runs there.
 
-**The closed-channel list is longer, because a pane opens channels a subagent does not.** The
-authoring pane stays open until the review returns, `herdr agent list` names it, and `agent read`
-and `pane read` are in this file. So the review brief carries this in place of
-`agent-delegation`'s version:
-
-```
-Read only the artifact under review and the repository, less the author's commit messages,
-notes and status files. Do not read another pane, another agent's transcript, a sibling agent's
-report or the agent list, and do not ask another agent what it concluded.
-```
-
 **Give the review pane a kind and flags that can re-derive the evidence**, because
 `agent start --kind` chooses among agents with different toolsets.
+
+**The closed-channel list needs nothing added.** A pane does open channels a subagent does not:
+the authoring pane stays open until the review returns, `herdr agent list` names it, and
+`agent read` and `pane read` are in this file. `agent-delegation` already closes every one of
+them by name, another agent's pane and the agent list included. Send its block verbatim from
+there. This file keeps no copy, because a copy is the thing that goes stale.
 
 ## Drive the pane
 
@@ -227,9 +230,10 @@ Before you report a delegated run as finished:
 
 <!-- Herdr and Claude Code mechanics. The protocol above is tool-agnostic. -->
 
-`herdr --skill` carries the agent-kind list, `--` argument passing, `agent_not_ready`,
-`agent_prompt_stalled`, identifier stability, agent-name grammar and the error exit statuses.
-Three things it does not carry.
+`herdr --skill` carries `--` argument passing, `agent_not_ready`, `agent_prompt_stalled`,
+identifier stability, agent-name grammar and the error exit statuses. For the installed
+agent-kind list it sends you to `herdr agent`, which prints the kinds on stderr. Three things it
+does not carry.
 
 - **A model or effort flag binds one session.** `-- --model <model> --effort high` reaches that
   agent and does not change the default for the next pane. State the flag for every pane whose

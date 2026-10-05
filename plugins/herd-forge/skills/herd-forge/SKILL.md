@@ -34,9 +34,10 @@ worker is the whole plan, `herd-delegation` alone is enough.
 
 ## What a herd buys you
 
-`herd-delegation` says what one pane buys: a real terminal and a long-running agent with its
-own context window. A herd adds one thing on top, and section 4 is how: **a free choice of
-program per pane**, Claude in one, Codex or Gemini in the next, all pointed at one goal.
+`herd-delegation` says what one pane buys: a real terminal, output readable while the work
+runs, and a long run the parent stays free during. A herd adds one thing on top, and section 4
+is how: **a free choice of program per pane**, Claude in one, Codex or Gemini in the next, all
+pointed at one goal.
 
 ## 1. Four questions, before anything exists
 
@@ -201,12 +202,15 @@ line ceiling on line one of `RULES.md` at forge time. **herd-rigor** carries the
 
 ## 6. Wait, do not poll
 
-`herdr --skill` carries `agent wait`, `pane wait-output`, the `--until` states and the
-settled-state default. Four herd-specific rules sit on top.
+`herdr --skill` carries `agent wait`, `pane wait-output` and the settled-state default. It does
+not list the states, so they are here: `--until` repeats, and the states are `idle`, `done`,
+`blocked`, `working` and `unknown`. Four herd-specific rules sit on top.
 
 - **Run the wait in the background**, so the wake arrives as a completion.
-- **Always include `--until blocked`.** A pane stopped at a dialog otherwise waits forever
-  and looks busy.
+- **Pass `--until blocked` with the settled states, not instead of them.** One `--until`
+  replaces the default, so `--until idle --until done --until blocked` is the form that both
+  returns on a clean finish and catches a pane stopped at a dialog, which otherwise waits
+  forever and looks busy.
 - **Arm the wake after the last item you send.** A wake armed earlier watches a state the
   worker will not reach, and queued items keep it out of every settled state.
 - **`done` is a state and not a delivery.** Completed, parked, blocked on a dialog, cut off

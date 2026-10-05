@@ -33,7 +33,6 @@ What a pane actually changes, against `agent-delegation`:
 | Open decision mid-run | Pause, return, be resumed | Ask in the pane, wait, be answered |
 | Interactive program | Out of reach | The reason to use a pane |
 | Live output | Arrives at the end | Readable while it runs |
-| Review channels to close | Transcripts and reports | Those, plus other panes and the agent list |
 | Context figure | Nothing to read | The `ctx` segment of a Claude pane's status line |
 
 ## Scope
@@ -52,13 +51,18 @@ to a sibling pane in the current tab. A split halves the rows you came to read, 
 in one tab compete for the same screen. The skill creates a tab per unit of work, keeps the tab
 ID for the close, and moves a misplaced pane out of a split.
 
+**The brief asks for a file up front.** This is the second override. The official Herdr skill
+keeps file output as a fallback and says not to request it in the initial prompt. A pane report
+long enough to matter is unreadable on the alternate screen, so the skill asks for Markdown at a
+named path in the brief instead of discovering the limit afterwards.
+
 **Inline work takes a pane, not a subagent**, where the parent itself runs in a pane. The author
 is then the parent pane, and a review never runs there.
 
-**A longer closed-channel list for a review.** A herd leaves the authoring pane running while
-the review goes on, so `herdr agent list` names it and `agent read` and `pane read` are in the
-skill. The reviewer's brief closes those channels by name, on top of the transcripts and reports
-that `agent-delegation` already closes.
+**No closed-channel delta for a review.** A herd leaves the authoring pane running while the
+review goes on, so `herdr agent list` names it and `agent read` and `pane read` are in the skill.
+`agent-delegation` already closes those channels by name, so the skill sends its block verbatim
+and keeps no copy of its own.
 
 **A context threshold that can actually be read.** `agent-delegation` sets the figures — reuse
 below 30 percent, wind up from 30 to 35, replace at or above 35 — and records that for a
