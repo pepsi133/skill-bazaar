@@ -43,6 +43,11 @@
       "description": "Forge and drive a herd in Herdr: one agent per pane, panes as real terminals for interactive programs and live output, Claude panes started with permissions bypassed, other CLI agents on the same goal, a model and effort choice per role, turnover over compaction run by a steward, and a liaison that fronts the operator and writes the herd report."
     },
     {
+      "name": "herd-delegation",
+      "source": "./skills/herd-delegation",
+      "description": "Delegate one unit of work to an agent in its own Herdr tab and drive that pane as a real terminal, for interactive prompts, live output and decisions the parent answers mid-run."
+    },
+    {
       "name": "herd-rigor",
       "source": "./skills/herd-rigor",
       "description": "Optional evidence and review discipline for work where a wrong answer costs more than a slow one: measured-or-argued labels, three numbers and a control on every absence claim, the freeze and review gate, checker independence, and a rule budget."
@@ -51,6 +56,11 @@
       "name": "static-analysis-controls",
       "source": "./skills/static-analysis-controls",
       "description": "Controls for counting, searching and claiming absence across a corpus of files or binaries, so a sweep that did not run never reads as a clean zero."
+    },
+    {
+      "name": "ontrak-adu218",
+      "source": "./skills/ontrak-adu218",
+      "description": "Drive an Ontrak ADU218 relay and opto-input box through the adu CLI: a channel is resolved from the operator's own wiring map or refused, the guard narrows the bench to one session's channels, and every write is read back."
     },
     {
       "name": "korad-ka3305p",

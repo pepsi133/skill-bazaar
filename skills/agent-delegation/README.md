@@ -27,11 +27,12 @@ make naive delegation fail, and the skill is built around them.
    approved, denied, or never looked. An agent that trusts the exit code reports success for
    work that never happened.
 
-The skill answers with five rules: delegate by default with two carve-outs (secret values,
+The skill answers with seven rules: delegate by default with two carve-outs (secret values,
 and the step that needs the human at the screen), a decision-completeness gate before the
-spawn, a pause clause in every delegation prompt so a subagent that hits an open decision
-keeps its context and gets resumed instead of guessing, evidence named instead of commands,
-and artifact verification instead of exit codes.
+spawn, a pause clause in every delegation prompt except a review prompt, so a subagent that
+hits an open decision keeps its context and gets resumed instead of guessing, evidence named
+instead of commands, artifact verification instead of exit codes, an adversarial review before
+the work is reported finished, and a context threshold on reusing an agent.
 
 ## The flow
 
@@ -116,7 +117,7 @@ Other tools and paths are in [`docs/install/`](../../docs/install/).
 | `README.md` | This file. Not loaded by the agent. |
 | `hooks/agent-delegation-gate.py` | Claude Code `PreToolUse` hook that enforces the delegate-by-default rule. Optional. |
 | `hooks/hooks.json` | Registers the hook when the folder is installed as a plugin. |
-| `hooks/README.md` | The gate's behaviour, install by hand, configuration, limits. |
+| `hooks/README.md` | The gate's behavior, install by hand, configuration, limits. |
 | `.claude-plugin/plugin.json` | Packages the folder as a one-skill plugin. |
 
 ## Design rationale
@@ -185,6 +186,29 @@ the tool name carries none: the first file passes in silence (the one-line fix t
 allows), the second file raises one ask, and later files in the same turn pass because the
 human already decided. The decision record is in
 [`roadmap/done/agent-delegation-gate-and-toolset-check.md`](../../roadmap/done/agent-delegation-gate-and-toolset-check.md).
+
+**An adversarial review before the work is called finished.** An author is the worst judge of
+its own work, so a second agent is briefed to break it rather than to confirm it. The duty
+covers delegated work that produced a new or changed document or new or changed code, and any
+work that touched a safety-critical path, whether it was delegated or done inline.
+The skill defines that path as a short testable list: a path that records, measures or returns
+a verdict and can fail without raising an error, a certificate or key or credential path, a map
+from a logical name to a physical output, anything that flashes or erases or re-provisions a
+device, anything that changes what a later agent is permitted to do, anything that overwrites
+evidence no commit or backup holds, and any path that holds, enforces, reports or computes a
+limit, a guard or a stop condition protecting something outside the work.
+The reviewer gets the artifact and the repository less the author's commit messages, notes and
+status files, and the author's conclusion is withheld, because a reviewer handed a conclusion
+confirms it. Findings go back to the author while the author is reachable, and a fix pass is
+scope on the original task rather than a further one.
+
+**A context threshold on reuse, and silence where no figure can be read.** No tool result
+carries a subagent's consumed percentage, and a subagent has no pane and no status line, so for
+a subagent the rule is silent rather than cautious. Nothing is purged on a reading nobody has,
+no estimate substitutes for one, because an estimate nobody can check reads low and licenses
+reuse forever, and reuse is judged instead on the tasks already delivered and what is left. The
+two figures govern the readable case, which a pane gives: reuse below 30 percent, a wind-up band
+from 30 up to but not including 35, and a fresh start at or above 35.
 
 **Secrets stay in the main session.** A "report metadata only" instruction does not stop a
 tool result from carrying values, and a subagent's tool results are written to a transcript
@@ -267,5 +291,8 @@ under the session's `tasks/` directory leaves that file in place.
   by Matt Pocock: the levers a delegation prompt is written with, and the levers this skill
   was pruned against (context pointers, the information hierarchy, completion criteria,
   leading words, prompting the positive).
+- [`herd-delegation`](../herd-delegation/), in this repository: the pane form of this
+  protocol, for a unit of work that needs a terminal of its own and an agent that can be asked
+  and answered mid-run.
 - `cavecrew`, in this repository's `plugins/caveman`: a subagent-preset chooser. This skill
   is the protocol for the hand-off, whichever preset receives it.

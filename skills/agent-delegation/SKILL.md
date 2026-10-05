@@ -5,9 +5,11 @@ description: >-
   spawning an agent, before doing multi-file work inline instead of delegating it, when a
   subagent hits a decision the spec left open, when a subagent returns with an open question
   or its message arrives in the parent session, before a subagent reads a credential store,
-  and when an action that needs interactive human consent returns success. Not a
-  subagent-preset chooser like cavecrew, and not for background shell commands or plain
-  subagent search.
+  and when an action that needs interactive human consent returns success. Use also before
+  reporting delegated work that produced new or changed documents or code as finished, before
+  reporting any work that touched a safety-critical path as finished, and before reusing an
+  agent for a further task. Not a subagent-preset chooser like cavecrew,
+  and not for background shell commands or plain subagent search.
 ---
 
 # Agent delegation
@@ -56,8 +58,8 @@ resolved before the spawn costs nothing.
 ## The pause: ask, keep context, resume
 
 A subagent that has done half the work holds context worth keeping. An open decision at that
-point is a pause, never a discard. Every delegation prompt carries this clause. Adapt the
-first sentence to the task and keep the rest verbatim:
+point is a pause, never a discard. Every delegation prompt except a review prompt carries
+this clause. Adapt the first sentence to the task and keep the rest verbatim:
 
 ```
 If a decision in this task is ambiguous or the spec is incomplete, do every part that does
@@ -92,6 +94,30 @@ The parent side:
   included, and the human decides. Nothing is reverted in silence.
 - The relay carries questions, never consent (carve-out 2).
 
+## Reuse or spawn fresh: the context threshold
+
+Context here means the percentage of its window an agent has consumed. **No tool result carries
+a subagent's figure, and a subagent has no pane and no status line, so for a subagent there is
+nothing to read.** An unreadable figure is no evidence of a full window, and a subagent is never
+asked to estimate its own percentage, because an estimate nobody can check reads low and
+licenses reuse forever.
+
+So purge no subagent on the strength of a reading nobody has, and substitute no estimate. Judge
+a subagent on what you can see: the tasks it has already delivered, the size of the results it
+returned, and what is left of the task it holds. State that reasoning in your own report where
+you reuse an agent, and ask the operator where reuse matters. Where you do not reuse one, a
+fresh spawn carries nothing over from the old agent, since compaction is a pane operation and
+the parent holds none over a subagent. A resume of a paused subagent finishes the blocked part
+of the original task and takes no new scope: a further task is a further task however it is
+sent, so it goes to a fresh spawn.
+
+Two figures govern the readable case, which a pane gives and `herd-delegation` covers, and
+neither of them reaches a subagent: reuse runs only below 30 percent; from 30 percent up to but
+not including 35 percent the agent winds up the work it holds and takes nothing further, and the
+parent sends none; at or above 35 percent the parent retires that agent and starts fresh,
+whether or not a further task is waiting. Every exception is the operator's to approve rather
+than the parent's.
+
 ## The delegation prompt template
 
 A delegation prompt is a document for an agent that cannot ask you anything else. A
@@ -100,7 +126,8 @@ A delegation prompt is a document for an agent that cannot ask you anything else
 - **Working directory**: the literal path, including the worktree or nested checkout in play.
 - **The evidence each step must produce**: an observable, such as a file with X content, a
   value that changed, or a build that passes locally. See *Name the evidence*, below.
-- **The pause clause**, above, with the relay address where the harness has a live relay.
+- **The pause clause**, above, with the relay address where the harness has a live relay. A
+  review prompt carries none; see *Adversarial review*.
 - **Report format**: what it did, what it verified and how, the open decisions it made a
   defensible call on, the question it paused on, the state left on disk, and anything left
   undone.
@@ -122,6 +149,75 @@ that can reach the relay if the prompt names one. A test run, a build, or a git 
 a shell tool. An agent whose toolset stops at reading and editing files stops and reports
 that it cannot comply, and the fault sits in the prompt. Read the tool list in the agent's
 own definition.
+
+## Adversarial review: a second agent tries to break it
+
+Work is not finished until an independent agent has tried to break it when either of these
+holds: it was delegated and it produced a new or changed document, or new or changed code; or
+it touched a safety-critical path, delegated or done inline in the main session. The review
+duty is never a reason to keep work in the main session. A path is safety-critical when any one
+of these holds:
+
+1. It records, it measures, it carries data to something that records, or it produces a count,
+   a coverage figure or a pass-or-fail verdict, and it can fail without raising an error, so
+   that a dead path reads the same as a working one.
+2. It handles a certificate, a key, a credential, or the trust store that validates one.
+3. It maps a logical name to a physical output, so that an edit there can actuate something
+   other than the thing named.
+4. It flashes, erases, re-images or re-provisions a device, or it can leave one unable to boot.
+5. It changes what a later agent is permitted to do: a permission rule, a hook, a sandbox
+   boundary, or a file an agent is directed to follow as instruction rather than documentation
+   a reader consults.
+6. It overwrites or deletes evidence, or state that cannot be regenerated, where no commit,
+   snapshot or backup holds the prior copy.
+7. It holds, enforces, arms, reports or computes a limit, a guard or a stop condition that
+   protects something outside the work, such as a device, a third party, or data the work does
+   not own, or it is the call site or the configuration that decides whether one is consulted.
+   An edit that weakens one of them, moves where it is consulted, or leaves it unenforced in
+   any mode is a change to this path, and a path that only reports one, or only computes
+   whether one has been reached, is inside this item rather than outside it.
+
+That list is this skill's floor, and a project can name more.
+
+The review is delegated by the mechanism the work used: a subagent where the work was a
+subagent, a pane where the work was a pane (`herd-delegation`). Inline work takes a subagent,
+because the author is the main session itself, unless the main session runs in a pane, where
+`herd-delegation` applies. The reviewer is spawned without isolation of its own, and where the
+author had a worktree the prompt names that path and branch. The review reads: it makes no edit
+and runs no git write. Confirm that the reviewer holds a tool that can produce the evidence the
+brief asks it to re-derive, by the toolset check in *Name the evidence*.
+
+The brief is to break the work rather than to confirm it, and it names what the review must
+attempt. For each named attempt the review reports the command it ran or the line it quoted,
+and an attempt it did not carry out is reported as not attempted, so a pass that breaks
+nothing still shows its work.
+
+The author's conclusion is withheld, because a reviewer handed the conclusion confirms it. The
+withholding holds only as a list of closed channels, so the prompt carries this block verbatim:
+
+```
+Read only the artifact under review and the repository, less the author's commit messages,
+notes and status files. Do not read another agent's pane, the agent list, any subagent
+transcript or a sibling agent's report, and do not ask another agent what it concluded.
+```
+
+*Platform execution notes* gives the transcript path, which is what makes that channel worth
+closing by name. A review prompt carries no pause clause, and this block in its place:
+
+```
+An ambiguity in the work under review is a finding. Record it with the file, the line and the
+fix you propose, then carry on. Do not stop to ask, and do not ask the author.
+```
+
+The reviewer is never the parent itself and never an agent that had a hand in the work. Findings
+go back to the author while the author is reachable, so keep the author's agent id until any
+review of its work is closed; otherwise they go to a fresh agent spawned with the original spec,
+the artifact and the findings. A fix pass is scope on the original task rather than a further
+task. The work is not reported finished while a finding stands, and a finding the parent declines
+to fix goes to the operator with the reason rather than into a finished report. A fix that
+changes a claim, a number, an interface or an instruction is substantial and goes to a second
+review, by an agent that did not raise the finding. The parent reports the verdict with the work,
+a nil return included.
 
 ## Artifact verification: missing means unknown
 
