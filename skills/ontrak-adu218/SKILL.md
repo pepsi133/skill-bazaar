@@ -22,7 +22,7 @@ box does is not an over-voltage: it is closing the wrong channel and cutting pow
 that was mid-write. So the tool reads a wiring map and refuses any channel that has no row in
 it.
 
-The tool lives in the [iot-lab repository](https://github.com/pepsi133/iot-lab) as `ontrak-adu218/`.
+The tool lives in the [iot-lab repository](https://github.com/pepsi133/iot-lab) as `adu218/`.
 If `command -v adu` finds nothing, the tool is not installed — point the human at that
 repository's install steps. Do not write a replacement script: the guard, the wiring map and
 the read-back are the tool.
@@ -83,8 +83,9 @@ what it prints:
 | Rows, but none for that target | Stop. Ask the human which channel is wired to it, and ask them to record it. Do not act on their answer in chat alone — the tool will refuse the channel anyway, and that refusal is correct |
 | Nothing, or only the example rows | Stop. There is no wiring map. Ask the human to write one |
 
-A relay row is only usable when it carries all of these. An incomplete row is the same as no
-row:
+A relay row is only usable when it carries all of these, and the tool requires every one of
+them. An incomplete row is worse than no row: it rejects the whole wiring file with exit 2, so
+every channel refuses until the row is fixed. An empty string is not a record:
 
 - **unit** — the serial printed on the box's case label, so that a row cannot be applied to a
   different box. `K3` on one unit is not `K3` on another. (`any` is accepted for a single-unit
@@ -96,9 +97,10 @@ row:
 - **label** — the word the human must retype to widen the guard onto that channel.
 - **target** — which board, and which lead or button.
 
-An input row carries the unit, the input number (0–7), which GPIO or LED net it watches, where
-that port's `COM` terminal goes, and which level means "lit". Inputs are read-only and are not
-gated, but a reading nobody can explain proves nothing.
+An input row carries the unit, the input number (0–7), a label, which GPIO or LED net it
+watches, where that port's `COM` terminal goes, and which level means "lit". All six are
+required. Inputs are read-only and are not gated, but a reading nobody can explain proves
+nothing.
 
 **Before the first actuation of a series channel, the wiring map's claim must have been
 checked against the hardware, and the check is a measurement the human makes, not one you can
@@ -125,7 +127,8 @@ unmapped and say why.
    map retyped**, which means reading the wiring before widening. Only pass `--confirm` with a
    label the human gave you in this session, and pass it **before** the subcommand
    (`adu --confirm <label> guard set ...`), because the flag is a top-level one and the parser
-   rejects it after `guard`.
+   rejects it after `guard`. **A shorter window is also a loosening**, because the restriction
+   lapses sooner, and the word for it is the new expiry as `HH:MM`.
 4. **Act**, per the command table. Done when the command exits 0, which means the read-back
    agreed with the request. Exit 4 means it did not: the box ignored the write, so stop and
    read `adu state`.
@@ -144,7 +147,7 @@ unmapped and say why.
 | Which units are attached | `adu list` |
 | Relay states (reads `PK`) | `adu state` |
 | Press a button (bridge-wired) | `adu pulse N --ms 200` |
-| Power-cycle (series-wired) | `adu cycle N --off-ms 2000` |
+| Power-cycle (series-wired) | `adu cycle N --off-ms 2000` (add `--from-off` to start from an open relay) |
 | Power on / off (series-wired) | `adu on N` / `adu off N` |
 | Read all eight inputs | `adu inputs` |
 | Blink rate of an LED on input N | `adu rate N --seconds 5` |

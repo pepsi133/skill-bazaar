@@ -73,8 +73,9 @@ the `wiring.example.toml` template the tool ships.
 
 What the skill does instead:
 
-- It names what a usable row must contain (unit serial, channel, wiring type, label, target) and
-  treats an incomplete row as no row.
+- It names what a usable row must contain (unit serial, channel, wiring type, label, target).
+  The tool requires all five, and an incomplete row rejects the whole file, so every channel
+  refuses until it is fixed.
 - It gives the agent an explicit branch on what `adu wiring` prints, including "nothing" and
   "only the example rows", and in both of those the instruction is to stop and ask you.
 - It requires that, before the first actuation of a series-wired channel, **you** have metered
@@ -83,8 +84,14 @@ What the skill does instead:
   moved and says nothing about what is screwed to it. No measurement the host can take closes
   that gap.
 
-The tool backs this up: a channel with no row is refused with exit 3, and `adu raw MKddd` is
-gated per changed bit, so `raw` is not a way around it.
+The tool backs this up: a channel with no row is refused with exit 3, `adu raw MKddd` is gated
+per changed bit, and `adu raw WD1` to `WD3` is gated as an `off` on every closed channel, so
+`raw` is not a way around it.
+
+**Checked against `iot-lab` commit `b34c3a7`.** The tool and the skill live in two
+repositories, and nothing makes them move together, so the claims in `SKILL.md` are claims
+about one commit of `adu`. When you change the tool, re-read the skill against it and move this
+line.
 
 ## Verification status
 
