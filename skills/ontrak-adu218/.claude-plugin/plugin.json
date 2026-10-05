@@ -1,7 +1,7 @@
 {
   "name": "ontrak-adu218",
   "description": "Drive an Ontrak ADU218 relay and opto-input box safely through the adu CLI: a channel is resolved from the operator's wiring map or refused, the guard narrows the bench to the channels one session needs, every write is read back, and the exit codes name the next step.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "pepsi133",
     "url": "https://github.com/pepsi133"

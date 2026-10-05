@@ -88,19 +88,26 @@ The tool backs this up: a channel with no row is refused with exit 3, `adu raw M
 per changed bit, and `adu raw WD1` to `WD3` is gated as an `off` on every closed channel, so
 `raw` is not a way around it.
 
-**Checked against `iot-lab` commit `b34c3a7`.** The tool and the skill live in two
+**Checked against `iot-lab` commit `b9c3361`.** The tool and the skill live in two
 repositories, and nothing makes them move together, so the claims in `SKILL.md` are claims
 about one commit of `adu`. When you change the tool, re-read the skill against it and move this
 line.
 
 ## Verification status
 
-**The skill is unverified on hardware.** The protocol facts marked *measured* in `SKILL.md` were
-read back from a real unit, read-only, with every channel open. Everything else — every reply
-with a channel closed, the counter formats, the input thresholds, the pulse timing — is derived
-from the vendor manual, the PhotoMOS datasheet and the kernel driver source. **No channel has
-been actuated on a real unit**; the accept path is proven only against the tool's `--fake`
-backend.
+**The skill is partly verified on hardware.** Channels have been actuated on a real unit: the
+device layer's loopback selftest passed, which requires each channel to close, the matching
+input to follow, and the edge counter to read exactly 1. The guard was also watched refusing
+an unwired channel on the unit. The protocol facts marked *measured* in `SKILL.md` were read
+read-only with every channel open, and the loopback run's raw logs stay unpublished, because
+they name a unit serial and host paths.
+
+**What is not verified is this tool against a real target.** No board has been powered, reset
+or power-cycled through the box, and the accept path of `adu`, with a wiring row behind it, is
+proven only against the `--fake` backend. The input thresholds, the pulse timing and the
+behavior of a channel under load stay derived from the vendor manual, the PhotoMOS datasheet
+and the kernel driver source. The split matters for a report: "the relays work" is supported,
+and "this bench is wired the way the map says" is not.
 
 `SKILL.md` says this in its own first lines, and tells the agent that where a read-back
 disagrees with the file, the read-back wins and the human is told. Keep it that way: the next

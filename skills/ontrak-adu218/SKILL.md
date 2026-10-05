@@ -27,11 +27,18 @@ If `command -v adu` finds nothing, the tool is not installed — point the human
 repository's install steps. Do not write a replacement script: the guard, the wiring map and
 the read-back are the tool.
 
-**Status: unverified on hardware.** Facts below marked *measured* were read back from a real
-unit over USB. Everything else is derived from the vendor manual, the relay datasheet and the
-kernel driver source. **No channel has ever been actuated on a real unit** — the accept path is
-proven only against the tool's `--fake` backend. Where a read-back disagrees with this file,
-the read-back is right. Tell the human when that happens.
+**Status: partly verified on hardware.** Channels have been actuated on a real unit. The
+device layer's loopback selftest passed, and it passes only when each channel closes, the
+matching input goes high, the channel opens, the input returns low, and the edge counter reads
+exactly 1. The guard was also watched refusing an unwired channel on the unit. The protocol
+tables below marked *measured* were read with every channel open, read-only. Everything not
+marked that way comes from the vendor manual, the relay datasheet and the kernel driver source.
+
+**What has not run on hardware is this tool against a real target.** No board has been
+powered, reset or power-cycled through the box. The accept path of `adu` itself, with a wiring
+row behind it, is proven only against the `--fake` backend. So "the relays work" is supported,
+and "this bench is wired the way the map says" is not. Where a read-back disagrees with this
+file, the read-back is right. Tell the human when that happens.
 
 ## Rules (read first)
 
@@ -232,8 +239,11 @@ against one unit.
 names `PI`, and the body is right. `adu raw RI` waits out the whole timeout and then fails with
 "no reply". Use `PI`.
 
-Every reply with a channel *closed*, every counter value, the input thresholds and the pulse
-timing remain vendor-derived and unverified. Do not report one as measured.
+The loopback run reached past this table: on a real unit it read an input high with a channel
+closed, and an edge count of exactly 1. Its raw logs are not published, because they name a
+unit serial and host paths, so this file records no reply table for the closed state. The
+input thresholds, the pulse timing and any behavior under load remain vendor-derived. Do not
+report one of those as measured.
 
 Reads that prove nothing: the relays are silent, so the absence of a click is not evidence; and
 `MaxPower` in the USB descriptor is a declared bus budget, not a draw.
