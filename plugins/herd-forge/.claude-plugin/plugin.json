@@ -1,7 +1,7 @@
 {
   "name": "herd-forge",
-  "description": "Forge and drive a herd in Herdr: one agent per pane, panes as real terminals for interactive programs and live output, Claude panes started with permissions bypassed, other CLI agents on the same goal, a model and effort choice per role, turnover over compaction run by a steward, and a liaison that fronts the operator and writes the herd report.",
-  "version": "0.3.0",
+  "description": "Forge and drive a herd in Herdr: one agent per pane, Claude panes started with permissions bypassed, other CLI agents on the same goal, a model and effort choice per role, turnover over compaction run by a steward, and a liaison that fronts the operator and writes the herd report.",
+  "version": "0.4.0",
   "author": {
     "name": "pepsi133",
     "url": "https://github.com/pepsi133"

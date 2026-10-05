@@ -11,8 +11,21 @@ cannot run a program that refuses a pipe, and when the spec runs out it guesses.
 both limits: a pane is a real terminal, and a pane is readable at any moment, so the parent sees
 the question, the error and the progress while the work is still running.
 
-This skill is the delegation protocol for that pane. It keeps the parts of `agent-delegation`
-that a pane does not change, and it changes the one part a pane does change.
+## It is a delta, not a copy
+
+This skill states **only what a pane changes**. Everything a pane leaves alone, it cites.
+
+| for | the agent reads | this skill adds |
+|---|---|---|
+| the delegation protocol — the decision gate, secrets, human consent, naming evidence, artifact verification, adversarial review and the safety-critical path list | `agent-delegation` | what a reachable agent changes |
+| every `herdr` verb, flag, lifecycle state and JSON path | `herdr --skill`, printed from the installed binary | the two overrides, and the traps the binary does not document |
+
+That is deliberate. A skill that restates its dependency goes stale against it silently, and
+the cost is paid twice in the context window. The official Herdr skill ships with the binary
+and is therefore never out of date with it, which is the strongest reason to defer to it rather
+than to paraphrase it.
+
+What a pane actually changes, against `agent-delegation`:
 
 | | `agent-delegation` | `herd-delegation` |
 |---|---|---|
@@ -20,52 +33,61 @@ that a pane does not change, and it changes the one part a pane does change.
 | Open decision mid-run | Pause, return, be resumed | Ask in the pane, wait, be answered |
 | Interactive program | Out of reach | The reason to use a pane |
 | Live output | Arrives at the end | Readable while it runs |
-| Unchanged | Decision gate before the spawn, evidence named instead of commands, secret values and human consent stay with the parent, artifact verification instead of exit codes | |
+| Context figure | Nothing to read | The `ctx` segment of a Claude pane's status line |
 
 ## Scope
 
-One pane at a time. It covers the spawn, the brief, the reading, the answer, and the close.
+One pane at a time: the spawn, the brief, the reading, the answer, the review and the close.
 
 It is not a herd. For many panes at once, a model and an effort per role, a steward that runs
 compaction and renames, a liaison that fronts the operator, and turnover between panes, use
-[`herd-forge`](../../plugins/herd-forge/). Load this skill when the job is "give this unit of
-work its own terminal", and that one when the job is "run a herd".
+[`herd-forge`](../../plugins/herd-forge/), which sits one layer above this file and cites it the
+same way this file cites `agent-delegation`.
 
-## Two rules worth stating here
+## The rules that are this skill's own
 
-**A tab per agent, never a half pane.** A split halves the rows you came to read, and two
-agents in one tab compete for the same screen. The skill creates a tab per unit of work and
-moves a misplaced pane out of a split.
+**A tab per agent, never a half pane.** This overrides the official Herdr skill, which defaults
+to a sibling pane in the current tab. A split halves the rows you came to read, and two agents
+in one tab compete for the same screen. The skill creates a tab per unit of work, keeps the tab
+ID for the close, and moves a misplaced pane out of a split.
 
-**The alternate-screen trap.** An agent that draws a full-screen interface writes to the
-terminal's alternate screen, and rows that leave it never enter scrollback. A larger
-`--lines` cannot recover them. The fallback is a file: the brief asks for a Markdown report at
-a named path and a pane reply of that path alone.
+**The brief asks for a file up front.** This is the second override. The official Herdr skill
+keeps file output as a fallback and says not to request it in the initial prompt. A pane report
+long enough to matter is unreadable on the alternate screen, so the skill asks for Markdown at a
+named path in the brief instead of discovering the limit afterwards.
 
-## Two more rules, and why they are here
+**Inline work takes a pane, not a subagent**, where the parent itself runs in a pane. The author
+is then the parent pane, and a review never runs there.
 
-**An adversarial review before a unit is called finished.** A unit is not finished because its
-author says so, so a second agent, never the author and never the parent pane, is briefed to
-break it. The duty covers delegated work that produced a new or changed document or new or
-changed code, and any work that touched a safety-critical path, whether it was delegated or
-done inline.
-The skill defines that path as a short testable list: a path that records, measures or returns
-a verdict and can fail without raising an error, a certificate or key or credential path, a map
-from a logical name to a physical output, anything that flashes or erases or re-provisions a
-device, anything that changes what a later agent is permitted to do, anything that overwrites
-evidence no commit or backup holds, and any path that holds, enforces, reports or computes a
-limit, a guard or a stop condition protecting something outside the work.
-A herd leaves the authoring pane running while the review goes on, which is exactly why the
-reviewer's brief has to close the channels a pane opens: no other pane, no agent list, no other
-agent's transcript, no sibling's report.
+**No closed-channel delta for a review.** A herd leaves the authoring pane running while the
+review goes on, so `herdr agent list` names it and `agent read` and `pane read` are in the skill.
+`agent-delegation` already closes those channels by name, so the skill sends its block verbatim
+and keeps no copy of its own.
 
-**A context threshold on reuse.** A pane agent takes a further unit only while it is below 30
-percent of its window, winds up what it holds from 30 up to but not including 35, and is
-replaced at or above 35. The figure is the `ctx` segment of a Claude pane's status line, read in
-full, and a narrow pane truncates it low, which is the direction that argues for reuse. Where
-that figure cannot be read in full the rule is silent about that agent rather than cautious: no
-pane is retired on a reading nobody has, and the pane is judged on the unit it delivered and
-what is left.
+**A context threshold that can actually be read.** `agent-delegation` sets the figures — reuse
+below 30 percent, wind up from 30 to 35, replace at or above 35 — and records that for a
+subagent there is no figure to read at all. A pane is the case where there is one, so the
+reading mechanics live here: the `ctx` segment, read in full, distinguished from the usage-window
+and cache percentages on the same row. A narrow pane truncates it low, which is the direction
+that argues for reuse, so where the figure cannot be read in full the rule is silent about that
+agent rather than cautious. No pane is retired on a reading nobody has.
+
+**`--effort` binds one session.** Measured on this bench: a pane started with no `--effort` flag
+comes up at low. State the flag for every pane whose role needs it.
+
+**The permission mode is the operator's decision**, not a default the skill sets.
+
+## A note on the alternate screen
+
+An agent that draws a full-screen interface runs on the terminal's alternate screen, and rows
+that leave it do not enter ordinary host scrollback. For some idle agents Herdr can collect
+application-owned history and restore the viewport afterwards, but not every application or
+response can be recovered that way, so a larger `--lines` is no reliable path back. The
+fallback is a file: the brief asks for a Markdown report at a named path and a pane reply of
+that path alone.
+
+The mechanism is documented in `herdr --skill`, which ships with the binary, so the skill cites
+it there instead of carrying its own copy to go stale.
 
 ## Requirements
 
