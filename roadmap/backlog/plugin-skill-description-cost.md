@@ -14,21 +14,37 @@ start of every session. A user can shorten that listing for their own skills wit
 plugin. Every skill in this marketplace installs as a plugin, so the user has no lever.
 The fix has to happen here.
 
-Five descriptions carry most of the cost. Each length is the parsed `description` value
-from the SKILL.md frontmatter (YAML-loaded, then counted in characters), measured on
-2026-10-11:
+Each length below is the parsed `description` value from the SKILL.md frontmatter
+(YAML-loaded, then counted in characters), measured on 2026-10-11 over every tracked
+`SKILL.md`. Only skills the model can invoke count: a skill with
+`disable-model-invocation: true` keeps its description out of context, and
+`templates/skill/` is not installed.
+
+The model-invocable skills total 6,309 characters. The five longest carry 3,630 of them,
+about 58%:
 
 | Skill | Description length (characters) |
 |---|---|
+| `herd-delegation` | 843 |
+| `agent-delegation` | 760 |
 | `ontrak-adu218` | 723 |
 | `mikrotik-routeros` | 696 |
 | `herd-forge` | 608 |
-| `herd-rigor` | 472 |
-| `korad-ka3305p` | 445 |
 
-That is about 2,900 characters on every session, on every host that enables them,
-whether or not the session touches a relay box, a power supply, a router or a herd.
-Two of them drive bench hardware that most sessions never see.
+The other six: `cavecrew` 553, `static-analysis-controls` 521, `herd-rigor` 472,
+`korad-ka3305p` 445, `caveman` 393, `limit-guard` 295. Left out because they are
+user-invoked only: `simple-english` 877, `caveman-commit` 347, `compress` 335,
+`caveman-review` 311, `ste` 297, `caveman-stats` 257, `caveman-help` 196.
+
+That cost is paid on every session, on every host that enables these plugins, whether or
+not the session touches a relay box, a power supply, a router or a herd. Two of the
+skills (`ontrak-adu218`, `korad-ka3305p`) drive bench hardware that most sessions never
+see.
+
+An earlier version of this file listed `ontrak-adu218`, `mikrotik-routeros`,
+`herd-forge`, `herd-rigor` and `korad-ka3305p` as the five that carry most of the cost.
+That list was not the measured top five, and together they carry about 47% of the
+model-invocable total, not most of it.
 
 ## Proposed approach
 
@@ -62,8 +78,8 @@ it on the installed build.
 
 ## Acceptance criteria
 
-- [ ] Each of the five skills has a description of 300 characters or fewer, or a
-      recorded reason why not.
+- [ ] Each of the five skills in the table, and `korad-ka3305p` and `herd-rigor`, has a
+      description of 300 characters or fewer, or a recorded reason why not.
 - [ ] A trigger evaluation shows no lost should-fire cases for each shortened skill.
 - [ ] `python3 scripts/validate-skills.py` passes.
 - [ ] Each changed plugin's version is bumped.
