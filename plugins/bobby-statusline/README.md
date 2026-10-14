@@ -5,7 +5,7 @@ already knows: vim mode, context, the 5-hour and 7-day usage windows or the sess
 the prompt cache, the model, the agent, and the pull request.
 
 ```
-INSERT | [CAVEMAN:FULL] [STE] | ctx 132k/1M (13%) | 5h 26% >03:20 | 7d 14% >Wed 11:00 | cache warm 91% | Opus 5 1M | high effort | fast+think | @general-purpose | #1234 pending | +156/-23
+INSERT | [CAVEMAN:FULL] [STE] | ctx 132k/1M (13%) | 5h 26% >03:20 | 7d 14% >Wed 11:00 | cache 1h warm >03:52 91% | Opus 5 1M | high effort | fast+think | @general-purpose | #1234 pending | +156/-23
 ```
 
 ## Why one script and not a chain
@@ -103,7 +103,7 @@ is dropped last.
 | 5 | 5 hour | `rate_limits.five_hour` | `5h 26% >03:20` | auto |
 | 6 | 7 day | `rate_limits.seven_day` | `7d 14% >Wed 11:00` | auto |
 | 7 | cost | `cost.total_cost_usd` | `$0.42` | auto |
-| 8 | prompt cache | `prompt_cache` | `cache warm 91%` | on |
+| 8 | prompt cache | `prompt_cache` | `cache 1h warm >03:52 91%` | on |
 | 9 | model | `model.display_name` | `Opus 5 1M` | on |
 | 10 | effort | `effort.level` | `high effort` | on |
 | 11 | fast, thinking | `fast_mode`, `thinking.enabled` | `fast+think` | on |
@@ -124,7 +124,7 @@ exists but cannot be trusted:
   that just ended. Claude Code drops such a window from the payload, so this covers only the
   gap before the next render.
 - `prompt_cache` present without a `warm` field, which means the cache state is unknown
-  rather than cold.
+  rather than cold. A cache expiry time outside the platform's time range shows `cache ?` too.
 - The context segment falls back to `ctx 13%` without the token counts when
   `total_input_tokens` plus `total_output_tokens` exceeds the window size. Input includes
   cache reads and writes, so that sum can run past the window, and `ctx 1.2M/1M (13%)` would
@@ -147,10 +147,10 @@ is paused and a blank row looks like the script crashed.
 
 ```
 COLUMNS = 200   nothing dropped
-INSERT | [CAVEMAN:FULL] [STE] | ctx 132k/1M (13%) | 5h 26% >03:20 | 7d 14% >Wed 11:00 | cache warm 91% | Opus 5 1M | high effort | fast+think | @general-purpose | #1234 pending | +156/-23
+INSERT | [CAVEMAN:FULL] [STE] | ctx 132k/1M (13%) | 5h 26% >03:20 | 7d 14% >Wed 11:00 | cache 1h warm >03:52 91% | Opus 5 1M | high effort | fast+think | @general-purpose | #1234 pending | +156/-23
 
 COLUMNS = 120   dropped: lines, pr, agent, fast+think, effort, model
-INSERT | [CAVEMAN:FULL] [STE] | ctx 132k/1M (13%) | 5h 26% >03:20 | 7d 14% >Wed 11:00 | cache warm 91%
+INSERT | [CAVEMAN:FULL] [STE] | ctx 132k/1M (13%) | 5h 26% >03:20 | 7d 14% >Wed 11:00 | cache 1h warm >03:52 91%
 
 COLUMNS = 80    ... and cost, cache, 7d
 INSERT | [CAVEMAN:FULL] [STE] | ctx 132k/1M (13%) | 5h 26% >03:20
@@ -222,7 +222,8 @@ belongs to exactly one condition: a usage window at 95 percent or above.
 | usage 90 to 94% | `173` muted orange |
 | usage 95% and above | `160` red |
 | cost | `109` muted blue |
-| cache warm, cache cold | `108`, `179`. Never red |
+| cache warm, cache warm in the last fifth of its TTL, cache cold | `108`, `179`, `179`. Never red |
+| cache off or unknown | `245` grey |
 | vim `INSERT`, `NORMAL`, `VISUAL` | `114`, `111`, `176` |
 | caveman badge, ste badge | `173`, `109` |
 | agent | `110` |
@@ -289,11 +290,58 @@ Reading `ste`'s own `$XDG_CONFIG_HOME/ste/state.json` instead was the alternativ
 path won: one hardening routine rather than two, one fixture shape, and `caveman` and `ste`
 then look identical to any future status line.
 
+## The prompt cache
+
+Claude Code adds a `prompt_cache` object to the payload after the first API response. It
+describes the cache of the main session only. Subagent caches are not in the payload.
+
+```
+cache 1h warm >17:47 91% 2 miss: tools     warm, expires at 17:47
+cache 5m cold since 17:47 ~40k             cold since 17:47, the next turn writes ~40k tokens again
+cache off                                  the API reported no cache reads or writes
+```
+
+| Part | Field | Shown when |
+|---|---|---|
+| `1h`, `5m` | `ttl` | always, if the value has the form `<n>s`, `<n>m` or `<n>h` |
+| `warm`, `cold` | `warm`, `expires_at` | always. A payload with `warm: true` that arrives after `expires_at` renders cold |
+| `>17:47` | `expires_at` | warm. The time at which the cache goes cold |
+| `since 17:47` | `expires_at` | cold. The time at which the cache went cold |
+| `~40k` | `recache_tokens_if_cold` | cold. `null` means the next turn writes a compacted prompt of unknown size |
+| `91%` | `hit_ratio` | from the second request on. The first request only writes, so its ratio is always 0 |
+| `2 miss: tools` | `misses`, `last_miss_cause.causes` | after a miss. The label names the last cause, `2 miss` alone when Claude Code has not attributed it |
+
+Miss cause labels: `system`, `tools`, `model`, `fast`, `ttl`, `betas`, `effort`, `think`,
+`auto`, `overage`, `body`, `history`, `idle` (the TTL expired), `server` (the prompt did not
+change), and `?`. A cause name that this version does not know renders as its cleaned name.
+
+The segment is green while the cache is warm. It turns amber in the last fifth of the TTL,
+which is the last minute of a `5m` cache and the last 12 minutes of a `1h` cache, so you can
+send a turn before it goes cold. A cold cache is amber too. It costs money on the next
+request, but it is not an emergency, so it is never red.
+
+The segment shows a clock time and not a countdown. Claude Code redraws the status line at
+`expires_at`, so the change from warm to cold appears without a timer. Between redraws a
+countdown would show a stale value, and a clock time does not.
+
+### Which TTL a session gets
+
+Claude Code chooses the TTL. The status line only reports it. The default depends on the
+account type and on server-side configuration. A session in usage overage gets `5m`. To set
+the TTL yourself, use one of these, highest precedence first:
+
+| Setting | Effect |
+|---|---|
+| `FORCE_PROMPT_CACHING_5M=1` | always `5m` |
+| `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` or `1h` | the main session TTL |
+| `"promptCacheTtl": "5m"` or `"1h"` in `settings.json` | the main session TTL |
+| `ENABLE_PROMPT_CACHING_1H=1` | `1h` |
+
 ## The countdown is a snapshot
 
 Claude Code re-runs the status line on events: a new assistant message, `/compact`
 finishing, a permission-mode change, a vim-mode toggle, a settings change, a rate-limit
-window reaching its `resets_at` time, and a prompt-cache TTL expiring. There is no timer
+window reaching its `resets_at` time, and a prompt cache reaching its `expires_at` time. There is no timer
 unless you ask for one.
 
 So `5h 26% >03:20` is correct when it is drawn and does not tick down afterward. For a
@@ -323,9 +371,9 @@ cd plugins/bobby-statusline && python3 -m unittest discover -s tests -p 'test_*.
 python3 bin/bobby-statusline.py --selftest
 ```
 
-83 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
+99 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
 oversize, escape bytes, whitelist), the billing modes, the color thresholds, both layouts,
-the configuration layers, the pause state, the `limit-guard` bridge including an old gate
+the configuration layers, the prompt cache states and colors, the pause state, the `limit-guard` bridge including an old gate
 and a raising gate, the slash command's contract, and one regression test per fixed defect
 (`TestAuditRegressions`, nine tests). Each of those fails against the code as it stood
 before its fix.

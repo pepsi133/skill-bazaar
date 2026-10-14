@@ -1,1 +1,1 @@
-ctx 132k/1M (13%) | $1.37 | cache cold | Opus 5 | medium effort | +12/-4
+ctx 132k/1M (13%) | $1.37 | cache 5m cold since 00:14 ~40k 62% 1 miss: tools | Opus 5 | medium effort | +12/-4
