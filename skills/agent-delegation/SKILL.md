@@ -269,10 +269,6 @@ sequences the work itself.
   `Read, Edit, Write, Grep, Glob`: no shell tool, so it produces file content as evidence and
   never a test result, and no `ToolSearch`, so it cannot send and pauses with the question in
   its report.
-- **Delegation gate**: `hooks/agent-delegation-gate.py`, a `PreToolUse` hook keyed on
-  `agent_id`, which the hook input carries only inside a subagent. It asks once when a
-  main-session turn starts editing a second file. Install and limits in
-  [`hooks/README.md`](hooks/README.md).
 - **Subagent transcripts**: `~/.claude/projects/<project>/<session>/subagents/agent-<id>.jsonl`
   holds a subagent's tool results, secrets included, and outlives the symlink under the
   session's `tasks/` directory.

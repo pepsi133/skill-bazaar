@@ -98,9 +98,8 @@ claude plugin marketplace add pepsi133/skill-bazaar
 claude plugin install agent-delegation@skill-bazaar
 ```
 
-Installing the plugin also registers the delegation gate hook (see below). To run the skill
-without the hook, set `AGENT_DELEGATION_GATE=off` in the environment, or install by clone and
-symlink instead, which any SKILL.md-compatible tool can consume:
+The plugin ships the skill alone, with no hooks. To use it in any SKILL.md-compatible tool,
+install by clone and symlink instead:
 
 ```bash
 git clone https://github.com/pepsi133/skill-bazaar.git
@@ -115,9 +114,6 @@ Other tools and paths are in [`docs/install/`](../../docs/install/).
 |---|---|
 | `SKILL.md` | The skill. Tool-agnostic protocol, with Claude Code mechanics under *Platform execution notes*. |
 | `README.md` | This file. Not loaded by the agent. |
-| `hooks/agent-delegation-gate.py` | Claude Code `PreToolUse` hook that enforces the delegate-by-default rule. Optional. |
-| `hooks/hooks.json` | Registers the hook when the folder is installed as a plugin. |
-| `hooks/README.md` | The gate's behavior, install by hand, configuration, limits. |
 | `.claude-plugin/plugin.json` | Packages the folder as a one-skill plugin. |
 
 ## Design rationale
@@ -176,15 +172,20 @@ produce it. The second half came from a real case in this repository: `cavecrew-
 ships no shell tool, so any evidence that needs a command fails for that preset, and the
 fault sits in the prompt.
 
-**The gate asks, and it does not deny.** A rule written in the context window is advisory
-and loses effect as the session grows. Where the harness can gate a tool call before it runs,
-the rule belongs there, so the skill ships a `PreToolUse` hook. It uses `ask` rather than
-`deny` because a Bash-based edit (`sed -i`, a heredoc, a patch script) bypasses the
-`Edit|Write|NotebookEdit` matcher in either mode, and a deny that is routed around trains the
-workaround. It fires on the second distinct file of a turn because the rule is about size and
-the tool name carries none: the first file passes in silence (the one-line fix the skill
-allows), the second file raises one ask, and later files in the same turn pass because the
-human already decided. The decision record is in
+**No enforcement hook.** Versions 0.5.0 to 0.8.0 shipped a `PreToolUse` hook that asked a
+human when a main-session turn edited a second file. Version 0.9.0 removes it, for three
+reasons:
+
+- An `ask` decision needs a human at the prompt. A headless session (`claude -p`, an agent
+  driven by another agent, an SDK loop) has no human, so the ask blocked or denied the edit.
+  A headless session also carries no `agent_id`, so the hook treated it as a main session.
+- The hook could not see the cost threshold. It counted files, but the rule is about whether
+  a written spec costs less than the work. Many two-file changes belong inline.
+- A Bash edit bypassed it, so it never enforced the rule. It only added a prompt that taught
+  the habit of answering yes.
+
+The rule stays in `SKILL.md` as prose, where it applies in every harness. The decision record
+for the original hook is in
 [`roadmap/done/agent-delegation-gate-and-toolset-check.md`](../../roadmap/done/agent-delegation-gate-and-toolset-check.md).
 
 **An adversarial review before the work is called finished.** An author is the worst judge of
@@ -254,34 +255,9 @@ compaction, other harnesses.
 - **Hook failure direction** (2.1.269). A hook whose script path does not exist blocks every
   matched call, because the interpreter exits 2.
 
-## Hook internals
+## Subagent transcripts
 
-The gate is documented for use in [`hooks/README.md`](hooks/README.md). This section is the
-mechanics it is built on, for anyone writing a hook of their own.
-
-**Input.** `PreToolUse` hook input carries `agent_id` and `agent_type` only inside a subagent,
-so a hook on `Edit|Write|NotebookEdit` that sees no `agent_id` knows the call came from the
-main session. The same input carries `prompt_id`, which changes with each user turn, so one
-hook can count the distinct files a turn has touched without a companion `UserPromptSubmit`
-hook. It also carries `permission_mode` and `scratchpad_dir`, a per-session directory that is
-the natural home for hook state.
-
-**Output.** The hook gates the call by printing this on stdout and exiting 0:
-
-```json
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"..."}}
-```
-
-`permissionDecision` takes `allow`, `deny` or `ask`.
-
-**Exit codes.** A failing hook script fails in the direction of its exit code. Exit code 2
-from a `PreToolUse` hook blocks the call. A Python hook aimed at a missing path exits 2,
-because that is Python's own code for a file it cannot open, so it blocks every matched call
-until someone fixes the path. A missing command exits 127 and a non-executable file exits 126,
-and neither blocks. Write a hook that catches its own faults and exits 0 on purpose, and check
-the configured path after any move or rename (`python3 agent-delegation-gate.py --selftest`).
-
-**Subagent transcripts.** A subagent's tool results, secrets included, are written to
+A subagent's tool results, secrets included, are written to
 `~/.claude/projects/<project>/<session>/subagents/agent-<id>.jsonl`. Removing the symlink
 under the session's `tasks/` directory leaves that file in place.
 
