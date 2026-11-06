@@ -6,9 +6,8 @@ description: >-
   or console from an agent, even without naming Herdr, because a program that refuses a
   pipe needs a pane. Use also when a pane nears its context ceiling, is to be retired,
   turned over or compacted, or the operator wants a herd report. Covers the forge
-  sequence, panes as real terminals, a model per role, mixed CLI agents, the liaison, the
-  steward, turnover, the close test, and the measured traps. Requires `herdr` and
-  `HERDR_ENV=1`.
+  sequence, a model per role, mixed CLI agents, the liaison, the steward, turnover, the
+  close test, and the measured traps. Requires `herdr` and `HERDR_ENV=1`.
 ---
 
 # herd-forge
@@ -22,21 +21,23 @@ An **overseer** agent runs the herd afterwards. A **liaison** fronts the operato
 writes the herd report. A **steward** keeps the panes healthy. The rules below that bind
 those agents are files that you write for them, not rules that you follow yourself.
 
-`herdr --skill` prints the Herdr command reference and is the authority on syntax. Read it
-for flags. This skill covers what to build and which traps to route around.
+**This skill covers what a herd adds, and restates nothing below it.**
 
-## What a pane buys you
+| for | read | this file adds |
+|---|---|---|
+| one pane: the spawn, the brief, driving it, the review, the threshold, the close | `herd-delegation` | the same, multiplied: roles, a tree, turnover |
+| the delegation protocol: the gate, secrets, consent, evidence, adversarial review | `agent-delegation` | nothing; it reaches here through `herd-delegation` |
+| every `herdr` verb, flag, state and JSON path | `herdr --skill`, from the installed binary | the traps it does not carry |
 
-Three things that a subagent call cannot give you.
+A herd costs real tokens. Start with one worker when the goal fits one context, and when one
+worker is the whole plan, `herd-delegation` alone is enough.
 
-1. **A real terminal.** A pane is a pty. REPLs, `ssh`, `sudo`, installers, serial
-   consoles and anything with a menu work there. See section 3.
-2. **A long-running agent with its own context window.** It reports in files, and you
-   read it whenever you want.
-3. **A free choice of program per pane.** Claude in one pane, Codex or Gemini in the next,
-   all pointed at one goal. See section 5.
+## What a herd buys you
 
-A herd costs real tokens. Start with one worker when the goal fits one context.
+`herd-delegation` says what one pane buys: a real terminal, output readable while the work
+runs, and a long run the parent stays free during. A herd adds one thing on top, and section 4
+is how: **a free choice of program per pane**, Claude in one, Codex or Gemini in the next, all
+pointed at one goal.
 
 ## 1. Four questions, before anything exists
 
@@ -47,7 +48,7 @@ you create a directory.
 |---|---|
 | **What does done look like?** Not the goal. The stopping condition | A named artifact at a named path, and the list of questions it answers |
 | **Which model plan?** See the table below | Judgment work on `fable` or on `opus --effort low`. Bulk work on `sonnet --effort high` |
-| **Bypass permissions?** See section 4 | Yes for a sandbox or a scratch tree. Ask per agent for anything else |
+| **Bypass permissions?** See section 3 | Yes for a sandbox or a scratch tree. Ask per agent for anything else |
 | **Publish reports as private claude.ai artifacts?** | No, unless the operator wants a link. The liaison writes a local HTML file either way |
 
 A clear goal with no stopping condition is the worst of both: everyone knows what to
@@ -57,7 +58,7 @@ any agent starts.
 ### The model plan, for a Claude pane
 
 `--model` and `--effort` reach the agent after `--`, per agent. Restart a pane to change
-them.
+them. `herd-delegation` records that the flag binds one session only.
 
 | work | start with | why |
 |---|---|---|
@@ -117,9 +118,10 @@ with the herd. Names match `[a-z][a-z0-9_-]{0,31}`, so derive them:
 
 Tab and pane labels take spaces and punctuation. Put the human-readable role there.
 
-**Layout.** Give each agent its own tab. Repeated `pane split` in one direction gives
-unusably narrow columns by about the fourth pane, and the cost lands on whoever watches the
-screen. One tab per agent also makes retirement one command: `herdr tab close <tab_id>`.
+**Layout.** Give each agent its own tab, as `herd-delegation` requires. Repeated
+`pane split` in one direction gives unusably narrow columns by about the fourth pane, and the
+cost lands on whoever watches the screen. One tab per agent also makes retirement one
+command: `herdr tab close <tab_id>`.
 
 **The end of the herd.** When the stopping condition holds, close the herd in this order.
 
@@ -130,34 +132,15 @@ screen. One tab per agent also makes retirement one command: `herdr tab close <t
 4. You close the steward's tab and commit the tree. The herd is closed when
    `herdr agent list` shows no agent with the herd prefix.
 
-## 3. A pane for every command with live output
-
-Run a command that is interactive, or that draws a progress bar or a spinner, in its own
-pane with `herdr pane run`. Read what you need from it with `herdr pane read`. This is the
-routine case, not the exception.
-
-A shell tool gives you a pipe. A pipe has no controlling terminal, so an interactive
-program refuses to start or answers nothing. A progress bar in a pipe floods your context.
-In a pane it stays on the pane's screen, and you read one line when you want it.
-
-    herdr pane run <pane_id> "<command>"
-    herdr pane wait-output <pane_id> --match "<text>" --timeout 120000
-    herdr pane read <pane_id> --source recent-unwrapped --lines 200
-    herdr pane send-text <pane_id> "<input>"
-    herdr pane send-keys <pane_id> ctrl+c
-
-Use `wait-output` rather than a sleep that races the echo. A human can watch the pane too.
-`reference/interactive-panes.md` carries the driving loop, the wrap and echo traps, and the
-capture discipline for a program that discards its own records.
-
-## 4. Bypass permissions, for a Claude pane
+## 3. Bypass permissions, for a Claude pane
 
 Everything after `--` reaches the agent process:
 
     herdr agent start <name> --kind claude --pane <pane_id> -- --dangerously-skip-permissions
 
 Use it for a herd inside a sandbox, a scratch tree, or a repository the operator owns.
-Without it, an unattended herd stops dead on the first prompt.
+Without it, an unattended herd stops dead on the first prompt. Whether to use it is the
+operator's call, which is question three in section 1, not a default this skill sets.
 
 Two consequences follow, and both go word for word into every brief you write:
 
@@ -169,14 +152,13 @@ With the prompt gone, the written limit is the only control left, so write it.
 `--allow-dangerously-skip-permissions` offers the mode without turning it on.
 `--permission-mode acceptEdits` passes file edits and asks for everything else.
 
-Two dialogs survive the flag, and both stop an unattended pane. `herdr agent start`
-returns `agent_not_ready` on the first, and `herdr agent wait --until blocked` catches the
-second. `reference/herdr-traps.md` entries 2 and 3 say how to clear them.
+Two dialogs survive the flag and both stop an unattended pane: see
+`reference/herdr-traps.md` entries 2 and 3.
 
 **Give each agent a `--cwd` that contains everything it writes.** A write outside it
 stops on an approval dialog however the pane was started.
 
-## 5. A herd of different agents
+## 4. A herd of different agents
 
 Herdr recognizes a fixed list of agent kinds. Read it with **`herdr agent 2>&1`**. The list
 goes to stderr, so a stdout capture looks like a build with no kinds. Start any kind the
@@ -192,21 +174,19 @@ For a program Herdr does not recognize, run it with `herdr pane run` and declare
 `herdr pane report-agent`. That state is the caller's assertion, not a detection, and any
 report from such a pane says so.
 
-## 6. Brief each agent
+## 5. Brief each agent
 
-One file per agent, in that agent's own directory. `reference/briefs.md` carries a template
-per role. The brief states, in this order:
+One file per agent, in that agent's own directory. `herd-delegation` states what a brief
+carries and `agent-delegation` states why; `reference/briefs.md` carries a template per role.
+A herd brief adds four things on top of those.
 
-1. The goal of the herd and the stopping condition, copied, not referenced.
-2. What this agent owns, and the one thing it must produce.
-3. Its hard limits, named one by one.
-4. Where it writes. The findings go to the file the brief names, and `STATUS.md` is the
-   report. Verbose output kept for a strong reason goes to a separate path, so a reviewer
-   reads artifacts, not transcripts. One courtesy message per unit of work, at completion:
-   what it produced, where, and what needs a decision.
-5. What to do when a rule blocks it. State the ask in one paragraph, and say what
-   happens on yes and what happens on no. Continue with the work that does not depend on
-   the answer.
+1. **The goal of the herd and the stopping condition, copied, not referenced.** An agent that
+   must open another file to learn when to stop will not.
+2. **What this agent owns**, and the one thing it must produce, so two panes do not both own it.
+3. **Where it writes.** Findings to the file the brief names, `STATUS.md` as the report,
+   verbose output to a separate path so a reviewer reads artifacts rather than transcripts.
+4. **One courtesy message per unit of work, at completion**: what it produced, where, and what
+   needs a decision. The file is the report; the message is the doorbell.
 
 Two lines earn their place in every brief, because both failed in the field:
 
@@ -220,25 +200,24 @@ Two lines earn their place in every brief, because both failed in the field:
 Build long prompts in a file and pass `"$(cat file)"`. **Keep the rules short:** write a
 line ceiling on line one of `RULES.md` at forge time. **herd-rigor** carries the long form.
 
-## 7. Wait, do not poll
+## 6. Wait, do not poll
 
-    herdr agent wait <target> [--until STATUS]... [--timeout MS]
-    herdr pane wait-output <pane_id> --match TEXT --timeout MS
+`herdr --skill` carries `agent wait`, `pane wait-output` and the settled-state default. It does
+not list the states, so they are here: `--until` repeats, and the states are `idle`, `done`,
+`blocked`, `working` and `unknown`. Four herd-specific rules sit on top.
 
-`--until` repeats, and the states are `idle`, `done`, `blocked`, `working` and `unknown`.
-With no `--until`, the wait settles on the first of `idle`, `done` or `blocked`.
+- **Run the wait in the background**, so the wake arrives as a completion.
+- **Pass `--until blocked` with the settled states, not instead of them.** One `--until`
+  replaces the default, so `--until idle --until done --until blocked` is the form that both
+  returns on a clean finish and catches a pane stopped at a dialog, which otherwise waits
+  forever and looks busy.
+- **Arm the wake after the last item you send.** A wake armed earlier watches a state the
+  worker will not reach, and queued items keep it out of every settled state.
+- **`done` is a state and not a delivery.** Completed, parked, blocked on a dialog, cut off
+  by a transport failure, and dead on the account limit are one value. List the files the
+  worker was told to write. One listing gives the file, the minute, and therefore the phase.
 
-Run the wait in the background, so the wake arrives as a completion. Always include
-`--until blocked`. A pane stopped at a dialog otherwise waits forever and looks busy.
-
-Arm the wake **after** the last item you send. A wake armed earlier watches a state the
-worker will not reach. Queued items keep it out of every settled state.
-
-`done` is a state and not a delivery. Completed, parked, blocked on a dialog, cut off by a
-transport failure, and dead on the account limit are one value. List the files the worker
-was told to write. One listing gives the file, the minute, and therefore the phase.
-
-## 8. The liaison
+## 7. The liaison
 
 Every herd has one liaison, a single herd included. It has three duties.
 
@@ -250,9 +229,10 @@ Every herd has one liaison, a single herd included. It has three duties.
 
 `reference/liaison.md` carries each duty in full, the ledger, and the message set.
 
-## 9. Running a herd for hours
+## 8. Running a herd for hours
 
 A pane is cheap, and the state of a herd lives on disk so that any pane can be replaced.
+`herd-delegation` sets the context figures and how to read them; a herd adds who acts on them.
 
 - **Turn a pane over.** When a pane has delivered its unit of work, or climbs toward its
   context ceiling, retire it and forge a fresh agent from its handover. The overseer too.
@@ -276,9 +256,10 @@ rules, and the compaction fallback.
 | `reference/liaison.md` | You brief the liaison, the operator wants a report, or a second herd exists |
 | `reference/herdr-traps.md` | A Herdr command behaves oddly, a compaction does not take, or the account limit stops the herd |
 
-## Companion plugins
+## Companion skills
 
-Neither is required.
+`herd-delegation` and `agent-delegation` are the layers below this one and are not optional:
+the brief, the review and the close test reach this file through them. Two more are optional.
 
 - **herd-rigor**, when a wrong answer costs more than a slow one: evidence labels, absence
   controls, the freeze and review gate, and the rule budget.
@@ -289,7 +270,7 @@ Neither is required.
 The forge sequence, the pane commands and the traps are Herdr, and hold for any agent kind.
 These parts are Claude Code specific:
 
-- Section 4 and the model plan in section 1. The flags there belong to the `claude` CLI
+- Section 3 and the model plan in section 1. The flags there belong to the `claude` CLI
   and reach it after `--`. For another agent kind, put its own flags in that position.
 - The liaison publishes with the `Artifact` tool, which turns the local HTML file into a
   private claude.ai page and updates the same page on every republish. A harness without

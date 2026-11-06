@@ -1,7 +1,7 @@
 {
   "name": "herd-delegation",
   "description": "Delegate one unit of work to an agent in its own Herdr tab and drive that pane as a real terminal: when a pane beats a background subagent, the tab-per-agent rule, the brief with an ask-in-the-pane clause instead of a stop clause, reading and answering a live pane, the alternate-screen trap and its file fallback, and the two things that stay with the parent (secret values, human consent).",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "pepsi133",
     "url": "https://github.com/pepsi133"
