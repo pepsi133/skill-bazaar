@@ -1,7 +1,7 @@
 {
   "name": "decision-board",
   "description": "Build and run a decision board, a private claude.ai artifact with a database, where an agent posts questions and pending actions as cards and its operator answers from a phone or a browser instead of a terminal.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "pepsi133",
     "url": "https://github.com/pepsi133"
