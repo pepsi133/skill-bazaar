@@ -1,0 +1,682 @@
+<title>Decision Board</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<style>
+/* Layout: sticky summary bar, one filter row, one dense card per item, notes box last. */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --fg: #1b2030;
+  --muted: #5d6578;
+  --line: #d9dde6;
+  --accent: #2f56d6;
+  --accent-fg: #ffffff;
+  --now: #b3261e;
+  --now-bg: #fbe9e7;
+  --soon: #8a5a00;
+  --soon-bg: #fcf0d4;
+  --later: #4b5468;
+  --later-bg: #e6e9f0;
+  --good: #1d7a46;
+  --good-bg: #e0f3e8;
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151c;
+    --surface: #1a1f2a;
+    --surface-2: #232a38;
+    --fg: #e6e9f2;
+    --muted: #98a1b6;
+    --line: #2f3748;
+    --accent: #7d9bff;
+    --accent-fg: #0f1422;
+    --now: #ff8f85;
+    --now-bg: #3a1e1c;
+    --soon: #f0c05a;
+    --soon-bg: #3a2f14;
+    --later: #aab3c8;
+    --later-bg: #2a3244;
+    --good: #6fd09a;
+    --good-bg: #17322365;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151c;
+  --surface: #1a1f2a;
+  --surface-2: #232a38;
+  --fg: #e6e9f2;
+  --muted: #98a1b6;
+  --line: #2f3748;
+  --accent: #7d9bff;
+  --accent-fg: #0f1422;
+  --now: #ff8f85;
+  --now-bg: #3a1e1c;
+  --soon: #f0c05a;
+  --soon-bg: #3a2f14;
+  --later: #aab3c8;
+  --later-bg: #2a3244;
+  --good: #6fd09a;
+  --good-bg: #17322365;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--font); font-size: 14px; line-height: 1.45; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); background: var(--surface); z-index: 20; }
+* { box-sizing: border-box; }
+button, select, textarea, input { font: inherit; color: inherit; }
+.in { max-width: 860px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+header.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 15; background: var(--surface); border-bottom: 1px solid var(--line); }
+header.bar .in { padding-block: 10px; display: grid; gap: 8px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.grow { flex: 1 1 auto; min-width: 0; }
+h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.01em; }
+.counts { display: flex; gap: 14px; font-variant-numeric: tabular-nums; }
+.counts b { font-weight: 600; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.mono { font-family: var(--mono); font-size: 12px; }
+
+button { cursor: pointer; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 6px 10px; min-height: 34px; }
+button:hover:not(:disabled) { background: var(--surface-2); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+button.link { border: 0; background: none; padding: 2px 4px; min-height: 0; color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.blocked { margin-bottom: 10px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 6px; min-width: 0; }
+.blocked h3 { margin: 0; font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: center; }
+.blocked h3 .n { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; padding: 0 7px; border-radius: 999px; background: var(--now-bg); color: var(--now); }
+.blist { display: grid; gap: 4px; }
+.brow { display: grid; gap: 2px; width: 100%; min-width: 0; text-align: left; padding: 6px 8px; min-height: 44px; border-radius: 6px; }
+.brow .bt { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
+.brow .bt span.tt { min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+.brow .bb { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.blocks { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.card { scroll-margin-top: 120px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 10px; }
+.tab { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 12px; min-height: 34px; }
+.tab .n { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
+.tab[aria-selected="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+.tab[aria-selected="true"] .n { color: var(--accent-fg); }
+/* Filter row: quieter than the Blocked section and the tabs. Neutral selection, small type. */
+.filters { padding-block: 8px 6px; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 12px; }
+.fgroup { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; max-width: 100%; }
+.seg { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; }
+.seg button { border-radius: 999px; padding: 2px 10px; min-height: 30px; font-size: 12px; color: var(--muted); background: none; }
+.seg button[aria-checked="true"] { background: var(--surface-2); color: var(--fg); border-color: var(--muted); font-weight: 600; }
+.sw { display: inline-flex; align-items: center; gap: 8px; border: 0; background: none; padding: 2px 4px; min-height: 30px; font-size: 12px; color: var(--muted); border-radius: 999px; }
+.sw:hover:not(:disabled) { background: none; }
+.sw .track { position: relative; flex: none; width: 30px; height: 16px; border-radius: 999px; background: var(--line); border: 1px solid var(--line); transition: background 0.12s; }
+.sw .track::after { content: ""; position: absolute; top: 1px; left: 1px; width: 12px; height: 12px; border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 1px var(--muted); transition: transform 0.12s; }
+.sw[aria-checked="true"] { color: var(--fg); }
+.sw[aria-checked="true"] .track { background: var(--muted); border-color: var(--muted); }
+.sw[aria-checked="true"] .track::after { transform: translateX(14px); }
+@media (prefers-reduced-motion: reduce) { .sw .track, .sw .track::after { transition: none; } }
+
+main.in { padding-bottom: 48px; }
+#cards { display: grid; gap: 10px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.card.done { opacity: 0.8; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tag { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 7px; border-radius: 4px; background: var(--surface-2); color: var(--muted); }
+.tag.now { background: var(--now-bg); color: var(--now); }
+.tag.soon { background: var(--soon-bg); color: var(--soon); }
+.tag.later { background: var(--later-bg); color: var(--later); }
+.tag.area { border: 1px solid var(--line); background: none; }
+.tag.good { background: var(--good-bg); color: var(--good); }
+.card h2 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; text-wrap: balance; }
+.summary { margin: 0; overflow-wrap: anywhere; max-width: 70ch; min-width: 0; }
+.rich > :first-child { margin-top: 0; }
+.rich > :last-child { margin-bottom: 0; }
+.rich p { margin: 0 0 8px; }
+.rich ul { margin: 0 0 8px; padding-left: 20px; display: grid; gap: 3px; }
+.rich h4 { margin: 10px 0 4px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.rich code { font-family: var(--mono); font-size: 0.92em; background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.rich strong { font-weight: 600; }
+details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+details .evidence { margin: 6px 0 0; padding: 8px; background: var(--surface-2); border-radius: 6px; overflow-wrap: anywhere; font-size: 12.5px; min-width: 0; }
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 4px; }
+.opt { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; min-height: 38px; }
+.opt:has(input:checked) { border-color: var(--accent); background: var(--surface-2); }
+.opt input { margin-top: 3px; accent-color: var(--accent); flex: none; }
+.opt span.t { min-width: 0; overflow-wrap: anywhere; }
+.rec { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--good); background: var(--good-bg); border-radius: 4px; padding: 0 6px; margin-left: 6px; white-space: nowrap; }
+textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; }
+.foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; min-height: 18px; }
+.empty { padding: 28px 8px; text-align: center; color: var(--muted); }
+.msg { padding: 8px 10px; border-radius: 6px; background: var(--now-bg); color: var(--now); }
+.notes { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+.notes h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.nlist { display: grid; gap: 4px; }
+.nitem { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start; padding: 6px 8px; background: var(--surface-2); border-radius: 6px; }
+.nitem span { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+@media (prefers-reduced-motion: no-preference) { .card, .opt { transition: border-color 0.12s, background 0.12s; } }
+</style>
+
+<header class="bar">
+  <div class="in">
+    <div class="row">
+      <h1 id="ttl" class="grow">Decision board</h1>
+      <span id="sync" class="small muted" aria-live="polite">Loading</span>
+      <button id="refresh" type="button" title="Reload from the database">Refresh</button>
+    </div>
+    <div class="row">
+      <div class="counts"><span>Open <b id="c-open">0</b></span><span>Unsent <b id="c-unsent">0</b></span></div>
+      <span id="lastbatch" class="small muted grow"></span>
+      <button id="send" class="primary" type="button" disabled>Send to Claude (0)</button>
+    </div>
+  </div>
+</header>
+
+<div class="in">
+  <div class="filters">
+    <div class="fgroup"><span id="l-area" class="muted">Area</span><div id="f-area" class="seg" role="radiogroup" aria-labelledby="l-area"></div></div>
+    <div class="fgroup"><span id="l-prio" class="muted">Priority</span><div id="f-prio" class="seg" role="radiogroup" aria-labelledby="l-prio"></div></div>
+    <div class="fgroup">
+      <button id="f-hide" class="sw" type="button" role="switch" aria-checked="true"><span class="track" aria-hidden="true"></span><span>Hide answered</span></button>
+      <button id="f-closed" class="sw" type="button" role="switch" aria-checked="false"><span class="track" aria-hidden="true"></span><span>Show closed</span></button>
+    </div>
+  </div>
+  <section id="blocked" class="blocked" aria-label="Blocked on you"></section>
+  <div id="tabs" class="tabs" role="tablist" aria-label="Source of the action"></div>
+</div>
+
+<main class="in">
+  <div id="msg" class="msg" hidden role="alert"></div>
+  <div id="cards"></div>
+  <div id="empty" class="empty" hidden></div>
+  <section class="notes" aria-label="New note">
+    <h3>New note</h3>
+    <textarea id="newnote" placeholder="A message to Claude that is not tied to an item. It goes out with the next batch."></textarea>
+    <div class="row"><button id="addnote" type="button">Add note</button><span id="notestate" class="small muted"></span></div>
+    <div id="nlist" class="nlist"></div>
+  </section>
+  <p id="metaline" class="small muted"></p>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var PRI = { now: 0, soon: 1, later: 2 };
+  var FKEY = "decision-board-filter-v1";
+  var db = null;
+  var items = new Map(), resp = new Map(), batches = new Map(), notes = new Map();
+  var meta = null;
+  var loaded = { items: false, responses: false, batches: false, notes: false };
+  var cards = new Map();      // itemId -> {el, ...refs}
+  var timers = new Map();     // itemId -> debounce timer
+  var inflight = new Map();   // itemId -> number of writes in flight
+  var chains = new Map();     // itemId -> promise chain
+  var sending = false, totalInflight = 0, lastSaved = "";
+  var f = { area: "", prio: "", hide: true, closed: false, tab: "all" };
+
+  function $(id) { return document.getElementById(id); }
+  function h(tag, attrs) {
+    var e = document.createElement(tag), k, v, kids = Array.prototype.slice.call(arguments, 2);
+    attrs = attrs || {};
+    for (k in attrs) {
+      v = attrs[k];
+      if (v == null || v === false) continue;
+      if (k === "class") e.className = v;
+      else if (k === "text") e.textContent = v;
+      else if (k.indexOf("on") === 0) e.addEventListener(k.slice(2), v);
+      else if (v === true) e.setAttribute(k, "");
+      else e.setAttribute(k, v);
+    }
+    kids.forEach(function (c) { if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(String(c))); });
+    return e;
+  }
+  function iso() { return new Date().toISOString(); }
+  function fmt(s) {
+    if (!s) return "";
+    try { return new Date(s).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); } catch (e) { return String(s); }
+  }
+  function safe(s) { return String(s).replace(/[^A-Za-z0-9_-]/g, "_"); }
+  function rid() { return Math.random().toString(36).slice(2, 6); }
+  function stamp() { return iso().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"); }
+
+  // per-viewer filter memory
+  try { var raw = localStorage.getItem(FKEY); if (raw) { var o = JSON.parse(raw); if (o && typeof o === "object") f = Object.assign(f, o); } } catch (e) {}
+  function saveFilter() { try { localStorage.setItem(FKEY, JSON.stringify(f)); } catch (e) {} }
+
+  function showMsg(t) { var m = $("msg"); m.textContent = t || ""; m.hidden = !t; }
+  function errText(e) { return e && (e.code || e.message) ? (e.code || "") + " " + (e.message || "") : String(e); }
+
+  // ---- derived state
+  function hasAnswer(id) { var r = resp.get(id); return !!(r && (r.choice || r.note)); }
+  function isPending(id) { return timers.has(id) || (inflight.get(id) || 0) > 0; }
+  // The tab list is one array. Regroup the tabs by topic by editing TABS and itemSource only:
+  // each TABS entry is [key, label], keep ["all", "All"] first, list every other key in the
+  // check at the top of itemSource, and map the item areas to keys in AREA_SOURCE.
+  var TABS = [["all", "All"], ["email", "Email"], ["github", "GitHub"], ["other", "Other"]];
+  var AREA_SOURCE = { gmail: "email", github: "github" };
+  function itemSource(it) {
+    if (it.source === "email" || it.source === "github" || it.source === "other") return it.source;
+    return AREA_SOURCE[it.area] || "other";
+  }
+  function inTab(it, tab) { return tab === "all" || itemSource(it) === tab; }
+  function tabCounts(list, pred) {
+    var n = {};
+    TABS.forEach(function (t) { n[t[0]] = 0; });
+    list.forEach(function (it) { if (pred(it)) TABS.forEach(function (t) { if (inTab(it, t[0])) n[t[0]]++; }); });
+    return n;
+  }
+  function visibleBase(it) {
+    var r = resp.get(it.id);
+    if (it.status === "closed" && !f.closed) return false;
+    if (f.hide && (it.status === "answered" || (r && r.sent === true && !isPending(it.id)))) return false;
+    if (f.area && it.area !== f.area) return false;
+    if (f.prio && it.priority !== f.prio) return false;
+    return true;
+  }
+  function shownByRules(it) {
+    var r = resp.get(it.id);
+    if (it.status === "closed" && !f.closed) return false;
+    if (f.hide && (it.status === "answered" || (r && r.sent === true && !isPending(it.id)))) return false;
+    return true;
+  }
+  function visible(it) { return visibleBase(it) && inTab(it, f.tab); }
+  // "Blocked on you": hide rules only, whatever tab, area or priority is selected.
+  function kindOf(it) { return it.kind === "action" ? "action" : "decision"; }
+  function blocksOf(it) { return it.blocks == null ? "" : String(it.blocks).trim(); }
+  function blockedList(sorted, shownFn) { return sorted.filter(function (it) { return shownFn(it) && blocksOf(it) !== ""; }); }
+  function sortedItems() {
+    return Array.from(items.values()).sort(function (a, b) {
+      var pa = PRI[a.priority], pb = PRI[b.priority];
+      pa = pa == null ? 9 : pa; pb = pb == null ? 9 : pb;
+      if (pa !== pb) return pa - pb;
+      if ((a.area || "") !== (b.area || "")) return (a.area || "") < (b.area || "") ? -1 : 1;
+      if ((a.created || "") !== (b.created || "")) return (a.created || "") < (b.created || "") ? -1 : 1;
+      return a.id < b.id ? -1 : 1;
+    });
+  }
+  function unsentCount() {
+    var n = 0;
+    resp.forEach(function (r) { if (r.sent === false && (r.choice || r.note)) n++; });
+    notes.forEach(function (x) { if (x.sent === false && x.text) n++; });
+    return n;
+  }
+
+  // ---- card text formatter. Escapes HTML first, then adds only the tags below.
+  // Markers: blank line = paragraph, "- " = bullet, "### " = heading, **bold**, `code`,
+  // and the labels Before, Now, Suggested, Why, Risk, Your answer followed by a colon.
+  var LABEL = /^(Before|Now|Suggested|Why|Risk|Your answer):[ \t]*(.*)$/;
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function inline(t) {
+    return t.split(/(`[^`\n]+`)/).map(function (part, i) {
+      if (i % 2) return "<code>" + part.slice(1, -1) + "</code>";
+      return part.replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>");
+    }).join("");
+  }
+  function fmtText(src) {
+    var lines = esc(src == null ? "" : src).replace(/\r\n?/g, "\n").split("\n");
+    var out = [], para = [], list = null, m;
+    function endPara() { if (para.length) { out.push("<p>" + para.join("<br>") + "</p>"); para = []; } }
+    function endList() { if (list) { out.push("<ul>" + list.join("") + "</ul>"); list = null; } }
+    lines.forEach(function (ln) {
+      if (!ln.trim()) { endPara(); endList(); return; }
+      if (ln.indexOf("- ") === 0) { endPara(); (list = list || []).push("<li>" + inline(ln.slice(2).trim()) + "</li>"); return; }
+      endList();
+      if (ln.indexOf("### ") === 0) { endPara(); out.push("<h4>" + inline(ln.slice(4).trim()) + "</h4>"); return; }
+      m = LABEL.exec(ln);
+      para.push(m ? "<strong>" + m[1] + ":</strong> " + inline(m[2]) : inline(ln));
+    });
+    endPara(); endList();
+    return out.join("");
+  }
+
+  // ---- cards
+  function buildCard(it) {
+    var c = { it: it };
+    c.pri = h("span", { class: "tag" });
+    c.area = h("span", { class: "tag area" });
+    c.state = h("span", { class: "tag" });
+    c.kind = h("span", { class: "tag" });
+    c.blocks = h("div", { class: "blocks" });
+    c.title = h("h2");
+    c.summary = h("div", { class: "summary rich" });
+    c.evBody = h("div", { class: "evidence rich" });
+    c.ev = h("details", null, h("summary", { text: "Evidence" }), c.evBody);
+    c.fs = h("fieldset", null);
+    c.ta = h("textarea", { id: "n-" + safe(it.id), placeholder: "Note or question (saved automatically)" });
+    c.save = h("span", { class: "small muted" });
+    c.src = h("span", { class: "small muted mono" });
+    c.clear = h("button", { class: "link small", type: "button", text: "Clear choice" });
+    c.el = h("article", { class: "card", id: "card-" + safe(it.id) },
+      h("div", { class: "tags" }, c.pri, c.area, c.kind, c.state, h("span", { class: "grow" }), c.src),
+      c.title, c.blocks, c.summary, c.ev, c.fs, c.ta,
+      h("div", { class: "foot" }, c.save, c.clear));
+    c.optKey = null;
+    c.ta.addEventListener("input", function () {
+      setSave(c, "Typing");
+      clearTimeout(timers.get(it.id));
+      timers.set(it.id, setTimeout(function () { timers.delete(it.id); saveResponse(c.it.id); }, 700));
+    });
+    c.ta.addEventListener("blur", function () { if (timers.has(it.id)) flushItem(it.id); });
+    c.clear.addEventListener("click", function () {
+      c.fs.querySelectorAll("input[type=radio]").forEach(function (r) { r.checked = false; });
+      flushItem(it.id, true);
+    });
+    return c;
+  }
+  function setSave(c, t) { c.save.textContent = t; }
+
+  function updateCard(c, it) {
+    c.it = it;
+    var r = resp.get(it.id);
+    c.pri.className = "tag " + (it.priority || "");
+    c.pri.textContent = it.priority || "none";
+    c.area.textContent = it.area || "";
+    c.title.textContent = it.title || it.id;
+    c.kind.textContent = kindOf(it) === "action" ? "Action" : "";
+    c.kind.hidden = kindOf(it) !== "action";
+    c.kind.className = "tag" + (kindOf(it) === "action" ? " now" : "");
+    c.blocks.textContent = blocksOf(it) ? "Blocks: " + blocksOf(it) : "";
+    c.blocks.hidden = !blocksOf(it);
+    c.summary.innerHTML = fmtText(it.summary);
+    c.evBody.innerHTML = fmtText(it.evidence);
+    c.ev.hidden = !it.evidence;
+    c.src.textContent = it.source_file ? it.source_file.split("/").slice(-1)[0] : "";
+    c.src.title = it.source_file || "";
+    var st = it.status === "closed" ? "closed" : (r && r.sent ? "sent" : (hasAnswer(it.id) ? "unsent" : (it.status === "answered" ? "answered" : "open")));
+    c.state.className = "tag" + (st === "unsent" ? " soon" : (st === "sent" || st === "answered" ? " good" : ""));
+    c.state.textContent = st;
+    c.el.classList.toggle("done", st === "sent" || st === "closed" || st === "answered");
+
+    var opts = Array.isArray(it.options) ? it.options : [];
+    var key = JSON.stringify([opts, it.recommendation]);
+    if (c.optKey !== key) {
+      c.optKey = key;
+      c.fs.textContent = "";
+      c.fs.append(h("legend", { class: "small muted", text: opts.length ? "Options" : "" }));
+      opts.forEach(function (o, i) {
+        var inp = h("input", { type: "radio", name: "opt-" + safe(it.id), value: o, id: "o-" + safe(it.id) + "-" + i });
+        inp.addEventListener("change", function () { flushItem(it.id, true); });
+        var label = h("label", { class: "opt", for: inp.id }, inp,
+          h("span", { class: "t" }, o, (it.recommendation && o === it.recommendation) ? h("span", { class: "rec", text: "recommended" }) : null));
+        c.fs.append(label);
+      });
+    }
+    c.fs.hidden = !opts.length;
+    c.clear.hidden = !opts.length;
+    if (!isPending(it.id)) {
+      var ch = r ? (r.choice || "") : "";
+      c.fs.querySelectorAll("input[type=radio]").forEach(function (inp) { inp.checked = ch !== "" && inp.value === ch; });
+      var nv = r ? (r.note || "") : "";
+      if (c.ta.value !== nv && document.activeElement !== c.ta) c.ta.value = nv;
+      if (r && r.updated) setSave(c, (r.sent ? "Sent" : "Saved") + " " + fmt(r.updated));
+      else setSave(c, "");
+    }
+  }
+
+  // ---- filter controls: segmented radio rows and switches
+  var PRIO_OPTIONS = [["", "All"], ["now", "Now"], ["soon", "Soon"], ["later", "Later"]];
+  function areaOptions(areas) { return [["", "All"]].concat(areas.map(function (a) { return [a, a]; })); }
+  function renderSeg(box, opts, cur, onPick) {
+    var key = JSON.stringify(opts);
+    if (box.getAttribute("data-key") !== key) {
+      box.setAttribute("data-key", key);
+      box.textContent = "";
+      opts.forEach(function (o) {
+        var b = h("button", { type: "button", role: "radio", "data-v": o[0], text: o[1] });
+        b.addEventListener("click", function () { onPick(o[0]); });
+        b.addEventListener("keydown", function (e) {
+          var i = Array.prototype.indexOf.call(box.children, b), n = box.children.length, d = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : (e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0);
+          if (!d) return;
+          e.preventDefault();
+          var nb = box.children[(i + d + n) % n]; nb.focus(); onPick(nb.getAttribute("data-v"));
+        });
+        box.append(b);
+      });
+    }
+    var hit = false;
+    Array.from(box.children).forEach(function (b) { if (b.getAttribute("data-v") === cur) hit = true; });
+    Array.from(box.children).forEach(function (b, i) {
+      var on = hit ? b.getAttribute("data-v") === cur : i === 0;
+      b.setAttribute("aria-checked", on ? "true" : "false");
+      b.tabIndex = on ? 0 : -1;
+    });
+  }
+  function setSwitch(b, on) { b.setAttribute("aria-checked", on ? "true" : "false"); }
+
+  function render() {
+    var list = sortedItems(), vis = list.filter(visible), cont = $("cards");
+    if (!TABS.some(function (t) { return t[0] === f.tab; })) f.tab = "all";
+    renderTabs(tabCounts(list, visibleBase));
+    renderBlocked(blockedList(list, shownByRules));
+    // area options
+    var areas = Array.from(new Set(list.map(function (i) { return i.area; }).filter(Boolean))).sort();
+    if (f.area && areas.indexOf(f.area) < 0 && loaded.items) f.area = "";
+    renderSeg($("f-area"), areaOptions(areas), f.area, function (v) { f.area = v; saveFilter(); render(); });
+    renderSeg($("f-prio"), PRIO_OPTIONS, f.prio, function (v) { f.prio = v; saveFilter(); render(); });
+    setSwitch($("f-hide"), !!f.hide); setSwitch($("f-closed"), !!f.closed);
+
+    // cards in order, touch the DOM only when the order changes
+    var want = vis.map(function (it) {
+      var c = cards.get(it.id);
+      if (!c) { c = buildCard(it); cards.set(it.id, c); }
+      updateCard(c, it);
+      return c.el;
+    });
+    var cur = Array.from(cont.children);
+    var same = cur.length === want.length && cur.every(function (e, i) { return e === want[i]; });
+    if (!same) {
+      var keep = new Set(want), focused = document.activeElement;
+      cur.forEach(function (e) { if (!keep.has(e)) e.remove(); });
+      want.forEach(function (e, i) { if (cont.children[i] !== e) cont.insertBefore(e, cont.children[i] || null); });
+      if (focused && focused !== document.activeElement && document.contains(focused)) { try { focused.focus({ preventScroll: true }); } catch (e) {} }
+    }
+    Array.from(cards.keys()).forEach(function (k) { if (!items.has(k)) cards.delete(k); });
+
+    // empty states
+    var em = $("empty");
+    if (!loaded.items) { em.hidden = false; em.textContent = "Loading items"; }
+    else if (!items.size) { em.hidden = false; em.textContent = "No items yet. Review agents add items to this board, and they appear here without a reload."; }
+    else if (!vis.length) { em.hidden = false; em.textContent = "No items match the filters. " + (f.hide ? "Answered items are hidden." : ""); }
+    else em.hidden = true;
+
+    // header
+    var open = 0;
+    items.forEach(function (it) { if (it.status === "open" && !hasAnswer(it.id)) open++; });
+    $("c-open").textContent = open;
+    $("c-unsent").textContent = unsentCount();
+    var n = unsentCount(), b = $("send");
+    b.textContent = (sending ? "Sending " : "Send to Claude ") + "(" + n + ")";
+    b.disabled = sending || n === 0 || !db;
+    var lb = Array.from(batches.values()).sort(function (a, b2) { return (b2.created || "") < (a.created || "") ? -1 : 1; })[0];
+    $("lastbatch").textContent = lb
+      ? "Last sent " + fmt(lb.created) + ", " + ((lb.itemIds || []).length + (lb.noteIds || []).length) + " in batch, " +
+        (lb.status === "delivered" ? "delivered " + fmt(lb.delivered_at) : "not delivered yet")
+      : (loaded.batches ? "Nothing sent yet" : "");
+    $("ttl").textContent = (meta && meta.title) || "Decision board";
+    $("metaline").textContent = meta && meta.updated ? "Board data updated " + fmt(meta.updated) : "";
+    renderNotes();
+    renderSync();
+  }
+  var blockedKey = null;
+  function renderBlocked(rows) {
+    var box = $("blocked");
+    var key = JSON.stringify(rows.map(function (it) { return [it.id, it.title, kindOf(it), blocksOf(it), it.priority]; }));
+    if (key === blockedKey) return;
+    blockedKey = key;
+    box.textContent = "";
+    box.append(h("h3", null, "Blocked on you", rows.length ? h("span", { class: "n", text: String(rows.length) }) : null));
+    if (!rows.length) { box.append(h("div", { class: "muted small", text: "Nothing is blocked on you." })); return; }
+    var list = h("div", { class: "blist" });
+    rows.forEach(function (it) {
+      list.append(h("button", { type: "button", class: "brow", onclick: function () { goToCard(it.id); } },
+        h("span", { class: "bt" },
+          h("span", { class: "tag" + (kindOf(it) === "action" ? " now" : ""), text: kindOf(it) === "action" ? "Action" : "Decision" }),
+          h("span", { class: "tt", text: it.title || it.id })),
+        h("span", { class: "bb", text: "Blocks: " + blocksOf(it) })));
+    });
+    box.append(list);
+  }
+  function goToCard(id) {
+    var it = items.get(id);
+    if (!it) return;
+    if (!visible(it)) { f.tab = "all"; saveFilter(); render(); }
+    if (!visible(it)) { f.area = ""; f.prio = ""; saveFilter(); render(); }
+    var c = cards.get(id);
+    if (c && c.el.isConnected) { try { c.el.scrollIntoView({ block: "start", behavior: "smooth" }); } catch (e) { c.el.scrollIntoView(); } }
+  }
+  function renderTabs(counts) {
+    var box = $("tabs");
+    if (!box.children.length) {
+      TABS.forEach(function (t) {
+        box.append(h("button", { type: "button", role: "tab", "data-tab": t[0], onclick: function () { f.tab = t[0]; saveFilter(); render(); } },
+          h("span", { text: t[1] }), h("span", { class: "n" })));
+      });
+      box.querySelectorAll("button").forEach(function (b) { b.classList.add("tab"); });
+    }
+    Array.from(box.children).forEach(function (b) {
+      var k = b.getAttribute("data-tab");
+      b.setAttribute("aria-selected", k === f.tab ? "true" : "false");
+      b.lastChild.textContent = String(counts[k] || 0);
+    });
+  }
+  function renderNotes() {
+    var box = $("nlist"); box.textContent = "";
+    Array.from(notes.values()).filter(function (x) { return x.sent === false; })
+      .sort(function (a, b) { return (a.created || "") < (b.created || "") ? -1 : 1; })
+      .forEach(function (x) {
+        box.append(h("div", { class: "nitem" }, h("span", { text: x.text }),
+          h("button", { class: "link small", type: "button", text: "Remove", onclick: function () { removeNote(x.id); } })));
+      });
+  }
+  function renderSync() {
+    var s = $("sync");
+    if (!db) s.textContent = "No database";
+    else if (totalInflight > 0 || timers.size > 0) s.textContent = "Saving";
+    else if (!(loaded.items && loaded.responses)) s.textContent = "Loading";
+    else s.textContent = lastSaved ? "Saved " + lastSaved : "Live";
+  }
+  var raf = 0;
+  function schedule() { if (!raf) raf = requestAnimationFrame(function () { raf = 0; render(); }); }
+
+  // ---- writes
+  function enqueue(key, fn) {
+    var prev = chains.get(key) || Promise.resolve();
+    var p = prev.catch(function () {}).then(fn);
+    chains.set(key, p);
+    return p;
+  }
+  function flushItem(id) {
+    if (timers.has(id)) { clearTimeout(timers.get(id)); timers.delete(id); }
+    return saveResponse(id);
+  }
+  function saveResponse(id) {
+    var c = cards.get(id);
+    if (!c || !db) return Promise.resolve();
+    var checked = c.fs.querySelector("input[type=radio]:checked");
+    var choice = checked ? checked.value : "";
+    var note = c.ta.value;
+    var existing = resp.get(id);
+    if (!choice && !note && !existing) { setSave(c, ""); return Promise.resolve(); }
+    var doc = { itemId: id, choice: choice, note: note, updated: iso(), sent: false, batch: "" };
+    inflight.set(id, (inflight.get(id) || 0) + 1); totalInflight++;
+    setSave(c, "Saving"); renderSync();
+    return enqueue(id, function () { return db.doc("responses/" + id).set(doc); }).then(function () {
+      lastSaved = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      showMsg("");
+    }, function (e) {
+      setSave(c, "Not saved: " + errText(e));
+      showMsg("A save failed: " + errText(e));
+    }).then(function () {
+      inflight.set(id, inflight.get(id) - 1); totalInflight--;
+      schedule();
+    });
+  }
+  function flushAll() {
+    var ps = [];
+    Array.from(timers.keys()).forEach(function (id) { ps.push(flushItem(id)); });
+    Array.from(chains.values()).forEach(function (p) { ps.push(p.catch(function () {})); });
+    return Promise.all(ps);
+  }
+  function addNote() {
+    var t = $("newnote").value.trim();
+    if (!t || !db) return;
+    var id = "n" + stamp() + "-" + rid();
+    $("notestate").textContent = "Saving";
+    db.doc("notes/" + id).set({ id: id, text: t, created: iso(), sent: false, batch: "" }).then(function () {
+      $("newnote").value = ""; $("notestate").textContent = "Added, goes out with the next batch";
+    }, function (e) { $("notestate").textContent = "Not saved: " + errText(e); });
+  }
+  function removeNote(id) { if (db) db.doc("notes/" + id).delete().catch(function (e) { showMsg(errText(e)); }); }
+
+  function send() {
+    if (sending || !db) return;
+    sending = true; render();
+    var bid = "b" + stamp() + "-" + rid(), marked = [], markedNotes = [], failure = null;
+    flushAll().then(function () {
+      return Promise.all([db.collection("responses").where("sent", "==", false).get(), db.collection("notes").where("sent", "==", false).get()]);
+    }).then(function (res) {
+      var rd = res[0].docs.filter(function (d) { var x = d.data(); return x.choice || x.note; }).map(function (d) { return d.id; });
+      var nd = res[1].docs.filter(function (d) { return d.data().text; }).map(function (d) { return d.id; });
+      var seq = Promise.resolve();
+      rd.forEach(function (id) { seq = seq.then(function () { return db.doc("responses/" + id).update({ sent: true, batch: bid }); }).then(function () { marked.push(id); }); });
+      nd.forEach(function (id) { seq = seq.then(function () { return db.doc("notes/" + id).update({ sent: true, batch: bid }); }).then(function () { markedNotes.push(id); }); });
+      return seq;
+    }).catch(function (e) { failure = e; }).then(function () {
+      if (!marked.length && !markedNotes.length) return null;
+      return db.doc("batches/" + bid).set({ id: bid, created: iso(), itemIds: marked, noteIds: markedNotes, status: "new", delivered_at: "" });
+    }).then(function () {
+      if (failure) showMsg("Send stopped part way: " + errText(failure) + ". Items already marked went out in batch " + bid + ".");
+      else showMsg("");
+    }, function (e) { showMsg("The batch record was not written: " + errText(e) + ". Marked items carry batch id " + bid + ". Ask Claude to repair it."); })
+    .then(function () { sending = false; schedule(); });
+  }
+
+  // ---- reads
+  function applySnap(map, snap, name) {
+    var seen = new Set();
+    snap.docs.forEach(function (d) { if (d.exists) { map.set(d.id, Object.assign({ id: d.id }, d.data())); seen.add(d.id); } });
+    Array.from(map.keys()).forEach(function (k) { if (!seen.has(k)) map.delete(k); });
+    loaded[name] = true;
+    schedule();
+  }
+  var COLS = [["items", items], ["responses", resp], ["batches", batches], ["notes", notes]];
+  function refresh() {
+    if (!db) return;
+    $("refresh").disabled = true;
+    Promise.all(COLS.map(function (c) { return db.collection(c[0]).get().then(function (s) { applySnap(c[1], s, c[0]); }); }))
+      .then(function () { return db.doc("meta/board").get(); })
+      .then(function (d) { meta = d.exists ? d.data() : null; schedule(); })
+      .catch(function (e) { showMsg("Refresh failed: " + errText(e)); })
+      .then(function () { $("refresh").disabled = false; });
+  }
+  function start(dbns) {
+    db = dbns;
+    if (!db) { showMsg("The database is not available in this view. Sign in, or open the page in claude.ai."); $("empty").textContent = "No database."; renderSync(); return; }
+    var t = setTimeout(function () { if (!(loaded.items && loaded.responses)) { $("sync").textContent = "Cannot reach the database yet"; } }, 10000);
+    COLS.forEach(function (c) {
+      db.collection(c[0]).onSnapshot(function (s) {
+        applySnap(c[1], s, c[0]);
+        if (loaded.items && loaded.responses) clearTimeout(t);
+      }, function (e) { showMsg(c[0] + ": " + errText(e)); });
+    });
+    db.doc("meta/board").onSnapshot(function (d) { meta = d.exists ? d.data() : null; schedule(); }, function () {});
+  }
+
+  // ---- wiring
+  $("f-hide").addEventListener("click", function () { f.hide = !f.hide; saveFilter(); render(); });
+  $("f-closed").addEventListener("click", function () { f.closed = !f.closed; saveFilter(); render(); });
+  $("send").addEventListener("click", send);
+  $("refresh").addEventListener("click", refresh);
+  $("addnote").addEventListener("click", addNote);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
+  window.addEventListener("focus", refresh);
+
+  render();
+  if (window.claude && window.claude.use) {
+    window.claude.use("db").then(start, function () { start(null); });
+  } else { start(null); }
+})();
+</script>

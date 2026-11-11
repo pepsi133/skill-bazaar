@@ -66,6 +66,11 @@
       "name": "korad-ka3305p",
       "source": "./skills/korad-ka3305p",
       "description": "Drive a Korad KA3305P bench power supply through the korad CLI: guard, read-back on every write, unattended limits."
+    },
+    {
+      "name": "decision-board",
+      "source": "./skills/decision-board",
+      "description": "Build and run a decision board, a private claude.ai artifact with a database, where an agent posts questions and pending actions as cards and its operator answers from a phone instead of a terminal."
     }
   ]
 }
