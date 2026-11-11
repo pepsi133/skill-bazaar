@@ -18,7 +18,7 @@ Files of this skill:
 
 - `assets/board.html`: the page. Publish it as it is, then change it only on request.
 - `assets/wait.sh`: the sleep helper for the watcher.
-- `assets/tests/`: node scripts for the pure functions of the page.
+- `assets/tests/`: node scripts for the pure functions of the page, and one optional browser check.
 - `references/data-model.md`: collections, fields, id rules, access and every literal `ArtifactData`
   call. Read it before the first database call.
 - `references/card-format.md`: the text markers of a card and one example card.
@@ -87,11 +87,28 @@ The page shows tabs above the cards. The template has All, Email, GitHub and Oth
   board: run a command, send a test message, approve a prompt, create a filter. Say exactly what to do.
 - `blocks` is a short string that names what waits for the item, for example "the nightly backup
   job". Every visible card with a non-empty `blocks` appears in the pinned "Blocked on you" section,
-  most urgent first, whatever tab or filter is selected. A tap scrolls to the card.
+  most urgent first, whatever tab or filter is selected. A tap selects the tab of the card, clears a
+  filter that hides the card, scrolls the card to just below the header, and outlines it for a moment.
 - When the work is unblocked, close the card, or remove the field with
   `"data": {"blocks": {"__delete__": true}}`.
 - An action that is pending on the operator always goes on the board, never only into a terminal
   reply, because a terminal reply scrolls away.
+
+## Guides
+
+A guide is a page of guidance, an explanation or a set of steps that the operator asked for. It is
+not a question, so it is not a card.
+
+- Write one document into the collection `guides`. The fields and the call shape are in
+  `references/data-model.md`.
+- Each guide with `status: "active"` gets its own tab after the source tabs. `title` is the tab label,
+  so keep it short. `body` uses the card format: numbered steps for a procedure, and a fenced block
+  for each exact value or command, because the block has a "Copy" button.
+- Set `item` to the id of a card to link them. The card then shows "Open guide".
+- The operator presses "Archive" when the work is done. The tab goes away, and the guide moves to
+  the list "Archived guides" at the bottom of the board, where "Reopen" brings it back. These two are
+  the only writes of the page to `guides`.
+- A guide carries no answer. Put a question onto a card.
 
 ## How answers travel
 
@@ -139,6 +156,12 @@ in a small state file, so a resumed watcher continues the count.
    keep those marker lines or update the test.
 3. Run all four tests: `for t in assets/tests/*-test.js; do node "$t"; done`. They print results for
    you to read. They assert nothing by themselves.
+   Optional: `npx -y -p playwright node assets/tests/browser-check.mjs` loads the page in headless
+   Chromium at a phone size, with a stub in place of the database. It prints PASS or FAIL for the
+   cards, the "Blocked on you" tap, a guide tab and the escaping. It needs a Chromium build
+   (`npx playwright install chromium`). If a build is already installed, pin the Playwright version
+   that matches it, for example `-p playwright@1.63.0`, and no download is necessary. Without
+   Playwright or Chromium the script prints SKIP. Give it another page file as its first argument.
 4. Republish with the same `file_path` and the artifact `url`. Omit `icon` and `capabilities` so the
    artifact keeps both. In a new session, read the artifact first, because a publish to an artifact
    that the session has not read is refused.
@@ -146,9 +169,12 @@ in a small state file, so a resumed watcher continues the count.
 
 ## Known limits
 
-- The build was never tested in a browser. The node tests cover the formatter, the tab logic, the
-  "Blocked on you" list and the filter controls, not the rendering or the database wiring. Ask the
-  operator to report what looks wrong on the first use on a phone.
+- The node tests cover the formatter, the tab logic, the "Blocked on you" list and the filter
+  controls. The optional browser check covers the rendering in headless Chromium against a stub of
+  the database. No test covers the real database, the claude.ai frame or a real phone browser. Ask
+  the operator to report what looks wrong on the first use on a phone.
+- A diagram in a card or a guide is a preformatted text block. The page passes no HTML and no SVG
+  from the database through.
 - The filter and tab state live in `localStorage`. They are per viewer and per browser. They never
   reach the database or the agent, and a private window starts empty.
 - The page declares no access rules. With the default access, signed-in viewers read, and every

@@ -22,6 +22,7 @@ link that the first publish returned.
 | `responses` | the item id | `itemId`, `choice`, `note`, `updated`, `sent`, `batch` | the page |
 | `batches` | batch id | `id`, `created`, `itemIds`, `noteIds`, `status`, `delivered_at` | the page creates; the agent sets `delivered` |
 | `notes` | note id | `id`, `text`, `created`, `sent`, `batch` | the page |
+| `guides` | guide id | `id`, `title`, `body`, `status`, `created`, `updated`, `item` | agents; the page sets only `status` and `updated` |
 | `meta` | `board` | `title`, `updated`, `counts` | agents; the page only reads it |
 
 ### Item fields
@@ -42,6 +43,17 @@ link that the first publish returned.
 | `created`, `updated` | ISO 8601 UTC, for example `2026-11-11T13:00:00Z` |
 | `source_file` | Optional: the report the item came from. The page shows its base name |
 
+### Guide fields
+
+| Field | Value |
+|---|---|
+| `id` | The doc id again, a short slug, for example `dns-setup` |
+| `title` | Short. The page shows it as the tab label |
+| `body` | Text in the card format, see `card-format.md` |
+| `status` | `active` or `archived`. An active guide has a tab. Any value other than `archived` counts as active |
+| `created`, `updated` | ISO 8601 UTC. The guide tabs are in the order of `created` |
+| `item` | Optional: the id of the card that the guide belongs to. That card shows "Open guide" while the guide is active |
+
 ### What the page writes
 
 - Response, on an option pick or 700 ms after typing stops:
@@ -52,6 +64,8 @@ link that the first publish returned.
   and only then writes `{ id, created, itemIds, noteIds, status: "new", delivered_at: "" }` at
   `batches/<bid>`. A watcher that sees a `new` batch therefore finds every response already marked. If
   the send fails part way, the page writes a batch for the documents it did mark and shows an error.
+- Guide: "Archive" writes `update({ status: "archived", updated })` at `guides/<id>`, and "Reopen" writes
+  the same shape with `status: "active"`. The page writes no other field of a guide.
 - The page never writes `items` or `meta`.
 
 ## Call shapes
@@ -80,6 +94,16 @@ Change an item: read it with `get`, then `update` with `if_version` set to the `
 ```
 
 Remove one field, for example `blocks`: `"data": {"blocks": {"__delete__": true}}`.
+
+Create a guide. Use `set` without `if_version` for a new id. To change the text later, `get` the
+guide and `update` it with `if_version`:
+
+```json
+{"action": "set", "url": "<URL>", "collection": "guides", "doc_id": "dns-setup",
+ "data": {"id": "dns-setup", "title": "DNS setup", "status": "active", "item": "ITEM_ID",
+          "body": "### Records\n1. Open the DNS panel.\n2. Add this record:\n```\nexample.org. 3600 IN TXT \"v=spf1 -all\"\n```\n3. Save the zone.",
+          "created": "2026-11-11T13:00:00Z", "updated": "2026-11-11T13:00:00Z"}}
+```
 
 List the batches that wait:
 

@@ -1,6 +1,7 @@
 # Card text format
 
-The page renders `summary` and `evidence` with a small formatter, `fmtText` in `assets/board.html`.
+The page renders `summary` and `evidence` of a card, and `body` of a guide, with a small formatter,
+`fmtText` in `assets/board.html`.
 It escapes all HTML first and then adds only the tags below. Text without markers renders as plain
 paragraphs, and a single line break inside a paragraph stays a line break.
 
@@ -8,6 +9,8 @@ paragraphs, and a single line break inside a paragraph stays a line break.
 |---|---|
 | A blank line | A new paragraph |
 | A line that starts with `- ` | A bullet. Consecutive lines form one list |
+| A line that starts with a number, a dot and a space, for example `1. ` | A numbered step. Consecutive lines form one list, which starts at the number of its first line |
+| A line that starts with three backticks, and the next such line | A preformatted block of the lines between them, with a "Copy" button. The text wraps and gets no other formatting |
 | A line that starts with `### ` | A small heading |
 | `**text**` | Bold |
 | `` `text` `` | Inline code in a monospace font that wraps |
@@ -15,7 +18,12 @@ paragraphs, and a single line break inside a paragraph stays a line break.
 
 Limits of the formatter:
 
-- No nested lists, no numbered lists, no links, no tables. A URL stays plain text.
+- No nested lists, no links, no tables, no images. A URL stays plain text.
+- A preformatted block ends a list. A numbered list that continues after the block keeps its
+  numbers, because each list starts at the number of its first line.
+- A diagram is a preformatted text block. The page passes no HTML and no SVG from the database
+  through. Keep each line of a diagram under about 40 characters, because the block wraps on a phone.
+- If the browser refuses clipboard access, the "Copy" button selects the text instead.
 - A marker inside inline code stays literal, because code is split out before bold.
 - `title` and `blocks` are plain text. Markers in them show as typed.
 

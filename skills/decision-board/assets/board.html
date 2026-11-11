@@ -97,12 +97,13 @@ button.link { border: 0; background: none; padding: 2px 4px; min-height: 0; colo
 .brow .bt span.tt { min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
 .brow .bb { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .blocks { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
-.card { scroll-margin-top: 120px; }
 .tabs { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 10px; }
 .tab { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 12px; min-height: 34px; }
 .tab .n { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
 .tab[aria-selected="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
 .tab[aria-selected="true"] .n { color: var(--accent-fg); }
+.tab.g { border-style: dashed; max-width: 100%; }
+.tab.g .tl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Filter row: quieter than the Blocked section and the tabs. Neutral selection, small type. */
 .filters { padding-block: 8px 6px; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 12px; }
 .fgroup { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; max-width: 100%; }
@@ -122,6 +123,12 @@ main.in { padding-bottom: 48px; }
 #cards { display: grid; gap: 10px; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
 .card.done { opacity: 0.8; }
+.card.flash, .guide.flash { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent); }
+.card .gopen { justify-self: start; }
+.guide { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; margin-bottom: 10px; }
+.guide[hidden], #cards[hidden] { display: none; }
+.guide h2 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.guide .gbody { overflow-wrap: anywhere; max-width: 70ch; min-width: 0; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .tag { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 7px; border-radius: 4px; background: var(--surface-2); color: var(--muted); }
 .tag.now { background: var(--now-bg); color: var(--now); }
@@ -135,6 +142,10 @@ main.in { padding-bottom: 48px; }
 .rich > :last-child { margin-bottom: 0; }
 .rich p { margin: 0 0 8px; }
 .rich ul { margin: 0 0 8px; padding-left: 20px; display: grid; gap: 3px; }
+.rich ol { margin: 0 0 8px; padding-left: 26px; display: grid; gap: 3px; }
+.rich .pre { margin: 0 0 8px; display: grid; gap: 2px; min-width: 0; }
+.rich .pre .copy { justify-self: end; font-size: 12px; padding: 2px 10px; min-height: 30px; color: var(--muted); }
+.rich pre { margin: 0; padding: 8px; font-family: var(--mono); font-size: 12.5px; line-height: 1.4; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .rich h4 { margin: 10px 0 4px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
 .rich code { font-family: var(--mono); font-size: 0.92em; background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .rich strong { font-weight: 600; }
@@ -155,7 +166,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 .nlist { display: grid; gap: 4px; }
 .nitem { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start; padding: 6px 8px; background: var(--surface-2); border-radius: 6px; }
 .nitem span { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
-@media (prefers-reduced-motion: no-preference) { .card, .opt { transition: border-color 0.12s, background 0.12s; } }
+@media (prefers-reduced-motion: no-preference) { .card, .guide, .opt { transition: border-color 0.12s, background 0.12s, box-shadow 0.3s; } }
 </style>
 
 <header class="bar">
@@ -188,6 +199,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 
 <main class="in">
   <div id="msg" class="msg" hidden role="alert"></div>
+  <section id="guide" class="guide" hidden aria-label="Guide"></section>
   <div id="cards"></div>
   <div id="empty" class="empty" hidden></div>
   <section class="notes" aria-label="New note">
@@ -196,6 +208,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     <div class="row"><button id="addnote" type="button">Add note</button><span id="notestate" class="small muted"></span></div>
     <div id="nlist" class="nlist"></div>
   </section>
+  <section id="archived" class="notes" hidden aria-label="Archived guides"></section>
   <p id="metaline" class="small muted"></p>
 </main>
 
@@ -205,9 +218,9 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   var PRI = { now: 0, soon: 1, later: 2 };
   var FKEY = "decision-board-filter-v1";
   var db = null;
-  var items = new Map(), resp = new Map(), batches = new Map(), notes = new Map();
+  var items = new Map(), resp = new Map(), batches = new Map(), notes = new Map(), guides = new Map();
   var meta = null;
-  var loaded = { items: false, responses: false, batches: false, notes: false };
+  var loaded = { items: false, responses: false, batches: false, notes: false, guides: false };
   var cards = new Map();      // itemId -> {el, ...refs}
   var timers = new Map();     // itemId -> debounce timer
   var inflight = new Map();   // itemId -> number of writes in flight
@@ -266,6 +279,18 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     list.forEach(function (it) { if (pred(it)) TABS.forEach(function (t) { if (inTab(it, t[0])) n[t[0]]++; }); });
     return n;
   }
+  // Guides: every guide that is not archived is one more tab after the source tabs.
+  // The tab key of a guide is "guide:" + id. A status other than "archived" counts as active.
+  function guideKey(g) { return "guide:" + g.id; }
+  function isGuideTab(tab) { return String(tab).indexOf("guide:") === 0; }
+  function guideList(list, archived) {
+    return list.filter(function (g) { return (g.status === "archived") === archived; }).sort(function (a, b) {
+      if ((a.created || "") !== (b.created || "")) return (a.created || "") < (b.created || "") ? -1 : 1;
+      return a.id < b.id ? -1 : 1;
+    });
+  }
+  function guideOfTab(list, tab) { return guideList(list, false).filter(function (g) { return guideKey(g) === tab; })[0] || null; }
+  function guideForItem(list, itemId) { return guideList(list, false).filter(function (g) { return g.item === itemId; })[0] || null; }
   function visibleBase(it) {
     var r = resp.get(it.id);
     if (it.status === "closed" && !f.closed) return false;
@@ -303,7 +328,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   }
 
   // ---- card text formatter. Escapes HTML first, then adds only the tags below.
-  // Markers: blank line = paragraph, "- " = bullet, "### " = heading, **bold**, `code`,
+  // Markers: blank line = paragraph, "- " = bullet, "1. " = numbered step, "### " = heading,
+  // **bold**, `code`, a fence of three backticks = preformatted block with a copy button,
   // and the labels Before, Now, Suggested, Why, Risk, Your answer followed by a colon.
   var LABEL = /^(Before|Now|Suggested|Why|Risk|Your answer):[ \t]*(.*)$/;
   function esc(s) {
@@ -317,18 +343,29 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   }
   function fmtText(src) {
     var lines = esc(src == null ? "" : src).replace(/\r\n?/g, "\n").split("\n");
-    var out = [], para = [], list = null, m;
+    var out = [], para = [], list = null, fence = null, m;
     function endPara() { if (para.length) { out.push("<p>" + para.join("<br>") + "</p>"); para = []; } }
-    function endList() { if (list) { out.push("<ul>" + list.join("") + "</ul>"); list = null; } }
+    function endList() { if (list) { out.push("<" + list.tag + list.attr + ">" + list.rows.join("") + "</" + list.tag + ">"); list = null; } }
+    function endFence() { if (fence) { out.push('<div class="pre"><button type="button" class="copy">Copy</button><pre>' + fence.join("\n") + "</pre></div>"); fence = null; } }
+    function row(tag, attr, html) {
+      endPara();
+      if (list && list.tag !== tag) endList();
+      list = list || { tag: tag, attr: attr, rows: [] };
+      list.rows.push("<li>" + html + "</li>");
+    }
     lines.forEach(function (ln) {
+      if (/^\s*```/.test(ln)) { if (fence) endFence(); else { endPara(); endList(); fence = []; } return; }
+      if (fence) { fence.push(ln); return; }
       if (!ln.trim()) { endPara(); endList(); return; }
-      if (ln.indexOf("- ") === 0) { endPara(); (list = list || []).push("<li>" + inline(ln.slice(2).trim()) + "</li>"); return; }
+      if (ln.indexOf("- ") === 0) { row("ul", "", inline(ln.slice(2).trim())); return; }
+      m = /^(\d{1,9})\. +(.*)$/.exec(ln);
+      if (m) { row("ol", ' start="' + m[1] + '"', inline(m[2].trim())); return; }
       endList();
       if (ln.indexOf("### ") === 0) { endPara(); out.push("<h4>" + inline(ln.slice(4).trim()) + "</h4>"); return; }
       m = LABEL.exec(ln);
       para.push(m ? "<strong>" + m[1] + ":</strong> " + inline(m[2]) : inline(ln));
     });
-    endPara(); endList();
+    endPara(); endList(); endFence();
     return out.join("");
   }
 
@@ -349,9 +386,11 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.save = h("span", { class: "small muted" });
     c.src = h("span", { class: "small muted mono" });
     c.clear = h("button", { class: "link small", type: "button", text: "Clear choice" });
+    c.guide = h("button", { class: "link small gopen", type: "button", text: "Open guide", hidden: true });
+    c.guide.addEventListener("click", function () { var g = guideForItem(Array.from(guides.values()), it.id); if (g) openGuide(g.id); });
     c.el = h("article", { class: "card", id: "card-" + safe(it.id) },
       h("div", { class: "tags" }, c.pri, c.area, c.kind, c.state, h("span", { class: "grow" }), c.src),
-      c.title, c.blocks, c.summary, c.ev, c.fs, c.ta,
+      c.title, c.blocks, c.guide, c.summary, c.ev, c.fs, c.ta,
       h("div", { class: "foot" }, c.save, c.clear));
     c.optKey = null;
     c.ta.addEventListener("input", function () {
@@ -380,8 +419,12 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.kind.className = "tag" + (kindOf(it) === "action" ? " now" : "");
     c.blocks.textContent = blocksOf(it) ? "Blocks: " + blocksOf(it) : "";
     c.blocks.hidden = !blocksOf(it);
-    c.summary.innerHTML = fmtText(it.summary);
-    c.evBody.innerHTML = fmtText(it.evidence);
+    // fmtText escapes the text. Write the HTML only when the text changed, so that a "Copied" label and a selection stay.
+    var rich = JSON.stringify([it.summary, it.evidence]);
+    if (c.rich !== rich) { c.rich = rich; c.summary.innerHTML = fmtText(it.summary); c.evBody.innerHTML = fmtText(it.evidence); }
+    var cg = guideForItem(Array.from(guides.values()), it.id);
+    c.guide.hidden = !cg;
+    c.guide.title = cg ? (cg.title || cg.id) : "";
     c.ev.hidden = !it.evidence;
     c.src.textContent = it.source_file ? it.source_file.split("/").slice(-1)[0] : "";
     c.src.title = it.source_file || "";
@@ -447,9 +490,15 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function setSwitch(b, on) { b.setAttribute("aria-checked", on ? "true" : "false"); }
 
   function render() {
+    var glist = Array.from(guides.values());
+    // A guide tab stays selected while the guides load. An unknown tab falls back to All.
+    if (isGuideTab(f.tab) ? (loaded.guides && !guideOfTab(glist, f.tab)) : !TABS.some(function (t) { return t[0] === f.tab; })) f.tab = "all";
+    var guide = guideOfTab(glist, f.tab);
     var list = sortedItems(), vis = list.filter(visible), cont = $("cards");
-    if (!TABS.some(function (t) { return t[0] === f.tab; })) f.tab = "all";
-    renderTabs(tabCounts(list, visibleBase));
+    renderTabs(tabCounts(list, visibleBase), guideList(glist, false));
+    renderGuide(guide);
+    renderArchived(guideList(glist, true));
+    cont.hidden = isGuideTab(f.tab);
     renderBlocked(blockedList(list, shownByRules));
     // area options
     var areas = Array.from(new Set(list.map(function (i) { return i.area; }).filter(Boolean))).sort();
@@ -477,7 +526,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 
     // empty states
     var em = $("empty");
-    if (!loaded.items) { em.hidden = false; em.textContent = "Loading items"; }
+    if (isGuideTab(f.tab)) { em.hidden = !!guide; em.textContent = "Loading the guide"; }
+    else if (!loaded.items) { em.hidden = false; em.textContent = "Loading items"; }
     else if (!items.size) { em.hidden = false; em.textContent = "No items yet. Review agents add items to this board, and they appear here without a reload."; }
     else if (!vis.length) { em.hidden = false; em.textContent = "No items match the filters. " + (f.hide ? "Answered items are hidden." : ""); }
     else em.hidden = true;
@@ -519,28 +569,115 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     });
     box.append(list);
   }
+  // A tap on a "Blocked on you" entry: select the tab of the card, clear every filter that
+  // hides it, render, and only then scroll.
   function goToCard(id) {
     var it = items.get(id);
     if (!it) return;
-    if (!visible(it)) { f.tab = "all"; saveFilter(); render(); }
-    if (!visible(it)) { f.area = ""; f.prio = ""; saveFilter(); render(); }
+    if (!visible(it)) {
+      if (!inTab(it, f.tab)) f.tab = itemSource(it);
+      if (!visible(it)) { f.area = ""; f.prio = ""; }
+      if (!visible(it)) { f.hide = false; if (it.status === "closed") f.closed = true; }
+      saveFilter();
+    }
+    render();
     var c = cards.get(id);
-    if (c && c.el.isConnected) { try { c.el.scrollIntoView({ block: "start", behavior: "smooth" }); } catch (e) { c.el.scrollIntoView(); } }
+    if (c && c.el.isConnected) bringIntoView(c.el, true);
   }
-  function renderTabs(counts) {
-    var box = $("tabs");
-    if (!box.children.length) {
-      TABS.forEach(function (t) {
-        box.append(h("button", { type: "button", role: "tab", "data-tab": t[0], onclick: function () { f.tab = t[0]; saveFilter(); render(); } },
-          h("span", { text: t[1] }), h("span", { class: "n" })));
-      });
-      box.querySelectorAll("button").forEach(function (b) { b.classList.add("tab"); });
+  // Scroll an element to just below the sticky header. The header height changes with the
+  // width of the screen and the text in it, so measure it at the time of the tap.
+  var viewTimer = 0, flashTimer = 0;
+  function bringIntoView(el, flash) {
+    var hd = document.querySelector("header.bar");
+    var need = (hd ? (parseFloat(getComputedStyle(hd).top) || 0) + hd.getBoundingClientRect().height : 0) + 8;
+    var smooth = !(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    function go(how) { try { el.scrollIntoView({ block: "start", behavior: how }); } catch (e) { el.scrollIntoView(); } }
+    el.style.scrollMarginTop = need + "px";
+    go(smooth ? "smooth" : "auto");
+    // A smooth scroll can stop early. Look once, and jump if the element is still out of place.
+    // A touch or a wheel turn in between means that the viewer scrolls, so leave the view alone.
+    clearTimeout(viewTimer);
+    function stop() { clearTimeout(viewTimer); }
+    viewTimer = setTimeout(function () {
+      window.removeEventListener("touchstart", stop); window.removeEventListener("wheel", stop);
+      var top = el.isConnected ? el.getBoundingClientRect().top : need;
+      if (top < need - 10 || top > need + 40) go("auto");
+    }, 700);
+    window.addEventListener("touchstart", stop, { once: true, passive: true });
+    window.addEventListener("wheel", stop, { once: true, passive: true });
+    if (flash) {
+      document.querySelectorAll(".flash").forEach(function (e) { e.classList.remove("flash"); });
+      el.classList.add("flash");
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(function () { el.classList.remove("flash"); }, 1800);
+    }
+  }
+  var tabsKey = null;
+  function tabButton(key, label, isGuide) {
+    return h("button", { type: "button", role: "tab", class: "tab" + (isGuide ? " g" : ""), "data-tab": key, onclick: function () { f.tab = key; saveFilter(); render(); } },
+      h("span", { class: "tl", text: label }), isGuide ? null : h("span", { class: "n" }));
+  }
+  function renderTabs(counts, gl) {
+    var box = $("tabs"), key = JSON.stringify(gl.map(function (g) { return [g.id, g.title]; }));
+    if (key !== tabsKey) {
+      tabsKey = key;
+      box.textContent = "";
+      TABS.forEach(function (t) { box.append(tabButton(t[0], t[1], false)); });
+      gl.forEach(function (g) { box.append(tabButton(guideKey(g), g.title || g.id, true)); });
     }
     Array.from(box.children).forEach(function (b) {
-      var k = b.getAttribute("data-tab");
+      var k = b.getAttribute("data-tab"), n = b.querySelector(".n");
       b.setAttribute("aria-selected", k === f.tab ? "true" : "false");
-      b.lastChild.textContent = String(counts[k] || 0);
+      if (n) n.textContent = String(counts[k] || 0);
     });
+  }
+  // ---- guides. The body goes through fmtText, which escapes it first.
+  var guideShown = null, archivedKey = null;
+  function renderGuide(g) {
+    var box = $("guide");
+    box.hidden = !g;
+    if (!g) { guideShown = null; return; }
+    var hasCard = !!(g.item && items.has(g.item));
+    var key = JSON.stringify([g.id, g.title, g.body, g.updated, g.item, hasCard]);
+    if (key === guideShown) return;
+    guideShown = key;
+    var body = h("div", { class: "rich gbody" });
+    body.innerHTML = fmtText(g.body);
+    box.textContent = "";
+    box.append(
+      h("div", { class: "tags" }, h("span", { class: "tag", text: "Guide" }), h("span", { class: "grow" }),
+        h("span", { class: "small muted", text: g.updated ? "Updated " + fmt(g.updated) : "" })),
+      h("h2", { text: g.title || g.id }), body,
+      h("div", { class: "foot" },
+        hasCard ? h("button", { class: "link small gcard", type: "button", text: "Go to the card", onclick: function () { goToCard(g.item); } }) : h("span"),
+        h("button", { class: "garchive", type: "button", text: "Archive", onclick: function () { setGuideStatus(g.id, "archived"); } })));
+  }
+  function renderArchived(gl) {
+    var box = $("archived"), key = JSON.stringify(gl.map(function (g) { return [g.id, g.title]; }));
+    box.hidden = !gl.length;
+    if (key === archivedKey) return;
+    archivedKey = key;
+    box.textContent = "";
+    box.append(h("h3", { text: "Archived guides" }));
+    gl.forEach(function (g) {
+      box.append(h("div", { class: "nitem arow" }, h("span", { text: g.title || g.id }),
+        h("button", { class: "link small greopen", type: "button", text: "Reopen", onclick: function () { setGuideStatus(g.id, "active"); } })));
+    });
+  }
+  function openGuide(id) {
+    f.tab = "guide:" + id; saveFilter(); render();
+    if (!$("guide").hidden) bringIntoView($("guide"), false);
+  }
+  // The one write of the page to "guides": the status and the time of the change.
+  function setGuideStatus(id, status) {
+    if (!db) return;
+    var now = iso();
+    db.doc("guides/" + id).update({ status: status, updated: now }).then(function () {
+      var g = guides.get(id);
+      if (g) { g.status = status; g.updated = now; }
+      showMsg("");
+      if (status === "active") openGuide(id); else { saveFilter(); render(); }
+    }, function (e) { showMsg("The guide was not saved: " + errText(e)); });
   }
   function renderNotes() {
     var box = $("nlist"); box.textContent = "";
@@ -642,7 +779,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     loaded[name] = true;
     schedule();
   }
-  var COLS = [["items", items], ["responses", resp], ["batches", batches], ["notes", notes]];
+  var COLS = [["items", items], ["responses", resp], ["batches", batches], ["notes", notes], ["guides", guides]];
   function refresh() {
     if (!db) return;
     $("refresh").disabled = true;
@@ -671,6 +808,25 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   $("send").addEventListener("click", send);
   $("refresh").addEventListener("click", refresh);
   $("addnote").addEventListener("click", addNote);
+  // Copy button of a preformatted block. If the clipboard is closed, select the text instead.
+  document.addEventListener("click", function (e) {
+    var b = e.target && e.target.closest ? e.target.closest("button.copy") : null;
+    var pre = b ? b.parentNode.querySelector("pre") : null;
+    if (!pre) return;
+    function done(ok) { b.textContent = ok ? "Copied" : "Selected. Copy it by hand"; setTimeout(function () { b.textContent = "Copy"; }, 1800); }
+    function bySelection() {
+      var ok = false;
+      try {
+        var r = document.createRange(), sel = window.getSelection();
+        r.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(r);
+        ok = document.execCommand("copy");
+        if (ok) sel.removeAllRanges();
+      } catch (err) {}
+      done(ok);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(pre.textContent).then(function () { done(true); }, bySelection);
+    else bySelection();
+  });
   document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
   window.addEventListener("focus", refresh);
 
