@@ -262,7 +262,9 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function iso() { return new Date().toISOString(); }
   function fmt(s) {
     if (!s) return "";
-    try { return new Date(s).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); } catch (e) { return String(s); }
+    var d = new Date(s);
+    if (isNaN(d.getTime())) return "";
+    try { return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; }
   }
   function rid() { return Math.random().toString(36).slice(2, 6); }
   function stamp() { return iso().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"); }
@@ -284,7 +286,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // objects, m:<kind> map from an id to an object.
   var SCHEMA = {
     max: { list: 50, options: 8, s: 300, t: 20000, g: 200000 },
-    idRe: /^[A-Za-z0-9_\-.~:@+]{1,100}$/,
+    idRe: /^(?!\.\.?$)[A-Za-z0-9_\-.~:@+]{1,100}$/,
     item: { id: "s", area: "s", title: "s", summary: "t", evidence: "t", options: "L", recommendation: "s", priority: "s",
       source: "s", from: "s", rev: "r", kind: "s", blocks: "s", status: "s", created: "s", updated: "s", source_file: "s",
       supersedes: "s", after: "s" },
@@ -332,12 +334,15 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     return out;
   }
   // The strict check of the scripts: the problems of one document, as short texts.
-  function problems(kind, raw) {
+  // qk quotes a field name or map key that came from the database; the default leaves it as it is.
+  function problems(kind, raw, qk) {
     var spec = SCHEMA[kind], M = SCHEMA.max, out = [];
+    qk = qk || String;
     if (!isObj(raw)) return ["not an object"];
-    Object.keys(raw).forEach(function (k) {
-      if (!own(spec, k)) { out.push(k + ": unknown field"); return; }
-      var t = spec[k].split(":"), c = t[0], v = raw[k];
+    Object.keys(raw).forEach(function (key) {
+      var k = qk(key);
+      if (!own(spec, key)) { out.push(k + ": unknown field"); return; }
+      var t = spec[key].split(":"), c = t[0], v = raw[key];
       if ("stgS".indexOf(c) >= 0) {
         var lim = M[c === "S" ? "s" : c];
         if (typeof v !== "string") out.push(k + ": not text"); else if (v.length > lim) out.push(k + ": longer than " + lim);
@@ -347,10 +352,10 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       else if (c === "b") { if (typeof v !== "boolean") out.push(k + ": not true or false"); }
       else if (c === "a") {
         if (!Array.isArray(v)) out.push(k + ": not a list");
-        else v.forEach(function (x, i) { problems(t[1], x).forEach(function (p) { out.push(k + "[" + i + "]." + p); }); });
+        else v.forEach(function (x, i) { problems(t[1], x, qk).forEach(function (p) { out.push(k + "[" + i + "]." + p); }); });
       } else if (c === "m") {
         if (!isObj(v)) out.push(k + ": not an object");
-        else Object.keys(v).forEach(function (x) { problems(t[1], v[x]).forEach(function (p) { out.push(k + "." + x + "." + p); }); });
+        else Object.keys(v).forEach(function (x) { problems(t[1], v[x], qk).forEach(function (p) { out.push(k + "." + qk(x) + "." + p); }); });
       }
     });
     return out;
@@ -412,9 +417,10 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     var l = strs(cfgList(g("labels"))).map(function (x) { return x.trim(); }).filter(Boolean);
     out.labels = l.length ? l : DEFAULTS.labels;
     out.labelRe = labelRe(out.labels.map(esc));
-    // Hosts that a reference guide can load from, by https: only. A host matches itself and its subdomains.
+    // Hosts that a reference guide can load from, by https: only. A host matches itself and its subdomains,
+    // on any port. A host needs at least two labels, so "invalid" or "com" cannot open a whole top-level domain.
     out.domains = strs(cfgList(g("domains"))).map(function (x) { return x.trim().toLowerCase(); })
-      .filter(function (x) { return /^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(x) && x.length <= 253; });
+      .filter(function (x) { return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(x) && x.length <= 253; });
     return out;
   }
   var cfg = normConfig(null);
@@ -610,7 +616,9 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 
   // ---- reference guides: HTML and inline SVG through allowlists. The parse happens in an inert
   // document, so nothing runs or loads. An element outside the list goes with its content. An
-  // attribute outside the list goes, and so does every attribute value with a backslash or "/*".
+  // attribute outside the list goes, and so does every attribute value with a backslash or "/*", and
+  // every value of a presentation attribute with a function other than url(), rgb(), rgba(), hsl() or hsla()
+  // (transform and gradienttransform also allow matrix, translate, scale, rotate, skewX and skewY).
   // A url() stays only for a #id in the guide or an https: host on the config list domains.
   // A style keeps only the listed CSS properties, with plain values. Ids get the prefix "ref-".
   function set(s) { var o = Object.create(null); s.split(" ").forEach(function (k) { o[k] = true; }); return o; }
@@ -620,6 +628,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     "viewbox xmlns preserveaspectratio d x y x1 y1 x2 y2 cx cy r rx ry dx dy fx fy points fill fill-opacity fill-rule stroke stroke-width stroke-opacity stroke-dasharray " +
     "stroke-dashoffset stroke-linecap stroke-linejoin opacity transform text-anchor dominant-baseline font-size font-family font-weight font-style letter-spacing " +
     "markerwidth markerheight markerunits refx refy orient offset stop-color stop-opacity gradientunits gradienttransform clippathunits");
+  // Text attributes: their value is shown or read as text, never painted or loaded.
+  var TEXT_ATTRS = set("id class title lang dir role aria-label");
   // No position, z-index, pointer-events, opacity, inset, top, left, right, bottom or transform: a guide cannot cover the page.
   var CSS_PROPS = set("color background-color border border-color border-style border-width border-radius border-collapse margin padding " +
     "width height max-width min-width font-size font-weight font-style text-align text-decoration vertical-align white-space line-height fill stroke stroke-width display");
@@ -668,7 +678,11 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
         Array.prototype.slice.call(n.attributes).forEach(function (a) {
           var name = a.name.toLowerCase(), v = a.value, frag = v.trim().charAt(0) === "#", link = name === "href" || name === "xlink:href";
           var u = name === "style" || link ? null : checkUrls(v);
-          var keep = !!REF_ATTRS[name] && v.indexOf("\\") < 0 && (name === "style" || link || !!u);
+          // In a presentation attribute the only functions are url() (checked above), rgb(), rgba(), hsl() and hsla(),
+          // and in transform and gradienttransform also the SVG transform functions. A text attribute loads nothing, so "(" stays.
+          var fns = name === "transform" || name === "gradienttransform" ? /\b(rgba?|hsla?|matrix|translate|scale|rotate|skewx|skewy)\(/gi : /\b(rgba?|hsla?)\(/gi;
+          var fnOk = !!u && (TEXT_ATTRS[name] || u.rest.replace(fns, "").indexOf("(") < 0);
+          var keep = !!REF_ATTRS[name] && v.indexOf("\\") < 0 && (name === "style" || link || fnOk);
           if (keep && link) keep = tag === "a" ? okUrl(v) : frag || listedUrl(v.trim());
           if (!keep) { n.removeAttribute(a.name); return; }
           if (name === "id") n.setAttribute(a.name, "ref-" + v.trim());
@@ -889,9 +903,10 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     b.disabled = sending || n === 0 || !ready();
     var lb = Array.from(batches.values()).sort(function (a, b2) { return b2.created < a.created ? -1 : 1; })[0];
     var ack = lb ? acks.get(lb.id) : null;
+    var sentAt = lb ? fmt(lb.created) : "", doneAt = lb ? fmt(ack ? ack.at : lb.delivered_at) : "";
     $("lastbatch").textContent = lb
-      ? "Last sent " + fmt(lb.created) + ", " + (lb.itemIds.length + lb.noteIds.length) + " in batch" +
-        (lb["for"] ? " for " + lb["for"] : "") + ", " + (isHandled(lb, acks) ? "handled " + fmt(ack ? ack.at : lb.delivered_at) : "not handled yet")
+      ? "Last sent" + (sentAt ? " " + sentAt : "") + ", " + (lb.itemIds.length + lb.noteIds.length) + " in batch" +
+        (lb["for"] ? " for " + lb["for"] : "") + ", " + (isHandled(lb, acks) ? "handled" + (doneAt ? " " + doneAt : "") : "not handled yet")
       : (loaded.batches ? "Nothing sent yet" : "");
     $("ttl").textContent = boardTitle(meta);
     document.title = boardTitle(meta);
@@ -996,13 +1011,13 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     if (!g) { guideShown = null; return; }
     var kind = guideKind(g), hasCard = !!(g.item && items.has(g.item)), changed = guideChanged(g, seen);
     if (kind === "status" && g.updated && seen[g.id] !== g.updated) { seen[g.id] = g.updated; saveSeen(); }
-    var key = JSON.stringify([g, hasCard, cfg.labels, changed]);
+    var key = JSON.stringify([g, hasCard, cfg.labels, cfg.domains, changed]);
     if (key === guideShown) return;
     guideShown = key;
     box.textContent = "";
     box.append(h("div", { class: "tags" }, h("span", { class: "tag", text: kind === "reference" ? "Reference" : (kind === "status" ? "Status" : "Guide") }),
         changed ? h("span", { class: "tag soon", text: "changed since you looked" }) : null, h("span", { class: "grow" }),
-        h("span", { class: "small muted", text: g.updated ? "Updated " + fmt(g.updated) : "" })),
+        h("span", { class: "small muted", text: fmt(g.updated) ? "Updated " + fmt(g.updated) : "" })),
       h("h2", { text: g.title || g.id }));
     guideSections(g).forEach(function (s) {
       var body = h("div", { class: "rich gbody" + (kind === "reference" ? " ref" : "") });
@@ -1010,7 +1025,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       else body.innerHTML = fmtText(s.body);
       box.append(h("section", { class: "gsec" },
         s.title ? h("h3", { text: s.title }) : null,
-        s.updated ? h("span", { class: "small muted", text: "updated " + fmt(s.updated) }) : null, body));
+        fmt(s.updated) ? h("span", { class: "small muted", text: "updated " + fmt(s.updated) }) : null, body));
     });
     box.append(h("div", { class: "foot" },
       hasCard ? h("button", { class: "link small gcard", type: "button", text: "Go to the card", onclick: function () { goToCard(g.item); } }) : h("span"),

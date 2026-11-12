@@ -52,8 +52,32 @@ function parseArgs(argv) {
 }
 const one = (a, k) => (a[k] && a[k].length ? a[k][a[k].length - 1] : "");
 
-// ---- dumps: <dir>/<collection>/<doc id>.json. A file holds {data, version} or the fields with "version" beside them.
-function readDump(dir) {
+// ---- dumps: <dir>/<collection>/<doc id>.json. A file holds {version, data} (and maybe id), or the fields with
+// "version" beside them. Parsed data is copied key by key into a fresh object, never merged, so a key
+// such as "__proto__" cannot change a prototype.
+const UNSAFE = new Set(["__proto__", "constructor", "prototype"]);
+const isPlain = (x) => !!x && typeof x === "object" && !Array.isArray(x) && [Object.prototype, null].includes(Object.getPrototypeOf(x));
+function ownCopy(o, keepUnsafe) {
+  const out = {};
+  for (const k of Object.keys(o)) {
+    if (!UNSAFE.has(k)) out[k] = o[k];
+    else if (keepUnsafe) Object.defineProperty(out, k, { value: o[k], enumerable: true, writable: true, configurable: true });
+  }
+  return out;
+}
+// Wrapped: exactly version and an object data, maybe id. Version and an object data beside other keys is no known shape.
+function isWrapped(raw, file) {
+  if (!isPlain(raw) || !isPlain(raw.data) || !Object.prototype.hasOwnProperty.call(raw, "version")) return false;
+  if (Object.keys(raw).every((k) => k === "version" || k === "data" || k === "id")) return true;
+  fail("unknown dump shape: " + file + " holds version and data beside other keys. Dump the board again");
+}
+// The version of a dumped document that a write pins. A missing or broken version stops the command.
+function pin(collection, id, ex) {
+  if (!ex) return undefined;
+  if (!Number.isInteger(ex.version) || ex.version < 1) fail(`${collection}/${id}: the dump has no whole-number version. Dump the board again; write nothing until then`);
+  return ex.version;
+}
+export function readDump(dir) {
   if (!dir) fail("--dump <dir> is required");
   if (!fs.existsSync(dir)) fail("no dump directory: " + dir);
   const cols = new Map();
@@ -64,9 +88,8 @@ function readDump(dir) {
     for (const f of fs.readdirSync(sub).filter((x) => x.endsWith(".json"))) {
       let raw;
       try { raw = JSON.parse(fs.readFileSync(path.join(sub, f), "utf8")); } catch (e) { fail("cannot read " + path.join(sub, f) + ": " + e.message); }
-      const wrapped = raw && typeof raw.data === "object" && raw.data && !Array.isArray(raw.data);
-      const data = wrapped ? raw.data : Object.assign({}, raw);
-      const version = raw && raw.version !== undefined ? Number(raw.version) : undefined;
+      const wrapped = isWrapped(raw, path.join(sub, f)), data = wrapped ? ownCopy(raw.data) : isPlain(raw) ? ownCopy(raw) : {};
+      const version = isPlain(raw) ? raw.version : undefined;
       if (!wrapped) delete data.version;
       docs.set(f.slice(0, -5), { data, version, raw });
     }
@@ -87,14 +110,21 @@ class Writes {
     fs.writeFileSync(f, JSON.stringify(data, null, 1) + "\n");
     return f;
   }
-  put(op, collection, id, data, version) {
-    const w = { op, collection, doc_id: id };
-    if (data) w.file_path = this.file(collection, id, data);
+  // ex is the dumped document, or undefined for a new one.
+  put(op, collection, id, data, ex) {
+    const version = pin(collection, id, ex), w = { op, collection, doc_id: id };
     if (version !== undefined) w.if_version = version;
     w.size = data ? JSON.stringify(data).length : 0;
-    this.list.push(w);
+    this.list.push({ w, data });
   }
+  // The files go to disk only here, so a command that stops writes nothing.
   print(log) {
+    this.list = this.list.map(({ w, data }) => {
+      const { if_version, ...out } = w;
+      if (data) out.file_path = this.file(w.collection, w.doc_id, data);
+      if (if_version !== undefined) out.if_version = if_version;
+      return out;
+    });
     const chunks = [];
     let cur = [], bytes = 0;
     for (const w of this.list) {
@@ -130,12 +160,12 @@ function parseCardFile(file) {
   try { v = JSON.parse(text); } catch (e) { fail(file + ": the cards are not valid JSON: " + e.message); }
   return Array.isArray(v) ? v : [v];
 }
-function cardProblems(c, i, ids) {
-  const name = c && typeof c.id === "string" && c.id ? c.id : "#" + (i + 1), out = [];
+function cardProblems(c, name, ids, qk) {
+  const out = [];
   if (!P.isObj(c)) return [name + ": not an object"];
-  const body = Object.assign({}, c);
+  const body = ownCopy(c, true);
   MANAGED.forEach((k) => delete body[k]);
-  out.push(...P.problems("item", body));
+  out.push(...P.problems("item", body, qk));
   if (typeof c.id !== "string" || !S.idRe.test(c.id)) out.push("id: use 1 to 100 of A-Z a-z 0-9 _ - . ~ : @ +");
   else if (ids.has(c.id)) out.push("id: twice in this file");
   if (typeof c.title !== "string" || !c.title.trim()) out.push("title: missing");
@@ -144,6 +174,7 @@ function cardProblems(c, i, ids) {
   if (c.status !== undefined && !S.statuses.includes(c.status)) out.push("status: not one of " + S.statuses.join(", "));
   if (Array.isArray(c.options)) {
     if (c.options.length > S.max.options) out.push("options: more than " + S.max.options);
+    else if (c.options.length < 2 && (c.kind === undefined ? P.cfg.kinds[0].id : c.kind) === "decision") out.push("options: a decision card needs 2 to " + S.max.options);
     if (new Set(c.options).size !== c.options.length || c.options.some((o) => typeof o === "string" && !o.trim())) out.push("options: empty or repeated");
   }
   if (typeof c.recommendation === "string" && c.recommendation && !P.optionsOf(P.coerce("item", c)).includes(c.recommendation)) out.push("recommendation: not one of the options");
@@ -154,7 +185,7 @@ function cmdCards(a, log) {
   const file = a._[1];
   if (!file) fail("cards: name the card file");
   const dump = readDump(one(a, "dump")), items = dump.col("items"), cards = parseCardFile(file), ids = new Set(), errs = [];
-  cards.forEach((c, i) => { errs.push(...cardProblems(c, i, ids)); if (c && typeof c.id === "string") ids.add(c.id); });
+  cards.forEach((c, i) => { errs.push(...cardProblems(c, c && typeof c.id === "string" && c.id ? c.id : "#" + (i + 1), ids)); if (c && typeof c.id === "string") ids.add(c.id); });
   if (errs.length) fail(errs);
   const w = new Writes(dump), t = now(), n = { new: 0, rev: 0, changed: 0, same: 0, replaced: 0 };
   const defPri = P.cfg.priorities[Math.min(1, P.cfg.priorities.length - 1)].id;
@@ -169,11 +200,11 @@ function cmdCards(a, log) {
     doc.rev = old ? old.rev + (content ? 1 : 0) : 1;
     doc.created = (old && old.created) || t;
     doc.updated = t;
-    w.put("set", "items", c.id, doc, ex && ex.version);
+    w.put("set", "items", c.id, doc, ex);
     if (!old) n.new++; else if (content) n.rev++; else n.changed++;
     const prev = doc.supersedes && items.get(doc.supersedes);
-    if (prev && !ids.has(doc.supersedes) && prev.data.status !== "closed") {
-      w.put("update", "items", doc.supersedes, { status: "closed", updated: t }, prev.version);
+    if (prev && !ids.has(doc.supersedes) && P.coerce("item", prev.data).status !== "closed") {
+      w.put("update", "items", doc.supersedes, { status: "closed", updated: t }, prev);
       n.replaced++;
     }
   }
@@ -181,54 +212,64 @@ function cmdCards(a, log) {
   w.print(log);
 }
 
-// ---- read
+// ---- read. Every database text goes through q(), and an id that is not a plain id too, so no value can forge a line.
+const qid = (s) => (S.idRe.test(s) ? s : q(s));
 function cmdRead(a, log) {
-  const dump = readDump(one(a, "dump")), acks = dump.col("acks"), items = dump.col("items"), resps = dump.col("responses");
+  const dump = readDump(one(a, "dump")), acks = dump.col("acks"), items = dump.col("items"), resps = dump.col("responses"), notes = dump.col("notes");
   const agent = P.agentKey(one(a, "agent"));
   const list = Array.from(dump.col("batches").entries()).map(([id, d]) => Object.assign(P.coerce("batch", d.data), { id }))
     .filter((b) => !P.isHandled(b, acks) && P.agentKey(b.for) === agent).sort((x, y) => (x.created < y.created ? -1 : 1));
   if (!list.length) { log("no new batches for " + P.agentName(agent)); return; }
   for (const b of list) {
-    log(`batch ${b.id}  ${b.created}  ${b.itemIds.length} answers  ${b.noteIds.length} notes`);
+    let noCopy = false;
+    log(`batch ${qid(b.id)}  ${q(b.created)}  ${b.itemIds.length} answers  ${b.noteIds.length} notes`);
     for (const id of b.itemIds) {
       let x = b.answers[id];
+      const flags = [];
       if (!x) {
         // A batch from a page before 0.3.0 has no copy: take the response, or the entry of its history, with this batch id.
         const r = resps.get(id) ? P.coerce("response", resps.get(id).data) : null;
         const hx = r ? [r].concat(r.history).filter((h) => h.batch === b.id).pop() : null;
+        if (!hx) { flags.push("[no-copy]"); noCopy = true; }
         x = hx ? { answer: hx.choice, note: hx.note, rev: hx.rev } : { answer: "", note: "", rev: 1 };
       }
-      const it = items.get(id) ? P.coerce("item", items.get(id).data) : null, flags = [];
+      const it = items.get(id) ? P.coerce("item", items.get(id).data) : null;
       if (!it) flags.push("[missing]");
-      else {
+      else if (!flags.length) {
         if (x.rev < it.rev) flags.push("[stale-rev]");
         if (x.note && !x.answer && P.optionsOf(it).length) flags.push("[question]");
       }
-      log(`  ${id}  ${q(x.answer)}  ${q(x.note)}${flags.length ? "  " + flags.join(" ") : ""}`);
+      log(`  ${qid(id)}  ${q(x.answer)}  ${q(x.note)}${flags.length ? "  " + flags.join(" ") : ""}`);
     }
     for (const id of b.noteIds) {
-      const nb = b.notes[id] || (dump.col("notes").get(id) ? P.coerce("note", dump.col("notes").get(id).data) : { text: "", item: "" });
-      log(`  note ${id}${nb.item ? "  item " + nb.item : ""}  ${q(nb.text)}`);
+      let nb = b.notes[id] || (notes.get(id) ? P.coerce("note", notes.get(id).data) : null), flag = "";
+      if (!nb) { nb = { text: "", item: "" }; flag = "  [no-copy]"; noCopy = true; }
+      log(`  note ${qid(id)}${nb.item ? "  item " + q(nb.item) : ""}  ${q(nb.text)}${flag}`);
     }
-    log(`  when handled: node ${SELF} ack ${b.id} --dump ${one(a, "dump")}`);
+    const ackLine = `node ${SELF} ack ${qid(b.id)} --dump ${one(a, "dump")}${agent ? " --agent " + q(one(a, "agent").trim()) : ""}`;
+    log(noCopy ? "  # after the operator answers again: " + ackLine : "  when handled: " + ackLine);
   }
 }
 
-// ---- ack
+// ---- ack. Only a batch for this agent: no --agent means the default agent of the config.
 function cmdAck(a, log) {
   const bid = a._[1], dump = readDump(one(a, "dump")), b = bid && dump.col("batches").get(bid), items = dump.col("items");
   if (!b) fail("ack: no batch " + (bid || "named") + " in the dump");
+  const batch = P.coerce("batch", b.data), agent = P.agentKey(one(a, "agent"));
+  if (P.agentKey(batch.for) !== agent) fail(`ack: batch ${bid} is for ${q(P.agentName(P.agentKey(batch.for)))}, not for ${q(P.agentName(agent))}. Nothing written`);
   const close = a.close || [], missing = close.filter((id) => !items.has(id));
   if (missing.length) fail("ack: no card " + missing.join(", ") + " in the dump");
-  const w = new Writes(dump), t = now();
-  if (!dump.col("acks").has(bid)) w.put("set", "acks", bid, { at: t, items: P.coerce("batch", b.data).itemIds });
-  for (const id of close) if (items.get(id).data.status !== "closed") w.put("update", "items", id, { status: "closed", updated: t }, items.get(id).version);
-  log(`ack ${bid}: ${dump.col("acks").has(bid) ? "already acked" : "ack"}, ${w.list.length - (dump.col("acks").has(bid) ? 0 : 1)} cards closed`);
+  const w = new Writes(dump), t = now(), acked = dump.col("acks").has(bid);
+  if (!acked) w.put("set", "acks", bid, { at: t, items: batch.itemIds });
+  for (const id of close) if (P.coerce("item", items.get(id).data).status !== "closed") w.put("update", "items", id, { status: "closed", updated: t }, items.get(id));
+  log(`ack ${bid}: ${acked ? "already acked" : "ack"}, ${w.list.length - (acked ? 0 : 1)} cards closed`);
   w.print(log);
 }
 
 // ---- guide
-function slug(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "section"; }
+// A heading without ASCII letters or digits gets an id from a short stable hash of its text (FNV-1a).
+function hashId(s) { let h = 0x811c9dc5; for (const ch of s) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; } return "h" + h.toString(36); }
+function slug(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || hashId(s); }
 function parseGuide(text) {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   let title = "";
@@ -256,8 +297,8 @@ function cmdGuide(a, log) {
   const old = ex ? plain(P.coerce("guide", ex.data)) : null;
   if (a.delete || a.archive) {
     if (!ex) fail("guide: no guide " + id + " in the dump");
-    if (a.delete) w.put("delete", "guides", id, null, ex.version);
-    else if (old.status !== "archived") w.put("update", "guides", id, { status: "archived", updated: t }, ex.version);
+    if (a.delete) w.put("delete", "guides", id, null, ex);
+    else if (old.status !== "archived") w.put("update", "guides", id, { status: "archived", updated: t }, ex);
     log(`guide ${id}: ${a.delete ? "delete" : "archive"}`);
     return w.print(log);
   }
@@ -266,7 +307,9 @@ function cmdGuide(a, log) {
   const kind = one(a, "kind") || (old && old.kind) || "text";
   if (!S.guideKinds.includes(kind)) fail("guide: --kind is one of " + S.guideKinds.join(", "));
   const item = a.item ? one(a, "item") : (old ? old.item : "");
-  const g = parseGuide(fs.readFileSync(file, "utf8")), prev = new Map((old ? old.sections : []).map((s) => [s.id, s]));
+  let text;
+  try { text = fs.readFileSync(file, "utf8"); } catch (e) { fail("guide: cannot read " + file); }
+  const g = parseGuide(text), prev = new Map((old ? old.sections : []).map((s) => [s.id, s]));
   const sections = g.secs.map((s) => {
     const p = prev.get(s.id);
     return Object.assign(s, { updated: p && p.title === s.title && p.body === s.body ? p.updated : t });
@@ -280,7 +323,7 @@ function cmdGuide(a, log) {
   const norm = (x) => { const y = plain(P.coerce("guide", x)); y.updated = ""; y.body = ""; return JSON.stringify(y); };
   const same = old && norm(doc) === norm(ex.data);
   if (same) { log(`guide ${id}: unchanged`); return w.print(log); }
-  w.put("set", "guides", id, doc, ex && ex.version);
+  w.put("set", "guides", id, doc, ex);
   log(`guide ${id}: ${sections.filter((s) => s.updated === t).length} of ${sections.length} sections changed`);
   w.print(log);
 }
@@ -294,7 +337,7 @@ function cmdPurge(a, log) {
   if (!ids.length && !before) fail("purge: give --ids <id>... or --closed-before <YYYY-MM-DD>");
   if (before) {
     if (!/^\d{4}-\d{2}-\d{2}/.test(before)) fail("purge: --closed-before takes a date such as 2026-01-31");
-    ids = ids.concat(Array.from(items.entries()).filter(([, d]) => d.data.status === "closed" && String(d.data.updated || "") < before).map(([id]) => id));
+    ids = ids.concat(Array.from(items.entries()).filter(([, d]) => { const it = P.coerce("item", d.data); return it.status === "closed" && it.updated < before; }).map(([id]) => id));
   }
   ids = Array.from(new Set(ids));
   const missing = ids.filter((id) => !items.has(id));
@@ -306,13 +349,14 @@ function cmdPurge(a, log) {
   all.filter((b) => b !== newest && b.itemIds.length && !b.noteIds.length && b.itemIds.every((x) => gone.has(x)) && P.isHandled(b, acks))
     .forEach((b) => { rows.push(["batches", b.id, batches.get(b.id)]); if (acks.has(b.id)) rows.push(["acks", b.id, acks.get(b.id)]); });
   if (!rows.length) { log("purge: nothing to delete"); return; }
+  rows.forEach(([c, id, d]) => pin(c, id, d));
   const keep = path.resolve(path.dirname(path.resolve(dump.dir)), "purged", now().replace(/[-:]/g, ""));
   for (const [c, id, d] of rows) {
     fs.mkdirSync(path.join(keep, c), { recursive: true });
     fs.writeFileSync(path.join(keep, c, id + ".json"), JSON.stringify(d.raw, null, 1) + "\n");
   }
   const w = new Writes(dump);
-  rows.forEach(([c, id, d]) => w.put("delete", c, id, null, d.version));
+  rows.forEach(([c, id, d]) => w.put("delete", c, id, null, d));
   const by = (c) => rows.filter((r) => r[0] === c).length;
   log(`purge: ${by("items")} cards, ${by("responses")} responses, ${by("batches")} batches, ${by("acks")} acks. Copies: ${keep}`);
   w.print(log);
@@ -328,28 +372,46 @@ function cmdCheck(a, log) {
       const got = c[k] === P.DEFAULTS[k] && Array.isArray(raw[k]) && raw[k].length ? 0 : c[k].length;
       if (!Array.isArray(raw[k]) || got < raw[k].length) errs.push(`config ${k}: ${got} of ${Array.isArray(raw[k]) ? raw[k].length : "a non-list"} entries kept`);
     }
-    Object.keys(raw).filter((k) => !["id", "title", "agent", "tabs", "kinds", "priorities", "labels", "domains"].includes(k)).forEach((k) => errs.push("config: unknown field " + k));
+    Object.keys(raw).filter((k) => !["id", "title", "agent", "tabs", "kinds", "priorities", "labels", "domains"].includes(k)).forEach((k) => errs.push("config: unknown field " + q(k)));
   }
-  const count = (m, f) => { const o = {}; m.forEach((d) => { const k = f(d.data); o[k] = (o[k] || 0) + 1; }); return o; };
-  dump.col("items").forEach((d, id) => {
-    const body = Object.assign({}, d.data);
-    errs.push(...P.problems("item", body).map((p) => `item ${id}: ${p}`));
+  const count = (m, k, f) => { const o = {}; m.forEach((d) => { const v = f(P.coerce(k, d.data)); o[v] = (o[v] || 0) + 1; }); return o; };
+  const items = dump.col("items"), notes = [], pq = (kind, data) => P.problems(kind, data, q);
+  items.forEach((d, id) => {
+    // The checks of cards, and the fields that cards fills.
+    const c = ownCopy(d.data, true), name = "item " + qid(id);
+    if (c.id === undefined) c.id = id;
+    errs.push(...cardProblems(c, name, new Set(), q));
+    const managed = {};
+    MANAGED.forEach((k) => { if (Object.prototype.hasOwnProperty.call(c, k)) managed[k] = c[k]; });
+    errs.push(...pq("item", managed).map((p) => `${name}: ${p}`));
+    if (!S.idRe.test(id)) errs.push(`${name}: bad id`);
+    // A card that waits for a card that is gone does not wait (the page shows it as open). A missing supersedes target is normal after a purge.
     const it = P.coerce("item", d.data);
-    if (it.kind && !P.cfg.kinds.some((k) => k.id === it.kind)) errs.push(`item ${id}: kind ${it.kind} is not in the config`);
-    if (it.recommendation && !P.optionsOf(it).includes(it.recommendation)) errs.push(`item ${id}: recommendation is not one of the options`);
-    if (!S.idRe.test(id)) errs.push(`item ${id}: bad id`);
+    if (it.after && it.after !== id && !items.has(it.after)) notes.push(`${name}: after: no card ${q(it.after)}, so it does not wait`);
   });
   dump.col("guides").forEach((d, id) => {
-    errs.push(...P.problems("guide", d.data).map((p) => `guide ${id}: ${p}`));
-    if (d.data.kind !== undefined && !S.guideKinds.includes(d.data.kind)) errs.push(`guide ${id}: kind is not one of ${S.guideKinds.join(", ")}`);
+    const name = "guide " + qid(id);
+    errs.push(...pq("guide", d.data).map((p) => `${name}: ${p}`));
+    const g = P.coerce("guide", d.data), secIds = g.sections.map((x) => x.id);
+    if (g.kind && !S.guideKinds.includes(g.kind)) errs.push(`${name}: kind is not one of ${S.guideKinds.join(", ")}`);
+    if (g.status && !["active", "archived"].includes(g.status)) errs.push(`${name}: status is not one of active, archived`);
+    if (new Set(secIds).size !== secIds.length) errs.push(`${name}: two sections with one id`);
   });
+  for (const [col, kind] of [["responses", "response"], ["batches", "batch"], ["acks", "ack"], ["notes", "note"]]) {
+    dump.col(col).forEach((d, id) => errs.push(...pq(kind, d.data).map((p) => `${kind} ${qid(id)}: ${p}`)));
+  }
+  // A document id lives in the file name; a different id inside the document is a copy gone wrong.
+  for (const [col, kind] of [["items", "item"], ["guides", "guide"], ["batches", "batch"], ["notes", "note"]]) {
+    dump.col(col).forEach((d, id) => { if (d.data.id !== undefined && d.data.id !== id) errs.push(`${kind} ${qid(id)}: id ${q(d.data.id)} differs from the file name`); });
+  }
   const fmtc = (o) => Object.entries(o).map(([k, v]) => k + " " + v).join(", ");
   const acks = dump.col("acks"), bs = Array.from(dump.col("batches").entries()).map(([id, d]) => Object.assign(P.coerce("batch", d.data), { id }));
   const waiting = {};
   bs.filter((b) => !P.isHandled(b, acks)).forEach((b) => { const k = P.agentName(P.agentKey(b.for)); waiting[k] = (waiting[k] || 0) + 1; });
-  log(`items ${dump.col("items").size} (${fmtc(count(dump.col("items"), (x) => x.status || "open"))})`);
+  log(`items ${items.size} (${fmtc(count(items, "item", (x) => x.status || "open"))})`);
   log(`batches ${bs.length}, not handled: ${fmtc(waiting) || "none"}`);
-  log(`guides ${dump.col("guides").size} (${fmtc(count(dump.col("guides"), (x) => (x.status === "archived" ? "archived" : "active")))})`);
+  log(`guides ${dump.col("guides").size} (${fmtc(count(dump.col("guides"), "guide", (x) => (x.status === "archived" ? "archived" : "active")))})`);
+  notes.forEach((e) => log("note: " + e));
   errs.forEach((e) => log("problem: " + e));
   if (errs.length) throw new Stop(errs.length + " problems");
 }

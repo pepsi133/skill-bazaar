@@ -9,10 +9,10 @@ an unknown field, so a typing error stops the run.
 
 | Field | Value |
 |---|---|
-| `id` | Required. A short slug, for example `backup-retention`: letters, digits and `_ - . ~ : @ +`. Keep the id when the card changes. Never reuse it for another finding |
+| `id` | Required. A short slug, for example `backup-retention`: letters, digits and `_ - . ~ : @ +`, not `.` or `..`. Keep the id when the card changes. Never reuse it for another finding |
 | `title` | Required. A plain question that one option answers, at most about 90 characters |
 | `summary`, `evidence` | Text in the format below. `evidence` folds away |
-| `options` | Two to five complete answers. Leave it out to get the default options of the kind |
+| `options` | Two to eight complete answers for a decision card. Leave it out to get the default options of the kind |
 | `recommendation` | One of the options, word for word |
 | `kind` | `decision` (default), `action` (the operator must do something outside the board; options "Done", "Done in part, see note", "Later", "Other, see note"), or `info` (one option, "Acknowledge"). A config can add kinds |
 | `priority` | `now`, `soon` (default) or `later`, or an id of the config |

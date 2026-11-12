@@ -52,7 +52,8 @@ The page keeps only an allowlist and drops the rest:
   inline marks, tables, and SVG shapes (`svg`, `g`, `path`, `rect`, `circle`, `line`, `polyline`,
   `polygon`, `text`, `defs`, `marker`, gradients, `use`). Everything else goes with its content.
 - Attributes: layout and presentation attributes, `class`, `title`, `id`, `style`. Any value with a
-  backslash or `/*` goes. A `url()` stays for a `#id` in the guide, or for an `https:` host on the
+  backslash or `/*` goes, and so does any function except `url()`, `rgb()`, `rgba()`, `hsl()`,
+  `hsla()`, and the SVG transform functions in `transform`. A `url()` stays for a `#id` in the guide, or for an `https:` host on the
   config list `domains`. Every other `url()` goes with its attribute.
 - `style` keeps only `color`, `background-color`, `border` and its parts, `margin`, `padding`,
   `width`, `height`, `max-width`, `min-width`, `font-size`, `font-weight`, `font-style`,
@@ -61,6 +62,8 @@ The page keeps only an allowlist and drops the rest:
   `rgb()`, `rgba()`, `hsl()`, `hsla()`.
 - Links: `href` on `a` only, for `https:`, `http:`, `#` and relative targets, never `//host`.
   Elsewhere, such as on `use`, only a `#` target or a host on `domains`. Ids get the prefix `ref-`.
+- claude.ai blocks images from every outside host (measured: img-src). A remote `url()` or image
+  does not show there. Use `url(#id)`.
 - Nothing loads from the network, except from a host on `domains`. The claude.ai page can still
   block such a load. A wide table scrolls in its own box. Use colours that read on a
   light and a dark background, or `currentColor`.

@@ -85,7 +85,7 @@ try {
 
   // 4. ack
   apply(dump, sh("ack", newId, "--dump", dump, "--close", "disk-size"));
-  rb.filter((l) => l.startsWith("batch ")).forEach((l) => apply(dump, sh("ack", l.split("  ")[0].slice(6), "--dump", dump)));
+  rb.filter((l) => l.startsWith("batch ")).forEach((l) => apply(dump, sh("ack", l.split("  ")[0].slice(6), "--dump", dump, "--agent", "net-agent")));
   const after = sh("read", "--dump", dump);
   check("after ack, read leaves the batch out and the card is closed",
     !after.some((l) => l.startsWith("batch " + newId)) && readDb(dump).get("items").get("disk-size").data.status === "closed", after.join(" | "));

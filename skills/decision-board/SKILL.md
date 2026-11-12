@@ -10,8 +10,8 @@ guides. The operator answers each card on a phone and presses "Send", and the pa
 per agent. Use it when the operator is away, when questions pile up, or when an answer must outlive
 the session. Ask one quick question in the terminal instead.
 
-Below, `S` is the path of `scripts/board.mjs` in this skill, and `board/` is a folder in your
-working tree. Read a file in `references/` only when a step says so. The calls `P1` to `P5` are in
+Below, `S` is `scripts/board.mjs` in the directory that holds this SKILL.md, and `board/` is a
+folder in your working tree. Read a file in `references/` only when a step says so. The calls `P1` to `P5` are in
 "Platform execution notes" at the end.
 
 ## Dump the board
@@ -24,9 +24,9 @@ Every command reads a dump: the documents of some collections, saved as files.
 | Command | Collections |
 |---|---|
 | `cards` | `meta`, `items` |
-| `read`, `ack` | `meta`, `items`, `batches`, `acks` |
+| `read`, `ack` | `meta`, `items`, `batches`, `acks`, `responses`, `notes` |
 | `guide` | `guides` |
-| `purge`, `check` | `meta`, `items`, `responses`, `batches`, `acks`, `guides` |
+| `purge`, `check` | `meta`, `items`, `responses`, `batches`, `acks`, `guides`, `notes` |
 
 A write command prints numbered arrays and puts the documents into `board/dump/out/`. Pass each
 array to one call `P3`, in order, and never write an array by hand. If a call is refused because
@@ -66,6 +66,9 @@ text raises `rev`, and the card shows "changed". To close a card, set `"status":
    - `[question]`: the operator asked a question. Answer it in the card text and post the card
      again. The card then shows "changed", and the operator answers again.
    - `[missing]`: the card is gone. Do not act.
+   - `[no-copy]`: the answer or note is not in the dump. Dump again for `read`. If the flag stays,
+     tell the operator which card or note was lost and ask to answer or send it again. Once the new
+     batch arrives, run the line after `# after the operator answers again:` for the old batch.
 4. Run the `ack` line that `read` printed, with `--close <id>` for each card that is done. Pass
    each printed array to call `P3`. If the board has a status guide, update it (next section).
 
@@ -85,7 +88,8 @@ pass the array to `P3`, and say so in the status guide.
 ## Clean up
 
 1. Dump the board for `purge`.
-2. Run `node S purge --closed-before <YYYY-MM-DD> --dump board/dump`, or `--ids <id>...`.
+2. Run `node S purge --closed-before <YYYY-MM-DD> --dump board/dump`, or `--ids <id>...`. The
+   date is 30 days before today, unless the operator names one.
 3. The script first copies every row it deletes to `board/purged/`. Pass each array to `P3`.
 
 ## Watch for answers
@@ -114,7 +118,8 @@ with `ToolSearch("select:ArtifactData")`. `URL` is the artifact link.
   one-sentence `description`, and `capabilities` copied from `references/data-model.md`, section
   "Access rules". The artifact is private by default. Keep it private.
 - `P2`, dump one collection: `{"action": "list", "url": URL, "collection": "<name>", "out_dir":
-  "board/dump"}`. If the result says that more documents exist, repeat with its next page.
+  "board/dump", "query": {"limit": 1000}}`. If the result carries a `next_cursor`, call again with
+  `"query": {"limit": 1000, "cursor": <next_cursor>}` until none.
 - `P3`, write: `{"action": "batch", "url": URL, "writes": <the printed array>}`.
 - `P4`, config: `{"action": "set", "url": URL, "collection": "meta", "doc_id": "config", "data":
   {...}}`. Add `"if_version"` from a dump when the document exists.

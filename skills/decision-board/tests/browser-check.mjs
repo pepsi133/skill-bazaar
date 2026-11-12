@@ -8,7 +8,7 @@
 // config, a revised card, cards from two agents and a reference guide with hostile HTML. Part 3
 // loads guides that try to load from another host, run script or cover the page. Part 4 loads data
 // that an agent or a second device wrote, and checks the features of 0.3.0. Part 5 checks the config
-// list domains for url() and non-link href values.
+// list domains for url() and non-link href values, and a config that arrives after the guide.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPlaywright, openPage as open } from "./_browser.mjs";
@@ -269,12 +269,20 @@ const DOMAIN_CASES = {
   mixed: [`fill="url(${L}h.svg#g) url(https://evil.invalid/h.svg#g)"`, null],
   comment: [`fill="u/**/rl(${L}i.svg#g)"`, null],
   frag: [`fill="url(#grad)"`, "url(#ref-grad)"],
+  srcFn: [`fill="src(${L}j.svg#g)"`, null],
+  imageFn: [`fill="image(${L}k.png)"`, null],
+  colour: [`fill="rgb(1, 2, 3)"`, "rgb(1, 2, 3)"],
+  fillRotate: [`fill="rotate(1)"`, null],
 };
+// The transform attribute keeps the SVG transform functions and nothing else.
+const TRANSFORM_CASES = { tOk: ["rotate(45 5 5) translate(2,3)", "rotate(45 5 5) translate(2,3)"], tSrc: ["src(https://evil.invalid/x)", null] };
 async function part5(browser) {
   const body = Object.keys(DOMAIN_CASES).map((k) => `<svg width="10" height="10"><rect id="${k}" width="10" height="10" ${DOMAIN_CASES[k][0]}/></svg>`).join("") +
+    Object.keys(TRANSFORM_CASES).map((k) => `<svg width="10" height="10"><rect id="${k}" width="10" height="10" transform="${TRANSFORM_CASES[k][0]}"/></svg>`).join("") +
+    `<span id="txt" title="Backup (weekly)" aria-label="Plan (draft)">t</span>` +
     `<svg><use href="${L}u.svg#a"/><use href="https://evil.invalid/u.svg#a"/></svg><p style="color: red; fill: url(${L}s.svg#s)">s</p>`;
   const seed5 = { items: [], responses: [], notes: [], batches: [],
-    meta: [{ id: "config", domains: ["Assets.Invalid", "bad host!", 7] }],
+    meta: [{ id: "config", domains: ["Assets.Invalid", "bad host!", 7, "invalid"] }],
     guides: [{ id: "dom", kind: "reference", title: "dom", status: "active", created: T, updated: T, body }] };
   const { ctx, page, errors, requests } = await openPage(browser, seed5);
   await page.waitForSelector("#tabs [data-tab=\"guide:dom\"]", { state: "attached" });
@@ -283,17 +291,40 @@ async function part5(browser) {
   const got = await page.evaluate((ids) => {
     const b = document.querySelector("#guide .gbody"), o = {};
     ids.forEach((k) => { const r = b.querySelector("#ref-" + k); o[k] = r ? r.getAttribute("fill") : "missing"; });
+    o.transforms = ["tOk", "tSrc"].map((k) => { const r = b.querySelector("#ref-" + k); return r ? r.getAttribute("transform") : "missing"; });
+    const t = b.querySelector("#ref-txt");
+    o.text = t ? [t.getAttribute("title"), t.getAttribute("aria-label")] : "missing";
     o.uses = Array.from(b.querySelectorAll("use")).map((u) => u.getAttribute("href"));
     o.style = (b.querySelector("p") || { getAttribute: () => null }).getAttribute("style");
     return o;
   }, Object.keys(DOMAIN_CASES));
   const wrong = Object.keys(DOMAIN_CASES).filter((k) => got[k] !== DOMAIN_CASES[k][1]).map((k) => k + "=" + got[k]);
   check("domains: a listed host and its subdomains stay, by https: only; every other url() goes", wrong.length === 0, wrong.join(" | "));
+  check("text attributes keep a parenthesis", JSON.stringify(got.text) === JSON.stringify(["Backup (weekly)", "Plan (draft)"]), JSON.stringify(got.text));
+  const tWant = Object.values(TRANSFORM_CASES).map((x) => x[1]);
+  check("transform keeps the SVG transform functions and loses every other function", JSON.stringify(got.transforms) === JSON.stringify(tWant), JSON.stringify(got.transforms));
   check("domains: a use keeps a listed host and loses another", JSON.stringify(got.uses) === JSON.stringify([L + "u.svg#a"]), JSON.stringify(got.uses));
   check("domains: a style keeps a listed url()", got.style === "color: red; fill: url(" + L + "s.svg#s)", got.style);
   check("domains: no request to a host off the list", requests.every((r) => /^https:\/\/([a-z0-9-]+\.)?assets\.invalid\//.test(r)), requests.join(" "));
   check("domains: the page raised no script error", errors.length === 0, errors.join(" | "));
   await ctx.close();
+
+  // The config arrives after the guide rendered, then loses the host: the guide follows both times.
+  const seed6 = { __delay: { meta: 1500 }, items: [], responses: [], notes: [], batches: [], meta: [{ id: "config", domains: ["assets.invalid"] }],
+    guides: [{ id: "late", kind: "reference", title: "late", status: "active", created: T, updated: T, body: `<svg><rect id="r" width="9" height="9" fill="url(${L}late.svg#p)"/></svg>` }] };
+  const o = await openPage(browser, seed6);
+  await o.page.waitForSelector("#tabs [data-tab=\"guide:late\"]", { state: "attached" });
+  await o.page.evaluate(() => document.querySelector("#tabs [data-tab=\"guide:late\"]").click());
+  const fill = () => o.page.evaluate(() => { const e = document.querySelector("#guide #ref-r"); return e ? e.getAttribute("fill") : "missing"; });
+  const early = await fill();
+  await o.page.waitForTimeout(2000);
+  const late = await fill();
+  await o.page.evaluate(() => { window.__db.cols.get("meta").set("config", { id: "config", domains: [] }); window.__db.fire("meta"); });
+  await o.page.waitForTimeout(1900);
+  const removed = await fill();
+  check("domains: a config that arrives after the guide adds the listed url()", early === null && late === "url(" + L + "late.svg#p)", early + " / " + late);
+  check("domains: a host removed from the config removes its url()", removed === null, String(removed));
+  await o.ctx.close();
 }
 
 // ---- part 4: data that an agent or a second device wrote, and the features of 0.3.0.
@@ -344,6 +375,17 @@ async function part4(browser) {
     const none = (await colOf(page, "batches")).length;
     await page.waitForTimeout(1500);
     check("Send is disabled until the items have loaded", early && none === 0 && !(await page.isDisabled("#send")), "early disabled " + early + ", batches " + none);
+  });
+  await scenario(browser, "free note before the items load", { __delay: { items: 1500 }, items: [it4("m")],
+    notes: [{ id: "n1", text: "A free note", for: "", created: T, sent: false, batch: "" }] }, async (page) => {
+    const early = await page.isDisabled("#send"), label = (await page.textContent("#send")).trim();
+    await page.waitForTimeout(1500);
+    check("Send waits for the items even when a free note is ready", early && label.endsWith("(1)") && !(await page.isDisabled("#send")), "early disabled " + early + ", " + label);
+  });
+  await scenario(browser, "batch times that are not dates", {
+    batches: [{ id: "b1", created: "soon", for: "", itemIds: ["x"], noteIds: [], answers: {}, status: "new" }], acks: [{ id: "b1", at: "later", items: ["x"] }] }, async (page) => {
+    const t = await page.textContent("#lastbatch");
+    check("the last batch line leaves out a time that is not a date", t === "Last sent, 1 in batch, handled", t);
   });
   await scenario(browser, "re-answer after a send", { items: [it4("r")] }, async (page) => {
     await pick(page, "r", "Yes"); await sendNow(page);

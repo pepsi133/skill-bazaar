@@ -21,7 +21,8 @@ Publish the page with these `capabilities`:
 So an agent can write cards, guides and acks, but not answers or batches, and the operator (the
 owner) writes the rest. The rules protect only against an agent that writes under its own
 claude.ai identity at the Contributor level; an agent that writes through the operator's session
-has the operator's level, so write `meta/config` from the operator's session.
+has the operator's level, so write `meta/config` from the operator's session. The rules do not
+separate agents from each other: any agent can write any card, guide or ack.
 
 ## The config document
 
@@ -37,7 +38,7 @@ without a republish. `node S check` reports the entries that the page drops.
 | `kinds` | A list of `{id, label, options}`. The first is the default kind. Without `options`, a built-in kind keeps its own | `decision`, `action`, `info` |
 | `priorities` | A list of `{id, label}` in sort order. The first three get the red, amber and grey tag | `now`, `soon`, `later` |
 | `labels` | The section labels that the formatter sets in bold | `Before`, `Now`, `Suggested`, `Why`, `Risk`, `Your answer` |
-| `domains` | Hosts that a reference guide can load from by `https:`, for example `["docs.example.com"]`. A host also matches its subdomains. Only the operator adds a host | none |
+| `domains` | Hosts that a reference guide can load from by `https:`, for example `["docs.example.com"]`. A host needs at least one dot, and matches itself and its subdomains, on any port. Name the full host, never a public suffix such as `co.uk`. Only the operator adds a host | none |
 
 A tab: `id` is unique, not `all`, and does not start with `guide:`. `match` maps a card field to a
 list of values, for example `{"area": ["router", "wifi"]}`. Values match after trim and lower
