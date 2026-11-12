@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "data": {
+  "id": "b20260102T000000Z-aaaa",
+  "created": "2026-01-02T00:00:00Z",
+  "for": "coordinator",
+  "itemIds": [
+   "coordinator:old-dns"
+  ],
+  "noteIds": [],
+  "answers": {
+   "coordinator:old-dns": {
+    "answer": "No",
+    "note": "",
+    "rev": 1
+   }
+  },
+  "notes": {},
+  "status": "new"
+ }
+}

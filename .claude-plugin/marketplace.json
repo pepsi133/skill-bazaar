@@ -69,7 +69,7 @@
     },
     {
       "name": "decision-board",
-      "source": "./skills/decision-board",
+      "source": "./plugins/decision-board",
       "description": "Build and run a decision board, a private claude.ai artifact with a database, where an agent posts questions and pending actions as cards and its operator answers from a phone instead of a terminal."
     }
   ]

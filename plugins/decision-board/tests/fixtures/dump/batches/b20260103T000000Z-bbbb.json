@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "data": {
+  "id": "b20260103T000000Z-bbbb",
+  "created": "2026-01-03T00:00:00Z",
+  "for": "coordinator",
+  "itemIds": [
+   "coordinator:disk-size"
+  ],
+  "noteIds": [
+   "n20260103T000000Z-cccc"
+  ],
+  "answers": {
+   "coordinator:disk-size": {
+    "answer": "",
+    "note": "Which disk?",
+    "rev": 1
+   }
+  },
+  "notes": {
+   "n20260103T000000Z-cccc": {
+    "text": "Back up first.\nThen grow it.",
+    "item": "coordinator:disk-size"
+   }
+  },
+  "status": "new"
+ }
+}

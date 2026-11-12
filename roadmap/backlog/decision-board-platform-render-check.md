@@ -8,9 +8,9 @@ created: 2026-11-12
 
 ## Problem
 
-`tests/browser-check.mjs` runs the page in a local Chromium against an in-memory stub of the
-database. The stub serves the page from a test origin and aborts every other request. So the
-check proves what the sanitizer keeps, but not what the claude.ai artifact frame then renders.
+The node tests run the page logic and the sanitizer against a small DOM stub, without a browser.
+So they prove what the sanitizer keeps, but not what a browser, or the claude.ai artifact frame,
+then renders.
 The real frame can differ in these ways:
 
 - Its content security policy can block an image, an SVG `use` or a `url()` fill from a host on
@@ -28,7 +28,7 @@ A manual test, run before a release, not in CI:
 2. Open it with Playwright (or a similar driver), take a screenshot per guide tab, and record for
    each case whether it rendered and which requests the frame made.
 3. Repeat in WebKit and with dark mode, and once on a phone.
-4. Compare with the local `browser-check.mjs` results, and record every difference as a fact
+4. Compare with what the node sanitizer tests expect, and record every difference as a fact
    about the platform in `references/guides.md`.
 
 ## Facts that shape the test

@@ -1,0 +1,17 @@
+{
+  "name": "decision-board",
+  "description": "Build and run a decision board, a private claude.ai artifact with a database, where agents post questions, actions and reference pages and the operator answers from a phone or a browser. One unchanged page, set up by a config document in the database.",
+  "version": "0.4.0",
+  "author": {
+    "name": "pepsi133",
+    "url": "https://github.com/pepsi133"
+  },
+  "license": "MIT",
+  "keywords": [
+    "decision-board",
+    "artifact",
+    "operator",
+    "cards",
+    "approvals"
+  ]
+}
