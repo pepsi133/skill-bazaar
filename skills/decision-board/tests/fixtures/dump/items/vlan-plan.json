@@ -1,0 +1,17 @@
+{
+ "version": 2,
+ "data": {
+  "id": "vlan-plan",
+  "area": "router",
+  "title": "Use VLAN 30 for cameras?",
+  "options": [
+   "Yes",
+   "No"
+  ],
+  "priority": "now",
+  "status": "open",
+  "from": "net-agent",
+  "created": "2026-01-01T10:00:00Z",
+  "updated": "2026-01-01T10:00:00Z"
+ }
+}

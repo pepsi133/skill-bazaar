@@ -1,6 +1,5 @@
 <title>Decision Board</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
 <style>
 /* Layout: sticky summary bar, one filter row, one dense card per item, notes box last. */
 :root {
@@ -20,7 +19,7 @@
   --later-bg: #e6e9f0;
   --good: #1d7a46;
   --good-bg: #e0f3e8;
-  --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
@@ -129,6 +128,21 @@ main.in { padding-bottom: 48px; }
 .guide[hidden], #cards[hidden] { display: none; }
 .guide h2 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
 .guide .gbody { overflow-wrap: anywhere; max-width: 70ch; min-width: 0; }
+.guide .gbody.ref { max-width: none; contain: paint; position: relative; overflow: hidden; isolation: isolate; }
+.ref .tw { overflow-x: auto; max-width: 100%; }
+.gsec { display: grid; gap: 4px; min-width: 0; }
+.gsec + .gsec { border-top: 1px solid var(--line); padding-top: 8px; }
+.gsec h3 { margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--now); }
+.card.wait { opacity: 0.55; }
+.rel { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12.5px; color: var(--muted); }
+.rel button.link { padding: 0; text-align: left; overflow-wrap: anywhere; }
+.about { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.ref table { border-collapse: collapse; margin: 0 0 8px; }
+.ref th, .ref td { border: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; }
+.ref svg { max-width: 100%; height: auto; }
+.ref a { color: var(--accent); }
+.changed { font-size: 12.5px; padding: 6px 8px; border-radius: 6px; background: var(--soon-bg); color: var(--soon); overflow-wrap: anywhere; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .tag { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 7px; border-radius: 4px; background: var(--surface-2); color: var(--muted); }
 .tag.now { background: var(--now-bg); color: var(--now); }
@@ -179,7 +193,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     <div class="row">
       <div class="counts"><span>Open <b id="c-open">0</b></span><span>Unsent <b id="c-unsent">0</b></span></div>
       <span id="lastbatch" class="small muted grow"></span>
-      <button id="send" class="primary" type="button" disabled>Send to Claude (0)</button>
+      <button id="send" class="primary" type="button" disabled>Send (0)</button>
     </div>
   </div>
 </header>
@@ -194,7 +208,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     </div>
   </div>
   <section id="blocked" class="blocked" aria-label="Blocked on you"></section>
-  <div id="tabs" class="tabs" role="tablist" aria-label="Source of the action"></div>
+  <div id="tabs" class="tabs" role="tablist" aria-label="Board tabs"></div>
 </div>
 
 <main class="in">
@@ -204,29 +218,30 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   <div id="empty" class="empty" hidden></div>
   <section class="notes" aria-label="New note">
     <h3>New note</h3>
-    <textarea id="newnote" placeholder="A message to Claude that is not tied to an item. It goes out with the next batch."></textarea>
+    <div id="about" class="about" hidden></div>
+    <textarea id="newnote" placeholder="A message that is not tied to an item. It goes out with the next batch."></textarea>
     <div class="row"><button id="addnote" type="button">Add note</button><span id="notestate" class="small muted"></span></div>
     <div id="nlist" class="nlist"></div>
   </section>
   <section id="archived" class="notes" hidden aria-label="Archived guides"></section>
-  <p id="metaline" class="small muted"></p>
 </main>
 
 <script>
 (function () {
   "use strict";
-  var PRI = { now: 0, soon: 1, later: 2 };
-  var FKEY = "decision-board-filter-v1";
+  var FKEY = "decision-board-filter-v1", SKEY = "decision-board-seen-v1";
   var db = null;
-  var items = new Map(), resp = new Map(), batches = new Map(), notes = new Map(), guides = new Map();
+  var items = new Map(), resp = new Map(), batches = new Map(), notes = new Map(), guides = new Map(), acks = new Map();
   var meta = null;
-  var loaded = { items: false, responses: false, batches: false, notes: false, guides: false };
-  var cards = new Map();      // itemId -> {el, ...refs}
+  var loaded = { items: false, responses: false, batches: false, notes: false, guides: false, acks: false, config: false };
+  var cards = new Map();      // itemId -> {el, n, ...refs}. n is the card number, the source of every DOM id of the card.
   var timers = new Map();     // itemId -> debounce timer
   var inflight = new Map();   // itemId -> number of writes in flight
   var chains = new Map();     // itemId -> promise chain
-  var sending = false, totalInflight = 0, lastSaved = "";
+  var lastDoc = new Map();    // itemId -> the response this page wrote last, until a snapshot confirms it
+  var sending = false, totalInflight = 0, lastSaved = "", cardSeq = 0, noteItem = "";
   var f = { area: "", prio: "", hide: true, closed: false, tab: "all" };
+  var seen = {};              // guide id -> the "updated" of a status guide when this viewer last looked
 
   function $(id) { return document.getElementById(id); }
   function h(tag, attrs) {
@@ -249,89 +264,312 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     if (!s) return "";
     try { return new Date(s).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); } catch (e) { return String(s); }
   }
-  function safe(s) { return String(s).replace(/[^A-Za-z0-9_-]/g, "_"); }
   function rid() { return Math.random().toString(36).slice(2, 6); }
   function stamp() { return iso().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"); }
 
-  // per-viewer filter memory
+  // per-viewer memory: filters and the status guides already seen
   try { var raw = localStorage.getItem(FKEY); if (raw) { var o = JSON.parse(raw); if (o && typeof o === "object") f = Object.assign(f, o); } } catch (e) {}
+  try { var rs = JSON.parse(localStorage.getItem(SKEY) || "{}"); if (rs && typeof rs === "object") seen = rs; } catch (e) {}
   function saveFilter() { try { localStorage.setItem(FKEY, JSON.stringify(f)); } catch (e) {} }
+  function saveSeen() { try { localStorage.setItem(SKEY, JSON.stringify(seen)); } catch (e) {} }
 
   function showMsg(t) { var m = $("msg"); m.textContent = t || ""; m.hidden = !t; }
   function errText(e) { return e && (e.code || e.message) ? (e.code || "") + " " + (e.message || "") : String(e); }
-
-  // ---- derived state
-  function hasAnswer(id) { var r = resp.get(id); return !!(r && (r.choice || r.note)); }
   function isPending(id) { return timers.has(id) || (inflight.get(id) || 0) > 0; }
-  // The tab list is one array. Regroup the tabs by topic by editing TABS and itemSource only:
-  // each TABS entry is [key, label], keep ["all", "All"] first, list every other key in the
-  // check at the top of itemSource, and map the item areas to keys in AREA_SOURCE.
-  var TABS = [["all", "All"], ["email", "Email"], ["github", "GitHub"], ["other", "Other"]];
-  var AREA_SOURCE = { gmail: "email", github: "github" };
-  function itemSource(it) {
-    if (it.source === "email" || it.source === "github" || it.source === "other") return it.source;
-    return AREA_SOURCE[it.area] || "other";
+
+  // ---- pure: start. No DOM below this line until "pure: end". The node tests and scripts/board.mjs load this part.
+  // ---- schema: the one definition of fields, kinds and limits. scripts/board.mjs reads it from here.
+  // Field types: s short text, t long text, g guide text, l list of texts, L list of texts or absent,
+  // S text or absent, r revision (a whole number, default 1), b true or false, a:<kind> list of
+  // objects, m:<kind> map from an id to an object.
+  var SCHEMA = {
+    max: { list: 50, options: 8, s: 300, t: 20000, g: 200000 },
+    idRe: /^[A-Za-z0-9_\-.~:@+]{1,100}$/,
+    item: { id: "s", area: "s", title: "s", summary: "t", evidence: "t", options: "L", recommendation: "s", priority: "s",
+      source: "s", from: "s", rev: "r", kind: "s", blocks: "s", status: "s", created: "s", updated: "s", source_file: "s",
+      supersedes: "s", after: "s" },
+    response: { itemId: "s", choice: "s", note: "t", rev: "r", "for": "S", updated: "s", sent: "b", batch: "s", history: "a:hist" },
+    hist: { choice: "s", note: "t", rev: "r", updated: "s", batch: "s" },
+    batch: { id: "s", created: "s", "for": "s", itemIds: "l", noteIds: "l", answers: "m:answer", notes: "m:bnote", status: "s", delivered_at: "s" },
+    answer: { answer: "s", note: "t", rev: "r" },
+    bnote: { text: "t", item: "s" },
+    note: { id: "s", text: "t", item: "s", "for": "S", created: "s", sent: "b", batch: "s" },
+    guide: { id: "s", kind: "s", title: "s", body: "g", sections: "a:section", status: "s", created: "s", updated: "s", item: "s" },
+    section: { id: "s", title: "s", body: "g", updated: "s" },
+    ack: { at: "s", items: "l" },
+    kinds: [{ id: "decision", label: "Decision" },
+      { id: "action", label: "Action", options: ["Done", "Done in part, see note", "Later", "Other, see note"] },
+      { id: "info", label: "Info", options: ["Acknowledge"] }],
+    guideKinds: ["text", "status", "reference"],
+    statuses: ["open", "answered", "closed"]
+  };
+  function own(o, k) { return o != null && Object.prototype.hasOwnProperty.call(o, k); }
+  function isObj(v) { return !!v && typeof v === "object" && !Array.isArray(v); }
+  function str(v) { return typeof v === "string" ? v.trim() : ""; }
+  function strs(a) { return Array.isArray(a) ? a.filter(function (x) { return typeof x === "string"; }) : []; }
+  // A revision is a whole number from 1. A string of digits counts. "0x10", "1e1", 2.5 and [5] do not.
+  function wholeRev(v) {
+    if (typeof v === "string" && /^[0-9]{1,9}$/.test(v)) v = Number(v);
+    return typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : 1;
   }
-  function inTab(it, tab) { return tab === "all" || itemSource(it) === tab; }
+  // The page reads every database value through coerce: a field of the wrong type becomes the empty value of its type.
+  function coerce(kind, raw) {
+    var spec = SCHEMA[kind], src = isObj(raw) ? raw : {}, out = {};
+    Object.keys(spec).forEach(function (k) {
+      var t = spec[k].split(":"), v = own(src, k) ? src[k] : undefined;
+      if (t[0] === "L") { if (v !== undefined) out[k] = strs(v); }
+      else if (t[0] === "S") { if (typeof v === "string") out[k] = v; }
+      else if (t[0] === "r") out[k] = wholeRev(v);
+      else if (t[0] === "b") out[k] = v === true;
+      else if (t[0] === "l") out[k] = strs(v);
+      else if (t[0] === "a") out[k] = Array.isArray(v) ? v.filter(isObj).map(function (x) { return coerce(t[1], x); }) : [];
+      else if (t[0] === "m") {
+        var m = Object.create(null);
+        if (isObj(v)) Object.keys(v).forEach(function (x) { if (isObj(v[x])) m[x] = coerce(t[1], v[x]); });
+        out[k] = m;
+      } else out[k] = typeof v === "string" ? v : "";
+    });
+    return out;
+  }
+  // The strict check of the scripts: the problems of one document, as short texts.
+  function problems(kind, raw) {
+    var spec = SCHEMA[kind], M = SCHEMA.max, out = [];
+    if (!isObj(raw)) return ["not an object"];
+    Object.keys(raw).forEach(function (k) {
+      if (!own(spec, k)) { out.push(k + ": unknown field"); return; }
+      var t = spec[k].split(":"), c = t[0], v = raw[k];
+      if ("stgS".indexOf(c) >= 0) {
+        var lim = M[c === "S" ? "s" : c];
+        if (typeof v !== "string") out.push(k + ": not text"); else if (v.length > lim) out.push(k + ": longer than " + lim);
+      } else if (c === "l" || c === "L") {
+        if (!Array.isArray(v) || v.some(function (x) { return typeof x !== "string" || x.length > M.s; })) out.push(k + ": not a list of short texts");
+      } else if (c === "r") { if (wholeRev(v) !== v) out.push(k + ": not a whole number"); }
+      else if (c === "b") { if (typeof v !== "boolean") out.push(k + ": not true or false"); }
+      else if (c === "a") {
+        if (!Array.isArray(v)) out.push(k + ": not a list");
+        else v.forEach(function (x, i) { problems(t[1], x).forEach(function (p) { out.push(k + "[" + i + "]." + p); }); });
+      } else if (c === "m") {
+        if (!isObj(v)) out.push(k + ": not an object");
+        else Object.keys(v).forEach(function (x) { problems(t[1], v[x]).forEach(function (p) { out.push(k + "." + x + "." + p); }); });
+      }
+    });
+    return out;
+  }
+
+  // ---- board config. The document meta/config overrides these defaults field by field.
+  var DEFAULTS = {
+    title: "Decision board",
+    agent: "Claude",
+    tabs: [
+      { id: "email", label: "Email", match: { source: ["email"], area: ["gmail"] }, rest: false },
+      { id: "github", label: "GitHub", match: { source: ["github"], area: ["github"] }, rest: false },
+      { id: "other", label: "Other", match: { source: ["other"] }, rest: true }
+    ],
+    kinds: SCHEMA.kinds,
+    priorities: [{ id: "now", label: "Now" }, { id: "soon", label: "Soon" }, { id: "later", label: "Later" }],
+    labels: ["Before", "Now", "Suggested", "Why", "Risk", "Your answer"],
+    domains: []
+  };
+  // A config list: at most SCHEMA.max.list entries. A list of {id, label}: drop entries without a text id and later duplicates.
+  function cfgList(a) { return Array.isArray(a) ? a.slice(0, SCHEMA.max.list) : []; }
+  function idList(a, ok) {
+    var seenIds = Object.create(null), out = [];
+    cfgList(a).forEach(function (x) {
+      var id = isObj(x) && own(x, "id") ? str(x.id) : "";
+      if (!id || seenIds[id] || (ok && !ok(id))) return;
+      seenIds[id] = true;
+      out.push({ id: id, label: own(x, "label") ? str(x.label) : "", src: x });
+    });
+    return out;
+  }
+  function labelRe(list) {
+    return new RegExp("^(" + list.map(function (l) { return l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|") + "):[ \\t]*(.*)$");
+  }
+  function normConfig(raw) {
+    var c = isObj(raw) ? raw : {};
+    function g(k) { return own(c, k) ? c[k] : undefined; }
+    var out = { title: str(g("title")), agent: str(g("agent")) || DEFAULTS.agent };
+    var rawTabs = g("tabs");
+    var tabs = idList(rawTabs, function (id) { return id !== "all" && id.indexOf("guide:") !== 0; }).map(function (t) {
+      var m = Object.create(null), sm = own(t.src, "match") ? t.src.match : null;
+      if (isObj(sm)) Object.keys(sm).forEach(function (k) {
+        if (!own(SCHEMA.item, k)) return;
+        var v = strs(cfgList(sm[k])).map(function (x) { return x.trim().toLowerCase(); }).filter(Boolean);
+        if (v.length) m[k] = v;
+      });
+      return { id: t.id, label: t.label || t.id, match: m, rest: own(t.src, "rest") && t.src.rest === true };
+    });
+    // [] leaves only the All tab. A list whose every entry is invalid keeps the default tabs.
+    out.tabs = Array.isArray(rawTabs) && (tabs.length || !rawTabs.length) ? tabs : DEFAULTS.tabs;
+    var k = idList(g("kinds")).map(function (x) {
+      var d = SCHEMA.kinds.filter(function (y) { return y.id === x.id; })[0];
+      var o = own(x.src, "options") ? strs(x.src.options).slice(0, SCHEMA.max.options) : (d && d.options) || [];
+      return { id: x.id, label: x.label || (d && d.label) || x.id, options: o };
+    });
+    out.kinds = k.length ? k : DEFAULTS.kinds;
+    var p = idList(g("priorities")).map(function (x) { return { id: x.id, label: x.label || x.id }; });
+    out.priorities = p.length ? p : DEFAULTS.priorities;
+    var l = strs(cfgList(g("labels"))).map(function (x) { return x.trim(); }).filter(Boolean);
+    out.labels = l.length ? l : DEFAULTS.labels;
+    out.labelRe = labelRe(out.labels.map(esc));
+    // Hosts that a reference guide can load from, by https: only. A host matches itself and its subdomains.
+    out.domains = strs(cfgList(g("domains"))).map(function (x) { return x.trim().toLowerCase(); })
+      .filter(function (x) { return /^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(x) && x.length <= 253; });
+    return out;
+  }
+  var cfg = normConfig(null);
+  function applyConfig(raw) { cfg = normConfig(raw); }
+  function boardTitle(m) { return cfg.title || (m && str(m.title)) || DEFAULTS.title; }
+
+  // ---- tabs. An item belongs to one tab besides All. First the page looks for a tab whose
+  // match lists the item's source. Then for a tab whose match lists the value of any other field.
+  // Then the item goes to the first tab with rest: true. Otherwise it shows only under All.
+  // Values match after trim and lower case.
+  function hit(tab, k, it) { var l = tab.match[k], v = own(it, k) ? it[k] : null; return !!l && typeof v === "string" && l.indexOf(v.trim().toLowerCase()) >= 0; }
+  function tabOf(it, tabs) {
+    var i, k;
+    for (i = 0; i < tabs.length; i++) if (hit(tabs[i], "source", it)) return tabs[i].id;
+    for (i = 0; i < tabs.length; i++) for (k in tabs[i].match) if (k !== "source" && hit(tabs[i], k, it)) return tabs[i].id;
+    for (i = 0; i < tabs.length; i++) if (tabs[i].rest) return tabs[i].id;
+    return "";
+  }
+  function shownTabs() { return loaded.config ? cfg.tabs : []; }
+  function inTab(it, tab) { return tab === "all" || tabOf(it, cfg.tabs) === tab; }
   function tabCounts(list, pred) {
-    var n = {};
-    TABS.forEach(function (t) { n[t[0]] = 0; });
-    list.forEach(function (it) { if (pred(it)) TABS.forEach(function (t) { if (inTab(it, t[0])) n[t[0]]++; }); });
+    var n = { all: 0 };
+    cfg.tabs.forEach(function (t) { n[t.id] = 0; });
+    list.forEach(function (it) { if (!pred(it)) return; n.all++; var t = tabOf(it, cfg.tabs); if (t) n[t]++; });
     return n;
   }
-  // Guides: every guide that is not archived is one more tab after the source tabs.
-  // The tab key of a guide is "guide:" + id. A status other than "archived" counts as active.
+  // Guides: every guide that is not archived is one more tab after the item tabs. Status guides come
+  // first. The tab key of a guide is "guide:" + id.
   function guideKey(g) { return "guide:" + g.id; }
   function isGuideTab(tab) { return String(tab).indexOf("guide:") === 0; }
+  function guideKind(g) { return SCHEMA.guideKinds.indexOf(g.kind) >= 0 ? g.kind : "text"; }
   function guideList(list, archived) {
     return list.filter(function (g) { return (g.status === "archived") === archived; }).sort(function (a, b) {
-      if ((a.created || "") !== (b.created || "")) return (a.created || "") < (b.created || "") ? -1 : 1;
+      var sa = guideKind(a) === "status" ? 0 : 1, sb = guideKind(b) === "status" ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      if (a.created !== b.created) return a.created < b.created ? -1 : 1;
       return a.id < b.id ? -1 : 1;
     });
   }
   function guideOfTab(list, tab) { return guideList(list, false).filter(function (g) { return guideKey(g) === tab; })[0] || null; }
   function guideForItem(list, itemId) { return guideList(list, false).filter(function (g) { return g.item === itemId; })[0] || null; }
-  function visibleBase(it) {
+  // A status guide changed since this viewer looked at it.
+  function guideChanged(g, seenMap) { return guideKind(g) === "status" && !!g.updated && String(own(seenMap, g.id) ? seenMap[g.id] : "") < g.updated; }
+  // A guide shows its sections, or its body as one section.
+  function guideSections(g) { return g.sections.length ? g.sections : [{ id: "", title: "", body: g.body, updated: "" }]; }
+
+  // ---- kinds, priorities, agents
+  function kindDef(it) { return cfg.kinds.filter(function (k) { return k.id === it.kind; })[0] || cfg.kinds[0]; }
+  function kindOf(it) { return kindDef(it).id; }
+  function isDefaultKind(k) { return k === cfg.kinds[0].id; }
+  function kindLabel(k) { var x = cfg.kinds.filter(function (y) { return y.id === k; })[0]; return x ? x.label : k; }
+  // The options of a card: its own list, or the default options of its kind when it has none.
+  function optionsOf(it) { return Array.isArray(it.options) ? it.options : (kindDef(it).options || []); }
+  function priRank(p) { for (var i = 0; i < cfg.priorities.length; i++) if (cfg.priorities[i].id === p) return i; return 99; }
+  function priClass(p) { return ["now", "soon", "later"][priRank(p)] || ""; }
+  function priLabel(p) { var i = priRank(p); return i < 99 ? cfg.priorities[i].label : (p || "none"); }
+  function prioOptions() { return [["", "All"]].concat(cfg.priorities.map(function (p) { return [p.id, p.label]; })); }
+  // The routing key of an agent name: trimmed, lower case. The configured agent name is the default agent, "".
+  function agentKey(v) { var k = str(v).toLowerCase(); return k === cfg.agent.toLowerCase() ? "" : k; }
+  function agentName(a) { return a || cfg.agent; }
+
+  // ---- revisions and answers
+  function revOf(x) { return wholeRev(x ? x.rev : 1); }
+  function hasAnswer(id) { var r = resp.get(id); return !!(r && (r.choice || r.note)); }
+  // The card changed after the operator answered it.
+  function isChanged(it) { var r = resp.get(it.id); return !!(r && (r.choice || r.note) && revOf(it) > revOf(r)); }
+  // A note without an option on a card with options is a question to the agent.
+  function isQuestion(it, r) { return !!(r && r.note && !r.choice && optionsOf(it).length); }
+  // The response a save writes. A sent answer moves into history. An unsent draft is replaced.
+  function nextResponse(prev, itemId, choice, note, rev, forAgent, now) {
+    var hist = prev && Array.isArray(prev.history) ? prev.history.slice() : [];
+    if (prev && prev.sent === true && (prev.choice || prev.note))
+      hist.push({ choice: prev.choice || "", note: prev.note || "", rev: revOf(prev), updated: prev.updated || "", batch: prev.batch || "" });
+    var doc = { itemId: itemId, choice: choice, note: note, rev: rev, "for": forAgent, updated: now, sent: false, batch: "" };
+    if (hist.length) doc.history = hist;
+    return doc;
+  }
+  // Of two versions of one response, the one with the newer "updated" wins. A tie keeps the database copy.
+  function newerDoc(got, mine) { return mine && (!got || String(mine.updated) > String(got.updated)) ? mine : got; }
+  // What Send takes: unsent answers of cards that exist, are not closed, and did not change after the
+  // answer, and every unsent note.
+  function sendable() {
+    var r = [], n = [];
+    resp.forEach(function (x, id) {
+      var it = items.get(id);
+      if (x.sent || !(x.choice || x.note) || !it || it.status === "closed" || revOf(x) < revOf(it)) return;
+      r.push(x);
+    });
+    notes.forEach(function (x) { if (!x.sent && x.text) n.push(x); });
+    return { r: r, n: n };
+  }
+  // One batch per agent, by the "for" that a response or note got when it was saved.
+  function splitByAgent(s) {
+    var groups = [], by = Object.create(null);
+    function g(a) { if (!by[a]) { by[a] = { "for": a, r: [], n: [] }; groups.push(by[a]); } return by[a]; }
+    s.r.forEach(function (x) { g(agentKey(own(x, "for") ? x["for"] : (items.get(x.itemId) || {}).from)).r.push(x); });
+    s.n.forEach(function (x) { g(agentKey(own(x, "for") ? x["for"] : (items.get(x.item) || {}).from)).n.push(x); });
+    return groups;
+  }
+  // The batch carries a copy of every answer and note at send time. Agents read the batch only.
+  function batchDoc(bid, now, gp) {
+    var answers = Object.create(null), nn = Object.create(null);
+    gp.r.forEach(function (x) { answers[x.itemId] = { answer: x.choice, note: x.note, rev: revOf(x) }; });
+    gp.n.forEach(function (x) { nn[x.id] = { text: x.text, item: x.item || "" }; });
+    return { id: bid, created: now, "for": gp["for"], itemIds: gp.r.map(function (x) { return x.itemId; }),
+      noteIds: gp.n.map(function (x) { return x.id; }), answers: answers, notes: nn, status: "new" };
+  }
+  // A batch is handled when its agent wrote acks/<batch id>, or when an older batch says done or delivered.
+  function isHandled(b, ackMap) { return ackMap.has(b.id) || b.status === "done" || b.status === "delivered"; }
+  function replacedBy(id) { var out = null; items.forEach(function (x) { if (!out && x.supersedes === id && x.id !== id) out = x; }); return out; }
+  // A card with "after" waits until that card has a sent answer or is closed.
+  function waitsFor(it) {
+    var a = it.after && it.after !== it.id ? items.get(it.after) : null, r = a ? resp.get(a.id) : null;
+    return a && a.status !== "closed" && !(r && r.sent && (r.choice || r.note)) ? a : null;
+  }
+
+  // ---- visibility
+  function stateOf(it) {
     var r = resp.get(it.id);
-    if (it.status === "closed" && !f.closed) return false;
-    if (f.hide && (it.status === "answered" || (r && r.sent === true && !isPending(it.id)))) return false;
+    if (it.status === "closed") return "closed";
+    if (isChanged(it)) return "changed";
+    if (r && (r.choice || r.note)) return !r.sent || isPending(it.id) ? "unsent" : (isQuestion(it, r) ? "waiting" : "sent");
+    return it.status === "answered" ? "answered" : "open";
+  }
+  function hiddenByRules(it) {
+    var st = stateOf(it);
+    return st === "closed" ? !f.closed : (f.hide && (st === "sent" || st === "answered"));
+  }
+  function shownByRules(it) { return !hiddenByRules(it); }
+  function visibleBase(it) {
+    if (hiddenByRules(it)) return false;
     if (f.area && it.area !== f.area) return false;
     if (f.prio && it.priority !== f.prio) return false;
     return true;
   }
-  function shownByRules(it) {
-    var r = resp.get(it.id);
-    if (it.status === "closed" && !f.closed) return false;
-    if (f.hide && (it.status === "answered" || (r && r.sent === true && !isPending(it.id)))) return false;
-    return true;
-  }
   function visible(it) { return visibleBase(it) && inTab(it, f.tab); }
   // "Blocked on you": hide rules only, whatever tab, area or priority is selected.
-  function kindOf(it) { return it.kind === "action" ? "action" : "decision"; }
-  function blocksOf(it) { return it.blocks == null ? "" : String(it.blocks).trim(); }
+  function blocksOf(it) { return str(it.blocks); }
   function blockedList(sorted, shownFn) { return sorted.filter(function (it) { return shownFn(it) && blocksOf(it) !== ""; }); }
   function sortedItems() {
     return Array.from(items.values()).sort(function (a, b) {
-      var pa = PRI[a.priority], pb = PRI[b.priority];
-      pa = pa == null ? 9 : pa; pb = pb == null ? 9 : pb;
+      var pa = priRank(a.priority), pb = priRank(b.priority);
       if (pa !== pb) return pa - pb;
-      if ((a.area || "") !== (b.area || "")) return (a.area || "") < (b.area || "") ? -1 : 1;
-      if ((a.created || "") !== (b.created || "")) return (a.created || "") < (b.created || "") ? -1 : 1;
+      if (a.area !== b.area) return a.area < b.area ? -1 : 1;
+      if (a.created !== b.created) return a.created < b.created ? -1 : 1;
       return a.id < b.id ? -1 : 1;
     });
   }
-  function unsentCount() {
-    var n = 0;
-    resp.forEach(function (r) { if (r.sent === false && (r.choice || r.note)) n++; });
-    notes.forEach(function (x) { if (x.sent === false && x.text) n++; });
-    return n;
-  }
+  function unsentCount() { var s = sendable(); return s.r.length + s.n.length; }
+  function openCount() { var n = 0; items.forEach(function (it) { var s = stateOf(it); if (s === "open" || s === "changed") n++; }); return n; }
 
   // ---- card text formatter. Escapes HTML first, then adds only the tags below.
   // Markers: blank line = paragraph, "- " = bullet, "1. " = numbered step, "### " = heading,
   // **bold**, `code`, a fence of three backticks = preformatted block with a copy button,
-  // and the labels Before, Now, Suggested, Why, Risk, Your answer followed by a colon.
-  var LABEL = /^(Before|Now|Suggested|Why|Risk|Your answer):[ \t]*(.*)$/;
+  // and the section labels of the config (default Before, Now, Suggested, Why, Risk, Your answer) followed by a colon.
   function esc(s) {
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
@@ -342,8 +580,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     }).join("");
   }
   function fmtText(src) {
-    var lines = esc(src == null ? "" : src).replace(/\r\n?/g, "\n").split("\n");
-    var out = [], para = [], list = null, fence = null, m;
+    var lines = esc(typeof src === "string" ? src : "").replace(/\r\n?/g, "\n").split("\n");
+    var out = [], para = [], list = null, fence = null, m, re = cfg.labelRe;
     function endPara() { if (para.length) { out.push("<p>" + para.join("<br>") + "</p>"); para = []; } }
     function endList() { if (list) { out.push("<" + list.tag + list.attr + ">" + list.rows.join("") + "</" + list.tag + ">"); list = null; } }
     function endFence() { if (fence) { out.push('<div class="pre"><button type="button" class="copy">Copy</button><pre>' + fence.join("\n") + "</pre></div>"); fence = null; } }
@@ -362,105 +600,213 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       if (m) { row("ol", ' start="' + m[1] + '"', inline(m[2].trim())); return; }
       endList();
       if (ln.indexOf("### ") === 0) { endPara(); out.push("<h4>" + inline(ln.slice(4).trim()) + "</h4>"); return; }
-      m = LABEL.exec(ln);
+      m = re.exec(ln);
       para.push(m ? "<strong>" + m[1] + ":</strong> " + inline(m[2]) : inline(ln));
     });
     endPara(); endList(); endFence();
     return out.join("");
   }
+  // ---- pure: end
 
-  // ---- cards
+  // ---- reference guides: HTML and inline SVG through allowlists. The parse happens in an inert
+  // document, so nothing runs or loads. An element outside the list goes with its content. An
+  // attribute outside the list goes, and so does every attribute value with a backslash or "/*".
+  // A url() stays only for a #id in the guide or an https: host on the config list domains.
+  // A style keeps only the listed CSS properties, with plain values. Ids get the prefix "ref-".
+  function set(s) { var o = Object.create(null); s.split(" ").forEach(function (k) { o[k] = true; }); return o; }
+  var REF_TAGS = set("a abbr b blockquote br caption code col colgroup dd del details div dl dt em figcaption figure h1 h2 h3 h4 h5 h6 hr i ins kbd li mark ol p pre q s small span strong sub summary sup table tbody td tfoot th thead tr u ul " +
+    "svg g path rect circle ellipse line polyline polygon text tspan title desc defs marker lineargradient radialgradient stop use symbol clippath");
+  var REF_ATTRS = set("id class title lang dir role aria-label aria-hidden colspan rowspan scope start reversed open width height align valign style href xlink:href " +
+    "viewbox xmlns preserveaspectratio d x y x1 y1 x2 y2 cx cy r rx ry dx dy fx fy points fill fill-opacity fill-rule stroke stroke-width stroke-opacity stroke-dasharray " +
+    "stroke-dashoffset stroke-linecap stroke-linejoin opacity transform text-anchor dominant-baseline font-size font-family font-weight font-style letter-spacing " +
+    "markerwidth markerheight markerunits refx refy orient offset stop-color stop-opacity gradientunits gradienttransform clippathunits");
+  // No position, z-index, pointer-events, opacity, inset, top, left, right, bottom or transform: a guide cannot cover the page.
+  var CSS_PROPS = set("color background-color border border-color border-style border-width border-radius border-collapse margin padding " +
+    "width height max-width min-width font-size font-weight font-style text-align text-decoration vertical-align white-space line-height fill stroke stroke-width display");
+  // An https: URL whose host is on the config list domains, or a subdomain of one.
+  function listedUrl(v) {
+    var u;
+    if (!/^https:\/\/[^\s'"()\\]+$/i.test(v)) return false;
+    try { u = new URL(v); } catch (e) { return false; }
+    var host = u.hostname.toLowerCase();
+    return u.protocol === "https:" && !u.username && !u.password && cfg.domains.some(function (d) { return host === d || host.slice(-d.length - 1) === "." + d; });
+  }
+  // Check every url() of a value: a #id becomes #ref-id, a listed https: URL stays. Returns the
+  // value with each url() replaced by a plain token in "rest", for the later checks, or null.
+  var URL_RE = /url\s*\(\s*(['"]?)([^'"()\s]*)\1\s*\)/gi;
+  function checkUrls(v) {
+    var bad = false, out = v.replace(URL_RE, function (all, q, target) {
+      if (/^#[\w-]+$/.test(target)) return "url(#ref-" + target.slice(1) + ")";
+      if (listedUrl(target)) return "url(" + target + ")";
+      bad = true; return all;
+    });
+    if (bad) return null;
+    var rest = out.replace(URL_RE, "U");
+    return /url\s*\(/i.test(rest) || v.indexOf("/*") >= 0 ? null : { value: out, rest: rest };
+  }
+  function cleanStyle(v) {
+    return String(v).split(";").map(function (d) {
+      var i = d.indexOf(":"), p = i < 0 ? "" : d.slice(0, i).trim().toLowerCase(), val = i < 0 ? "" : d.slice(i + 1).trim();
+      var u = val === "" ? null : checkUrls(val);
+      var plain = !!u && !/[\\'"]/.test(u.rest) && u.rest.replace(/\b(rgba?|hsla?)\(/gi, "").indexOf("(") < 0;
+      return CSS_PROPS[p] && plain ? p + ": " + u.value : "";
+    }).filter(Boolean).join("; ");
+  }
+  // A link on <a> is kept for https:, http:, a fragment or a relative target. Not "//host", which
+  // leaves the page. Control characters and spaces cannot hide a scheme.
+  function okUrl(v) {
+    var s = String(v).replace(/[\u0000- \u007f-\u009f]/g, ""), m = /^([a-z][a-z0-9+.\-]*):/i.exec(s);
+    return s !== "" && s.indexOf("//") !== 0 && (!m || /^https?$/i.test(m[1]));
+  }
+  function sanitizeRef(src) {
+    var doc = new DOMParser().parseFromString("<!doctype html><html><body>" + (typeof src === "string" ? src : ""), "text/html");
+    function clean(node) {
+      Array.prototype.slice.call(node.childNodes).forEach(function (n) {
+        if (n.nodeType === 3) return;
+        var tag = n.nodeType === 1 ? String(n.localName).toLowerCase() : "";
+        if (!REF_TAGS[tag]) { n.remove(); return; }
+        Array.prototype.slice.call(n.attributes).forEach(function (a) {
+          var name = a.name.toLowerCase(), v = a.value, frag = v.trim().charAt(0) === "#", link = name === "href" || name === "xlink:href";
+          var u = name === "style" || link ? null : checkUrls(v);
+          var keep = !!REF_ATTRS[name] && v.indexOf("\\") < 0 && (name === "style" || link || !!u);
+          if (keep && link) keep = tag === "a" ? okUrl(v) : frag || listedUrl(v.trim());
+          if (!keep) { n.removeAttribute(a.name); return; }
+          if (name === "id") n.setAttribute(a.name, "ref-" + v.trim());
+          else if (link && frag) n.setAttribute(a.name, "#ref-" + v.trim().slice(1));
+          else if (name === "style") { var cs = cleanStyle(v); if (cs) n.setAttribute(a.name, cs); else n.removeAttribute(a.name); }
+          else if (u && u.value !== v) n.setAttribute(a.name, u.value);
+        });
+        if (tag === "use" && !n.hasAttribute("href") && !n.hasAttribute("xlink:href")) { n.remove(); return; }
+        if (tag === "a") { n.setAttribute("target", "_blank"); n.setAttribute("rel", "noopener noreferrer"); }
+        clean(n);
+      });
+    }
+    clean(doc.body);
+    // A wide table scrolls inside its own box, because the guide box clips.
+    Array.prototype.slice.call(doc.body.querySelectorAll("table")).forEach(function (t) {
+      var w = doc.createElement("div"); w.className = "tw"; t.parentNode.insertBefore(w, t); w.appendChild(t);
+    });
+    var out = document.createDocumentFragment();
+    while (doc.body.firstChild) out.appendChild(document.adoptNode(doc.body.firstChild));
+    return out;
+  }
+
+  // ---- cards. Every DOM id of a card comes from its card number, never from the item id.
   function buildCard(it) {
-    var c = { it: it };
+    var c = { it: it, n: ++cardSeq };
     c.pri = h("span", { class: "tag" });
     c.area = h("span", { class: "tag area" });
     c.state = h("span", { class: "tag" });
     c.kind = h("span", { class: "tag" });
+    c.from = h("span", { class: "tag area" });
+    c.rel = h("div", { class: "rel", hidden: true });
     c.blocks = h("div", { class: "blocks" });
+    c.changed = h("div", { class: "changed", hidden: true });
     c.title = h("h2");
     c.summary = h("div", { class: "summary rich" });
     c.evBody = h("div", { class: "evidence rich" });
     c.ev = h("details", null, h("summary", { text: "Evidence" }), c.evBody);
     c.fs = h("fieldset", null);
-    c.ta = h("textarea", { id: "n-" + safe(it.id), placeholder: "Note or question (saved automatically)" });
+    c.form = h("form", { onsubmit: function (e) { e.preventDefault(); } }, c.fs);
+    c.ta = h("textarea", { id: "n" + c.n, placeholder: "Note or question (saved automatically)" });
     c.save = h("span", { class: "small muted" });
     c.src = h("span", { class: "small muted mono" });
     c.clear = h("button", { class: "link small", type: "button", text: "Clear choice" });
+    c.about = h("button", { class: "link small", type: "button", text: "Free note about this card" });
     c.guide = h("button", { class: "link small gopen", type: "button", text: "Open guide", hidden: true });
-    c.guide.addEventListener("click", function () { var g = guideForItem(Array.from(guides.values()), it.id); if (g) openGuide(g.id); });
-    c.el = h("article", { class: "card", id: "card-" + safe(it.id) },
-      h("div", { class: "tags" }, c.pri, c.area, c.kind, c.state, h("span", { class: "grow" }), c.src),
-      c.title, c.blocks, c.guide, c.summary, c.ev, c.fs, c.ta,
-      h("div", { class: "foot" }, c.save, c.clear));
+    c.guide.addEventListener("click", function () { var g = guideForItem(Array.from(guides.values()), c.it.id); if (g) openGuide(g.id); });
+    c.about.addEventListener("click", function () { noteItem = c.it.id; render(); $("newnote").focus(); bringIntoView($("about"), false); });
+    c.el = h("article", { class: "card", id: "card-" + c.n, "data-item": it.id },
+      h("div", { class: "tags" }, c.pri, c.area, c.kind, c.from, c.state, h("span", { class: "grow" }), c.src),
+      c.title, c.rel, c.blocks, c.changed, c.guide, c.summary, c.ev, c.form, c.ta,
+      h("div", { class: "foot" }, c.save, h("span", null, c.about, c.clear)));
     c.optKey = null;
     c.ta.addEventListener("input", function () {
       setSave(c, "Typing");
-      clearTimeout(timers.get(it.id));
-      timers.set(it.id, setTimeout(function () { timers.delete(it.id); saveResponse(c.it.id); }, 700));
+      clearTimeout(timers.get(c.it.id));
+      timers.set(c.it.id, setTimeout(function () { timers.delete(c.it.id); saveResponse(c.it.id); }, 700));
     });
-    c.ta.addEventListener("blur", function () { if (timers.has(it.id)) flushItem(it.id); });
+    c.ta.addEventListener("blur", function () { if (timers.has(c.it.id)) flushItem(c.it.id); });
     c.clear.addEventListener("click", function () {
       c.fs.querySelectorAll("input[type=radio]").forEach(function (r) { r.checked = false; });
-      flushItem(it.id, true);
+      flushItem(c.it.id);
     });
     return c;
   }
   function setSave(c, t) { c.save.textContent = t; }
+  var STATE_TEXT = { waiting: "waiting on agent" };
 
   function updateCard(c, it) {
     c.it = it;
-    var r = resp.get(it.id);
-    c.pri.className = "tag " + (it.priority || "");
-    c.pri.textContent = it.priority || "none";
-    c.area.textContent = it.area || "";
+    var r = resp.get(it.id), k = kindOf(it), st = stateOf(it), changed = st === "changed", wait = waitsFor(it);
+    c.pri.className = "tag " + priClass(it.priority);
+    c.pri.textContent = priLabel(it.priority);
+    c.area.textContent = it.area;
+    c.area.hidden = !it.area;
     c.title.textContent = it.title || it.id;
-    c.kind.textContent = kindOf(it) === "action" ? "Action" : "";
-    c.kind.hidden = kindOf(it) !== "action";
-    c.kind.className = "tag" + (kindOf(it) === "action" ? " now" : "");
+    c.kind.textContent = kindLabel(k);
+    c.kind.hidden = isDefaultKind(k);
+    c.kind.className = "tag" + (isDefaultKind(k) ? "" : " now");
+    c.from.textContent = it.from ? "from " + it.from : "";
+    c.from.hidden = !it.from;
     c.blocks.textContent = blocksOf(it) ? "Blocks: " + blocksOf(it) : "";
     c.blocks.hidden = !blocksOf(it);
+    c.changed.hidden = !changed;
+    c.changed.textContent = changed ? "Changed since your answer: this is version " + revOf(it) + ", you answered version " + revOf(r) +
+      (r.choice ? " with “" + r.choice + "”" : "") + ". Answer again." : "";
+    // Links to related cards: replaces, replaced by, after.
+    var rb = replacedBy(it.id), rp = it.supersedes ? items.get(it.supersedes) : null;
+    var rel = [rp ? ["Replaces: ", rp] : null, rb ? ["Replaced by: ", rb] : null, wait ? ["Answer this one first: ", wait] : null].filter(Boolean);
+    var relKey = JSON.stringify(rel.map(function (x) { return [x[0], x[1].id, x[1].title]; }));
+    if (c.relKey !== relKey) {
+      c.relKey = relKey; c.rel.textContent = "";
+      rel.forEach(function (x) { c.rel.append(h("button", { class: "link small", type: "button", text: x[0] + (x[1].title || x[1].id), onclick: function () { goToCard(x[1].id); } })); });
+    }
+    c.rel.hidden = !rel.length;
+    c.el.classList.toggle("wait", !!wait);
     // fmtText escapes the text. Write the HTML only when the text changed, so that a "Copied" label and a selection stay.
-    var rich = JSON.stringify([it.summary, it.evidence]);
+    var rich = JSON.stringify([it.summary, it.evidence, cfg.labels]);
     if (c.rich !== rich) { c.rich = rich; c.summary.innerHTML = fmtText(it.summary); c.evBody.innerHTML = fmtText(it.evidence); }
     var cg = guideForItem(Array.from(guides.values()), it.id);
     c.guide.hidden = !cg;
     c.guide.title = cg ? (cg.title || cg.id) : "";
     c.ev.hidden = !it.evidence;
     c.src.textContent = it.source_file ? it.source_file.split("/").slice(-1)[0] : "";
-    c.src.title = it.source_file || "";
-    var st = it.status === "closed" ? "closed" : (r && r.sent ? "sent" : (hasAnswer(it.id) ? "unsent" : (it.status === "answered" ? "answered" : "open")));
-    c.state.className = "tag" + (st === "unsent" ? " soon" : (st === "sent" || st === "answered" ? " good" : ""));
-    c.state.textContent = st;
+    c.src.title = it.source_file;
+    c.state.className = "tag" + (st === "unsent" || st === "changed" || st === "waiting" ? " soon" : (st === "sent" || st === "answered" ? " good" : ""));
+    c.state.textContent = STATE_TEXT[st] || st;
     c.el.classList.toggle("done", st === "sent" || st === "closed" || st === "answered");
 
-    var opts = Array.isArray(it.options) ? it.options : [];
+    var opts = optionsOf(it);
     var key = JSON.stringify([opts, it.recommendation]);
     if (c.optKey !== key) {
       c.optKey = key;
       c.fs.textContent = "";
       c.fs.append(h("legend", { class: "small muted", text: opts.length ? "Options" : "" }));
       opts.forEach(function (o, i) {
-        var inp = h("input", { type: "radio", name: "opt-" + safe(it.id), value: o, id: "o-" + safe(it.id) + "-" + i });
-        inp.addEventListener("change", function () { flushItem(it.id, true); });
-        var label = h("label", { class: "opt", for: inp.id }, inp,
-          h("span", { class: "t" }, o, (it.recommendation && o === it.recommendation) ? h("span", { class: "rec", text: "recommended" }) : null));
-        c.fs.append(label);
+        var inp = h("input", { type: "radio", name: "opt", value: o, id: "o" + c.n + "-" + i });
+        // "click" also fires on the option that is already checked: on a changed card that is a new answer.
+        inp.addEventListener("click", function () { flushItem(c.it.id); });
+        inp.addEventListener("change", function () { flushItem(c.it.id); });
+        c.fs.append(h("label", { class: "opt", for: inp.id }, inp,
+          h("span", { class: "t" }, o, (it.recommendation && o === it.recommendation) ? h("span", { class: "rec", text: "recommended" }) : null)));
       });
     }
-    c.fs.hidden = !opts.length;
+    c.form.hidden = !opts.length;
     c.clear.hidden = !opts.length;
     if (!isPending(it.id)) {
-      var ch = r ? (r.choice || "") : "";
+      var ch = r ? r.choice : "";
       c.fs.querySelectorAll("input[type=radio]").forEach(function (inp) { inp.checked = ch !== "" && inp.value === ch; });
-      var nv = r ? (r.note || "") : "";
+      var nv = r ? r.note : "";
       if (c.ta.value !== nv && document.activeElement !== c.ta) c.ta.value = nv;
       if (r && r.updated) setSave(c, (r.sent ? "Sent" : "Saved") + " " + fmt(r.updated));
       else setSave(c, "");
     }
   }
+  // A card that fails to render shows one line instead, so one bad record cannot blank the board.
+  function brokenCard(it) { return h("article", { class: "card", "data-item": it.id, text: "Could not render " + it.id }); }
 
   // ---- filter controls: segmented radio rows and switches
-  var PRIO_OPTIONS = [["", "All"], ["now", "Now"], ["soon", "Soon"], ["later", "Later"]];
   function areaOptions(areas) { return [["", "All"]].concat(areas.map(function (a) { return [a, a]; })); }
   function renderSeg(box, opts, cur, onPick) {
     var key = JSON.stringify(opts);
@@ -489,29 +835,32 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   }
   function setSwitch(b, on) { b.setAttribute("aria-checked", on ? "true" : "false"); }
 
+  function ready() { return !!db && loaded.items && loaded.responses && loaded.notes; }
   function render() {
     var glist = Array.from(guides.values());
-    // A guide tab stays selected while the guides load. An unknown tab falls back to All.
-    if (isGuideTab(f.tab) ? (loaded.guides && !guideOfTab(glist, f.tab)) : !TABS.some(function (t) { return t[0] === f.tab; })) f.tab = "all";
+    // A guide tab stays selected while the guides load, and an item tab while the config loads. An unknown tab falls back to All.
+    if (isGuideTab(f.tab) ? (loaded.guides && !guideOfTab(glist, f.tab))
+      : (f.tab !== "all" && loaded.config && !cfg.tabs.some(function (t) { return t.id === f.tab; }))) f.tab = "all";
     var guide = guideOfTab(glist, f.tab);
     var list = sortedItems(), vis = list.filter(visible), cont = $("cards");
+    try { renderGuide(guide); } catch (e) { $("guide").textContent = "Could not render the guide " + guide.id; }
     renderTabs(tabCounts(list, visibleBase), guideList(glist, false));
-    renderGuide(guide);
     renderArchived(guideList(glist, true));
     cont.hidden = isGuideTab(f.tab);
     renderBlocked(blockedList(list, shownByRules));
-    // area options
     var areas = Array.from(new Set(list.map(function (i) { return i.area; }).filter(Boolean))).sort();
     if (f.area && areas.indexOf(f.area) < 0 && loaded.items) f.area = "";
     renderSeg($("f-area"), areaOptions(areas), f.area, function (v) { f.area = v; saveFilter(); render(); });
-    renderSeg($("f-prio"), PRIO_OPTIONS, f.prio, function (v) { f.prio = v; saveFilter(); render(); });
+    renderSeg($("f-prio"), prioOptions(), f.prio, function (v) { f.prio = v; saveFilter(); render(); });
     setSwitch($("f-hide"), !!f.hide); setSwitch($("f-closed"), !!f.closed);
 
     // cards in order, touch the DOM only when the order changes
     var want = vis.map(function (it) {
       var c = cards.get(it.id);
-      if (!c) { c = buildCard(it); cards.set(it.id, c); }
-      updateCard(c, it);
+      try {
+        if (!c || c.broken) { c = buildCard(it); cards.set(it.id, c); }
+        updateCard(c, it);
+      } catch (e) { c = { broken: true, el: brokenCard(it) }; cards.set(it.id, c); }
       return c.el;
     });
     var cur = Array.from(cont.children);
@@ -528,32 +877,32 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     var em = $("empty");
     if (isGuideTab(f.tab)) { em.hidden = !!guide; em.textContent = "Loading the guide"; }
     else if (!loaded.items) { em.hidden = false; em.textContent = "Loading items"; }
-    else if (!items.size) { em.hidden = false; em.textContent = "No items yet. Review agents add items to this board, and they appear here without a reload."; }
+    else if (!items.size) { em.hidden = false; em.textContent = "No items yet. Agents add items to this board, and they appear here without a reload."; }
     else if (!vis.length) { em.hidden = false; em.textContent = "No items match the filters. " + (f.hide ? "Answered items are hidden." : ""); }
     else em.hidden = true;
 
-    // header
-    var open = 0;
-    items.forEach(function (it) { if (it.status === "open" && !hasAnswer(it.id)) open++; });
-    $("c-open").textContent = open;
-    $("c-unsent").textContent = unsentCount();
-    var n = unsentCount(), b = $("send");
-    b.textContent = (sending ? "Sending " : "Send to Claude ") + "(" + n + ")";
-    b.disabled = sending || n === 0 || !db;
-    var lb = Array.from(batches.values()).sort(function (a, b2) { return (b2.created || "") < (a.created || "") ? -1 : 1; })[0];
+    // header: every count comes from the items and responses
+    var n = unsentCount(), b = $("send"), to = splitByAgent(sendable()).map(function (g) { return g["for"]; });
+    $("c-open").textContent = openCount();
+    $("c-unsent").textContent = n;
+    b.textContent = sending ? "Sending (" + n + ")" : (to.length > 1 ? "Send to " + to.length + " agents (" + n + ")" : "Send to " + agentName(to[0] || "") + " (" + n + ")");
+    b.disabled = sending || n === 0 || !ready();
+    var lb = Array.from(batches.values()).sort(function (a, b2) { return b2.created < a.created ? -1 : 1; })[0];
+    var ack = lb ? acks.get(lb.id) : null;
     $("lastbatch").textContent = lb
-      ? "Last sent " + fmt(lb.created) + ", " + ((lb.itemIds || []).length + (lb.noteIds || []).length) + " in batch, " +
-        (lb.status === "delivered" ? "delivered " + fmt(lb.delivered_at) : "not delivered yet")
+      ? "Last sent " + fmt(lb.created) + ", " + (lb.itemIds.length + lb.noteIds.length) + " in batch" +
+        (lb["for"] ? " for " + lb["for"] : "") + ", " + (isHandled(lb, acks) ? "handled " + fmt(ack ? ack.at : lb.delivered_at) : "not handled yet")
       : (loaded.batches ? "Nothing sent yet" : "");
-    $("ttl").textContent = (meta && meta.title) || "Decision board";
-    $("metaline").textContent = meta && meta.updated ? "Board data updated " + fmt(meta.updated) : "";
+    $("ttl").textContent = boardTitle(meta);
+    document.title = boardTitle(meta);
+    $("newnote").placeholder = "A message to " + cfg.agent + " that is not tied to an item. It goes out with the next batch.";
     renderNotes();
     renderSync();
   }
   var blockedKey = null;
   function renderBlocked(rows) {
     var box = $("blocked");
-    var key = JSON.stringify(rows.map(function (it) { return [it.id, it.title, kindOf(it), blocksOf(it), it.priority]; }));
+    var key = JSON.stringify([rows.map(function (it) { return [it.id, it.title, kindOf(it), blocksOf(it), it.priority]; }), cfg.kinds]);
     if (key === blockedKey) return;
     blockedKey = key;
     box.textContent = "";
@@ -561,21 +910,22 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     if (!rows.length) { box.append(h("div", { class: "muted small", text: "Nothing is blocked on you." })); return; }
     var list = h("div", { class: "blist" });
     rows.forEach(function (it) {
+      var k = kindOf(it);
       list.append(h("button", { type: "button", class: "brow", onclick: function () { goToCard(it.id); } },
         h("span", { class: "bt" },
-          h("span", { class: "tag" + (kindOf(it) === "action" ? " now" : ""), text: kindOf(it) === "action" ? "Action" : "Decision" }),
+          h("span", { class: "tag" + (isDefaultKind(k) ? "" : " now"), text: kindLabel(k) }),
           h("span", { class: "tt", text: it.title || it.id })),
         h("span", { class: "bb", text: "Blocks: " + blocksOf(it) })));
     });
     box.append(list);
   }
-  // A tap on a "Blocked on you" entry: select the tab of the card, clear every filter that
-  // hides it, render, and only then scroll.
+  // A tap on a "Blocked on you" entry or a related card: select the tab of the card, clear every
+  // filter that hides it, render, and only then scroll.
   function goToCard(id) {
     var it = items.get(id);
     if (!it) return;
     if (!visible(it)) {
-      if (!inTab(it, f.tab)) f.tab = itemSource(it);
+      if (!inTab(it, f.tab)) f.tab = tabOf(it, cfg.tabs) || "all";
       if (!visible(it)) { f.area = ""; f.prio = ""; }
       if (!visible(it)) { f.hide = false; if (it.status === "closed") f.closed = true; }
       saveFilter();
@@ -618,12 +968,18 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       h("span", { class: "tl", text: label }), isGuide ? null : h("span", { class: "n" }));
   }
   function renderTabs(counts, gl) {
-    var box = $("tabs"), key = JSON.stringify(gl.map(function (g) { return [g.id, g.title]; }));
+    var box = $("tabs"), tabs = shownTabs();
+    var key = JSON.stringify([tabs.map(function (t) { return [t.id, t.label]; }), gl.map(function (g) { return [g.id, g.title, guideChanged(g, seen)]; })]);
     if (key !== tabsKey) {
       tabsKey = key;
       box.textContent = "";
-      TABS.forEach(function (t) { box.append(tabButton(t[0], t[1], false)); });
-      gl.forEach(function (g) { box.append(tabButton(guideKey(g), g.title || g.id, true)); });
+      box.append(tabButton("all", "All", false));
+      tabs.forEach(function (t) { box.append(tabButton(t.id, t.label, false)); });
+      gl.forEach(function (g) {
+        var b = tabButton(guideKey(g), g.title || g.id, true);
+        if (guideChanged(g, seen)) b.append(h("span", { class: "dot", title: "Changed since you looked" }));
+        box.append(b);
+      });
     }
     Array.from(box.children).forEach(function (b) {
       var k = b.getAttribute("data-tab"), n = b.querySelector(".n");
@@ -631,26 +987,34 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       if (n) n.textContent = String(counts[k] || 0);
     });
   }
-  // ---- guides. The body goes through fmtText, which escapes it first.
+  // ---- guides. A text guide goes through fmtText, which escapes it first. A reference guide goes
+  // through sanitizeRef. A status guide has no Archive button and marks itself seen when shown.
   var guideShown = null, archivedKey = null;
   function renderGuide(g) {
     var box = $("guide");
     box.hidden = !g;
     if (!g) { guideShown = null; return; }
-    var hasCard = !!(g.item && items.has(g.item));
-    var key = JSON.stringify([g.id, g.title, g.body, g.updated, g.item, hasCard]);
+    var kind = guideKind(g), hasCard = !!(g.item && items.has(g.item)), changed = guideChanged(g, seen);
+    if (kind === "status" && g.updated && seen[g.id] !== g.updated) { seen[g.id] = g.updated; saveSeen(); }
+    var key = JSON.stringify([g, hasCard, cfg.labels, changed]);
     if (key === guideShown) return;
     guideShown = key;
-    var body = h("div", { class: "rich gbody" });
-    body.innerHTML = fmtText(g.body);
     box.textContent = "";
-    box.append(
-      h("div", { class: "tags" }, h("span", { class: "tag", text: "Guide" }), h("span", { class: "grow" }),
+    box.append(h("div", { class: "tags" }, h("span", { class: "tag", text: kind === "reference" ? "Reference" : (kind === "status" ? "Status" : "Guide") }),
+        changed ? h("span", { class: "tag soon", text: "changed since you looked" }) : null, h("span", { class: "grow" }),
         h("span", { class: "small muted", text: g.updated ? "Updated " + fmt(g.updated) : "" })),
-      h("h2", { text: g.title || g.id }), body,
-      h("div", { class: "foot" },
-        hasCard ? h("button", { class: "link small gcard", type: "button", text: "Go to the card", onclick: function () { goToCard(g.item); } }) : h("span"),
-        h("button", { class: "garchive", type: "button", text: "Archive", onclick: function () { setGuideStatus(g.id, "archived"); } })));
+      h("h2", { text: g.title || g.id }));
+    guideSections(g).forEach(function (s) {
+      var body = h("div", { class: "rich gbody" + (kind === "reference" ? " ref" : "") });
+      if (kind === "reference") body.append(sanitizeRef(s.body));
+      else body.innerHTML = fmtText(s.body);
+      box.append(h("section", { class: "gsec" },
+        s.title ? h("h3", { text: s.title }) : null,
+        s.updated ? h("span", { class: "small muted", text: "updated " + fmt(s.updated) }) : null, body));
+    });
+    box.append(h("div", { class: "foot" },
+      hasCard ? h("button", { class: "link small gcard", type: "button", text: "Go to the card", onclick: function () { goToCard(g.item); } }) : h("span"),
+      kind === "status" ? null : h("button", { class: "garchive", type: "button", text: "Archive", onclick: function () { setGuideStatus(g.id, "archived"); } })));
   }
   function renderArchived(gl) {
     var box = $("archived"), key = JSON.stringify(gl.map(function (g) { return [g.id, g.title]; }));
@@ -680,11 +1044,18 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     }, function (e) { showMsg("The guide was not saved: " + errText(e)); });
   }
   function renderNotes() {
-    var box = $("nlist"); box.textContent = "";
-    Array.from(notes.values()).filter(function (x) { return x.sent === false; })
-      .sort(function (a, b) { return (a.created || "") < (b.created || "") ? -1 : 1; })
+    var box = $("nlist"), ab = $("about"), it = noteItem ? items.get(noteItem) : null;
+    if (noteItem && !it) noteItem = "";
+    ab.hidden = !it;
+    ab.textContent = "";
+    if (it) ab.append(h("span", { class: "grow", text: "About: " + (it.title || it.id) }),
+      h("button", { class: "link small", type: "button", text: "Not about a card", onclick: function () { noteItem = ""; render(); } }));
+    box.textContent = "";
+    Array.from(notes.values()).filter(function (x) { return !x.sent; })
+      .sort(function (a, b) { return a.created < b.created ? -1 : 1; })
       .forEach(function (x) {
-        box.append(h("div", { class: "nitem" }, h("span", { text: x.text }),
+        var about = x.item && items.get(x.item);
+        box.append(h("div", { class: "nitem" }, h("span", { text: (about ? "About “" + (about.title || about.id) + "”: " : "") + x.text }),
           h("button", { class: "link small", type: "button", text: "Remove", onclick: function () { removeNote(x.id); } })));
       });
   }
@@ -698,7 +1069,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   var raf = 0;
   function schedule() { if (!raf) raf = requestAnimationFrame(function () { raf = 0; render(); }); }
 
-  // ---- writes
+  // ---- writes. One chain per item, so each write sees the one before it.
   function enqueue(key, fn) {
     var prev = chains.get(key) || Promise.resolve();
     var p = prev.catch(function () {}).then(fn);
@@ -711,19 +1082,25 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   }
   function saveResponse(id) {
     var c = cards.get(id);
-    if (!c || !db) return Promise.resolve();
+    if (!c || c.broken || !db) return Promise.resolve();
     var checked = c.fs.querySelector("input[type=radio]:checked");
-    var choice = checked ? checked.value : "";
-    var note = c.ta.value;
-    var existing = resp.get(id);
-    if (!choice && !note && !existing) { setSave(c, ""); return Promise.resolve(); }
-    var doc = { itemId: id, choice: choice, note: note, updated: iso(), sent: false, batch: "" };
+    var choice = checked ? checked.value : "", note = c.ta.value, prev = null;
     inflight.set(id, (inflight.get(id) || 0) + 1); totalInflight++;
     setSave(c, "Saving"); renderSync();
-    return enqueue(id, function () { return db.doc("responses/" + id).set(doc); }).then(function () {
-      lastSaved = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      showMsg("");
-    }, function (e) {
+    return enqueue(id, function () {
+      prev = resp.get(id) || null;
+      var rev = revOf(c.it);
+      // Nothing changed: no write. The same answer on a card with a newer rev is a new answer.
+      if (prev ? prev.choice === choice && prev.note === note && revOf(prev) === rev : !choice && !note) return null;
+      var doc = nextResponse(prev, id, choice, note, rev, agentKey(c.it.from), iso());
+      lastDoc.set(id, doc); resp.set(id, doc);
+      return db.doc("responses/" + id).set(doc).then(function () {
+        lastSaved = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        showMsg("");
+      });
+    }).catch(function (e) {
+      lastDoc.delete(id);
+      if (prev) resp.set(id, prev); else resp.delete(id);
       setSave(c, "Not saved: " + errText(e));
       showMsg("A save failed: " + errText(e));
     }).then(function () {
@@ -740,52 +1117,85 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function addNote() {
     var t = $("newnote").value.trim();
     if (!t || !db) return;
-    var id = "n" + stamp() + "-" + rid();
+    var id = "n" + stamp() + "-" + rid(), it = noteItem ? items.get(noteItem) : null;
+    var doc = { id: id, text: t, item: it ? it.id : "", "for": it ? agentKey(it.from) : "", created: iso(), sent: false, batch: "" };
     $("notestate").textContent = "Saving";
-    db.doc("notes/" + id).set({ id: id, text: t, created: iso(), sent: false, batch: "" }).then(function () {
-      $("newnote").value = ""; $("notestate").textContent = "Added, goes out with the next batch";
+    db.doc("notes/" + id).set(doc).then(function () {
+      $("newnote").value = ""; noteItem = ""; $("notestate").textContent = "Added, goes out with the next batch"; schedule();
     }, function (e) { $("notestate").textContent = "Not saved: " + errText(e); });
   }
   function removeNote(id) { if (db) db.doc("notes/" + id).delete().catch(function (e) { showMsg(errText(e)); }); }
 
+  // Send: one batch per agent. The page first writes the batch with a copy of every answer and note,
+  // and only then marks them sent. A failure before the batch leaves everything unsent; a failure
+  // after it can send an answer twice, never lose one. An answer changed during the send stays unsent.
+  function sendGroup(gp) {
+    var bid = "b" + stamp() + "-" + rid();
+    return db.doc("batches/" + bid).set(batchDoc(bid, iso(), gp)).then(function () {
+      var marks = gp.r.map(function (x) {
+        return enqueue(x.itemId, function () {
+          var cur = resp.get(x.itemId);
+          if (!cur || cur.sent || cur.updated !== x.updated) return null;
+          var d = Object.assign({}, cur, { sent: true, batch: bid, updated: iso() });
+          lastDoc.set(x.itemId, d); resp.set(x.itemId, d);
+          return db.doc("responses/" + x.itemId).set(d);
+        });
+      }).concat(gp.n.map(function (x) {
+        return db.doc("notes/" + x.id).update({ sent: true, batch: bid }).then(function () { var nn = notes.get(x.id); if (nn) { nn.sent = true; nn.batch = bid; } });
+      }));
+      return Promise.all(marks).then(null, function (e) { throw { stage: "mark", bid: bid, e: e }; });
+    }, function (e) { throw { stage: "batch", e: e }; });
+  }
   function send() {
-    if (sending || !db) return;
+    if (sending || !ready()) return;
     sending = true; render();
-    var bid = "b" + stamp() + "-" + rid(), marked = [], markedNotes = [], failure = null;
     flushAll().then(function () {
-      return Promise.all([db.collection("responses").where("sent", "==", false).get(), db.collection("notes").where("sent", "==", false).get()]);
-    }).then(function (res) {
-      var rd = res[0].docs.filter(function (d) { var x = d.data(); return x.choice || x.note; }).map(function (d) { return d.id; });
-      var nd = res[1].docs.filter(function (d) { return d.data().text; }).map(function (d) { return d.id; });
       var seq = Promise.resolve();
-      rd.forEach(function (id) { seq = seq.then(function () { return db.doc("responses/" + id).update({ sent: true, batch: bid }); }).then(function () { marked.push(id); }); });
-      nd.forEach(function (id) { seq = seq.then(function () { return db.doc("notes/" + id).update({ sent: true, batch: bid }); }).then(function () { markedNotes.push(id); }); });
+      splitByAgent(sendable()).forEach(function (gp) { seq = seq.then(function () { return sendGroup(gp); }); });
       return seq;
-    }).catch(function (e) { failure = e; }).then(function () {
-      if (!marked.length && !markedNotes.length) return null;
-      return db.doc("batches/" + bid).set({ id: bid, created: iso(), itemIds: marked, noteIds: markedNotes, status: "new", delivered_at: "" });
-    }).then(function () {
-      if (failure) showMsg("Send stopped part way: " + errText(failure) + ". Items already marked went out in batch " + bid + ".");
-      else showMsg("");
-    }, function (e) { showMsg("The batch record was not written: " + errText(e) + ". Marked items carry batch id " + bid + ". Ask Claude to repair it."); })
-    .then(function () { sending = false; schedule(); });
+    }).then(function () { showMsg(""); }, function (x) {
+      if (x && x.stage === "mark") showMsg("Batch " + x.bid + " went out, but some answers were not marked sent: " + errText(x.e) + ". They can go out again.");
+      else if (x && x.stage === "batch") showMsg("Send failed, nothing went out: " + errText(x.e));
+      else showMsg("Send failed: " + errText(x));
+    }).then(function () { sending = false; schedule(); });
   }
 
-  // ---- reads
-  function applySnap(map, snap, name) {
-    var seen = new Set();
-    snap.docs.forEach(function (d) { if (d.exists) { map.set(d.id, Object.assign({ id: d.id }, d.data())); seen.add(d.id); } });
-    Array.from(map.keys()).forEach(function (k) { if (!seen.has(k)) map.delete(k); });
+  // ---- reads. Every document goes through coerce. For responses, the newer copy wins over a late
+  // get(), and a copy that this page wrote wins until a live snapshot confirms it.
+  var KIND = { items: "item", responses: "response", batches: "batch", notes: "note", guides: "guide", acks: "ack" };
+  function applySnap(map, snap, name, isGet) {
+    var next = new Map();
+    snap.docs.forEach(function (d) {
+      if (!d.exists) return;
+      try {
+        var x = coerce(KIND[name], d.data());
+        if (own(x, "id")) x.id = d.id;
+        if (name === "responses") x.itemId = d.id;
+        next.set(d.id, x);
+      } catch (e) { /* an unreadable document is left out */ }
+    });
+    if (name === "responses") {
+      // A get() can answer late, after newer writes: there every copy already held that is newer wins.
+      if (isGet) map.forEach(function (held, id) { if (newerDoc(next.get(id), held) === held) next.set(id, held); });
+      lastDoc.forEach(function (mine, id) {
+        var got = next.get(id);
+        if (newerDoc(got, mine) === mine) next.set(id, mine); else if (!isGet) lastDoc.delete(id);
+      });
+    }
+    map.clear();
+    next.forEach(function (v, k) { map.set(k, v); });
     loaded[name] = true;
     schedule();
   }
-  var COLS = [["items", items], ["responses", resp], ["batches", batches], ["notes", notes], ["guides", guides]];
+  function applyMeta(d) { var x = d && d.exists ? d.data() : null; meta = isObj(x) ? x : null; schedule(); }
+  function applyConfigDoc(d) { applyConfig(d && d.exists ? d.data() : null); loaded.config = true; schedule(); }
+  var COLS = [["items", items], ["responses", resp], ["batches", batches], ["notes", notes], ["guides", guides], ["acks", acks]];
   function refresh() {
     if (!db) return;
     $("refresh").disabled = true;
-    Promise.all(COLS.map(function (c) { return db.collection(c[0]).get().then(function (s) { applySnap(c[1], s, c[0]); }); }))
-      .then(function () { return db.doc("meta/board").get(); })
-      .then(function (d) { meta = d.exists ? d.data() : null; schedule(); })
+    Promise.all(COLS.map(function (c) { return db.collection(c[0]).get().then(function (s) { applySnap(c[1], s, c[0], true); }); }))
+      .then(function () { return Promise.all([db.doc("meta/board").get(), db.doc("meta/config").get()]); })
+      .then(function (d) { applyMeta(d[0]); applyConfigDoc(d[1]); })
       .catch(function (e) { showMsg("Refresh failed: " + errText(e)); })
       .then(function () { $("refresh").disabled = false; });
   }
@@ -795,11 +1205,12 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     var t = setTimeout(function () { if (!(loaded.items && loaded.responses)) { $("sync").textContent = "Cannot reach the database yet"; } }, 10000);
     COLS.forEach(function (c) {
       db.collection(c[0]).onSnapshot(function (s) {
-        applySnap(c[1], s, c[0]);
+        applySnap(c[1], s, c[0], false);
         if (loaded.items && loaded.responses) clearTimeout(t);
-      }, function (e) { showMsg(c[0] + ": " + errText(e)); });
+      }, function (e) { loaded[c[0]] = true; showMsg(c[0] + ": " + errText(e)); });
     });
-    db.doc("meta/board").onSnapshot(function (d) { meta = d.exists ? d.data() : null; schedule(); }, function () {});
+    db.doc("meta/board").onSnapshot(applyMeta, function () {});
+    db.doc("meta/config").onSnapshot(applyConfigDoc, function () { applyConfigDoc(null); });
   }
 
   // ---- wiring

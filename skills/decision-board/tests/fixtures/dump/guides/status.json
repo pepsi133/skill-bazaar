@@ -1,0 +1,25 @@
+{
+ "version": 4,
+ "data": {
+  "id": "status",
+  "kind": "status",
+  "title": "Status",
+  "status": "active",
+  "created": "2026-01-01T10:00:00Z",
+  "updated": "2026-01-01T10:00:00Z",
+  "sections": [
+   {
+    "id": "blocked-on-you",
+    "title": "Blocked on you",
+    "body": "- Answer the disk card",
+    "updated": "2026-01-01T10:00:00Z"
+   },
+   {
+    "id": "done",
+    "title": "Done",
+    "body": "- Nothing yet",
+    "updated": "2026-01-01T10:00:00Z"
+   }
+  ]
+ }
+}

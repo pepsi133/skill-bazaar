@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "data": {
+  "title": "Lab board",
+  "agent": "Coordinator",
+  "tabs": [
+   {
+    "id": "net",
+    "label": "Network",
+    "match": {
+     "area": [
+      "router"
+     ]
+    }
+   },
+   {
+    "id": "other",
+    "label": "Other",
+    "rest": true
+   }
+  ]
+ }
+}

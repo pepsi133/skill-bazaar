@@ -1,0 +1,17 @@
+{
+ "version": 3,
+ "id": "disk-size",
+ "area": "infra",
+ "title": "Grow the disk to 200 GB?",
+ "summary": "Before: 100 GB",
+ "options": [
+  "Yes",
+  "No"
+ ],
+ "recommendation": "Yes",
+ "priority": "soon",
+ "status": "open",
+ "rev": 2,
+ "created": "2026-01-01T10:00:00Z",
+ "updated": "2026-01-01T10:00:00Z"
+}
