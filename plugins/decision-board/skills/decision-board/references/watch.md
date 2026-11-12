@@ -1,9 +1,8 @@
 # Watch brief
 
-Read this when you start a watcher. Copy the brief into the prompt of a cheap background agent,
-fill in the values in angle brackets, and append the calls `P2` and `P4` from "Platform execution
-notes" in `SKILL.md`, with `<DUMP>` as the `out_dir`. `<DUMP>` is the absolute path of
-`board/watch-dump`, and every other path in the brief is absolute too.
+Copy the brief into the prompt of a cheap background agent, fill in the values in angle brackets,
+and append the calls `P2` and `P4` from *Platform execution notes* in `SKILL.md`, with `<DUMP>` as
+the `out_dir`. `<DUMP>` is the absolute path of `board/watch-dump`; every other path is absolute too.
 
 ```text
 You watch a decision board for batches that wait for one agent. Values: board URL <URL>, agent key
@@ -23,5 +22,4 @@ Loop, with a poll count that starts at 0:
    reached" and stop. Else run <wait script> 120 in the foreground and go to step 1.
 ```
 
-The session that owns the board then reads the batches itself ("Read and handle the answers" in
-`SKILL.md`). The watcher's report only says where to look.
+On its report, the owning session reads the batches itself ("Read and handle the answers").

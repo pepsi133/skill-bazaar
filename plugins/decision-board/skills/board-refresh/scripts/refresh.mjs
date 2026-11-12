@@ -84,8 +84,7 @@ function realDate(s) {
 }
 // The created field as YYYY-MM-DD: a date, an ISO timestamp (its own date part), or epoch seconds or
 // milliseconds (12 digits or more before any fraction), as a number or a digit string such as
-// "1762650000.000200", in UTC. undefined when the row has
-// none, null when it cannot be read.
+// "1762650000.000200", in UTC. undefined when the row has none, null when it cannot be read.
 function createdDate(v) {
   if (v === undefined || v === null || v === "") return undefined;
   const EPOCH = /^\d+(\.\d+)?$/;

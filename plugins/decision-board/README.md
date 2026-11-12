@@ -20,15 +20,14 @@ database, sets the title, the tabs, the priorities and the tags.
 
 The agent never reads or types card JSON in the conversation. Its cards live in a local state file,
 `board/state.json`. `skills/decision-board/scripts/board.mjs sync` applies a card file to it and
-prints one write: the agent's whole card list as one document, `cards/<agent>`, set by file path
-and pinned to the version that the state keeps. Each agent has its own document, and the page
-merges them. Answers come back as batches, which the agent dumps and reads with `read`, one short
-line per answer. The script needs only Node 18 or later and has no network access.
+prints one write: the agent's whole card list as one document, `cards/<agent>`, pinned to the
+version that the state keeps. The page merges the agents' documents. Answers come back as batches,
+which the agent dumps and reads with `read`, one short line per answer. The script has no network
+access.
 
 ## Layout
 
-The plugin root holds this README, `docs/` and `tests/`, which the agent does not need while it
-runs a board. The skill itself is `skills/decision-board/`:
+The agent needs only `skills/` while it runs a board:
 
 - `skills/decision-board/SKILL.md`: the procedures for the agent.
 - `skills/decision-board/assets/board.html`: the page. `SCHEMA` in it defines the fields for the
@@ -47,8 +46,7 @@ The second skill, `skills/board-refresh/`, feeds a board from outside sources. T
 the rows of a source with the operator's own tools and saves them as JSON;
 `skills/board-refresh/scripts/refresh.mjs map` turns them into a card file by a map file that the
 operator keeps, and `xref` lists keys that two sources share. The core `sync` then posts the card
-file. The adapter has no network access and writes card files only. Its tests, which also run
-the core `sync` on its output: `node tests/refresh-test.mjs`.
+file. The adapter has no network access and writes card files only.
 
 ## Test it
 

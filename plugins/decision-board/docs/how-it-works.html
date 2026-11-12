@@ -238,7 +238,7 @@
           <tr><td><code>responses</code></td><td>Your draft answer per card, with its history</td><td class="who-you">the page, as you</td></tr>
           <tr><td><code>notes</code></td><td>Your free notes</td><td class="who-you">the page, as you</td></tr>
           <tr><td><code>batches</code></td><td>What you sent, one per agent, with a copy of each answer</td><td class="who-you">the page, as you</td></tr>
-          <tr><td><code>meta</code></td><td><code>config</code>: link hosts (required before the first card), title, tabs, priorities, tags, agent name, image hosts. The agent keeps it in <code>board/config.json</code> and writes it with <code>check</code></td><td class="who-you">you</td></tr>
+          <tr><td><code>meta</code></td><td><code>config</code>: link hosts (required before the first card), title, tabs, priorities, tags, agent name, the hosts a reference guide may load from. The agent keeps it in <code>board/config.json</code> and writes it with <code>check</code></td><td class="who-you">you</td></tr>
         </tbody>
       </table></div>
       <p class="muted" style="font-size:14px">So an agent cannot fake your answer. The rules do not separate agents from each other, though: any agent can change any card document. The script's <code>ack</code> refuses to mark another agent's batch.</p>
@@ -257,7 +257,7 @@
         </div>
         <p class="caption">The agent sees short summary lines, never the card JSON. The script and the page read one shared definition of every field (<code>SCHEMA</code> in the page), so they cannot drift apart.</p>
       </div>
-      <p>The commands: <code>sync</code> posts or changes cards, <code>close</code> ends them, <code>read</code> lists new answers, <code>ack</code> marks a batch handled and logs the answers to <code>board/decisions.md</code>, <code>guide</code> posts a guide, <code>purge</code> deletes old closed cards after it copies them to disk, <code>check</code> looks for bad data and writes the config, and <code>adopt</code> and <code>push</code> repair a refused or lost write. Posting needs no dump: one script run and one write. Reading needs one query: the batches after the last one handled.</p>
+      <p>The commands: <code>sync</code> posts or changes cards, <code>close</code> ends them, <code>read</code> lists new answers, <code>ack</code> marks a batch handled and logs the answers to <code>board/decisions.md</code>, <code>guide</code> posts a guide, <code>purge</code> deletes old closed cards after it copies them to disk, <code>check</code> looks for bad data and writes the config, and <code>adopt</code> and <code>push</code> repair a refused or lost write. Posting needs no dump: one script run and one write. Reading needs two calls: the batches for the agent, and the acks. <code>waiting</code> gives a watcher only the ids of the batches that wait.</p>
     </section>
 
     <section id="guides">
@@ -293,7 +293,6 @@
       <h2>What is tested</h2>
       <ul class="checks">
         <li class="y"><span>Node tests, run with Node alone: the page logic (schema checks, config, tabs and guides, card states, the merge of the agents' card documents and the Done section, Send and its batch, the text formatter, links, tags and the first-asked age) in a sandbox; the card's links and age line and the reference sanitizer against a small DOM stub; a check that HTML reaches the page only at its three known places; and every script command against a fixture state, a fixture dump and a stand-in database that refuses a wrong version as the real one does. No test renders the page in a real browser.</span></li>
-        <li class="y"><span>Independent reviews, with code mutations of the page run against the node tests to find tests that pass for the wrong reason.</span></li>
         <li class="y"><span>On claude.ai, in a probe page: <code>url(#id)</code> and inline <code>data:</code> images render; outside images are blocked.</span></li>
         <li class="y"><span>On a real board database: the file shape of a dump; a create by file path at version 1; a write pinned to a wrong version refused with the current version; a 250 kB card document.</span></li>
         <li class="n"><span>A full post, answer, read, ack and purge cycle on a real board.</span></li>

@@ -1,12 +1,8 @@
 #!/usr/bin/env node
 // The script layer of the decision board. Node 18 or later, no dependencies, no network access.
-// board/state.json is the truth for one agent's cards, and board/config.json for the board config.
 // A write command changes the state, writes one JSON file per document into board/out/, and prints
-// the `writes` array of one ArtifactData batch call. The state keeps, per document, the version
-// that the next write pins and the last write it printed. The commands that read the board read
-// documents that ArtifactData list or query saved with out_dir.
-// The fields, kinds and limits come from the page itself (assets/board.html, the part between
-// "pure: start" and "pure: end"), so the page and this script cannot drift.
+// the `writes` array of one ArtifactData batch call. Reads take the files that ArtifactData saved with out_dir.
+// Fields, kinds and limits come from the "pure" part of assets/board.html, so page and script cannot drift.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
