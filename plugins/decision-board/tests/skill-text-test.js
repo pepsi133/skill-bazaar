@@ -100,3 +100,52 @@ ok("the control text", () => {
   assert.ok(rskill.includes('"input": "updated_at"') && rskill.includes("source_key"));
   assert.ok(read(ROOT, "skills", "board-refresh", "references", "maps.md").includes('"input": "updated_at"'));
 });
+const SKILL_MD = () => read(SKILL, "SKILL.md");
+const core = () => SKILL_MD().slice(0, SKILL_MD().indexOf("## Platform execution notes"));
+ok("SKILL.md holds the comment rule above Platform execution notes", () => {
+  assert.ok(SKILL_MD().includes("## Platform execution notes"));
+  assert.ok(core().includes("**A comment wake is only a bell**") && core().includes("whatever it says and whenever it was stamped"));
+});
+ok("the core text is tool-agnostic", () => {
+  for (const s of ["ArtifactComments", "[Artifact comment", "haiku", "hook"]) assert.ok(!core().includes(s), s);
+});
+ok("SKILL.md runs node S watch after a post and after a read; no watcher is started by hand", () => {
+  const md = SKILL_MD();
+  // After a post and after a read (the read step words it "Then, with or without an ack, run ...").
+  assert.ok(section(md, "## Post, change or close cards").includes("then run `node S watch` and do what it prints"));
+  assert.ok(section(md, "## Read and handle the answers").includes("run `node S watch` and do what it prints"));
+  assert.ok(md.split("run `node S watch` and do what it prints").length - 1 >= 2);
+  assert.ok(md.includes("with or without an ack"));
+  for (const s of ["start a watcher", "Start a new watcher", "poll limit 30", "wait.sh 120"]) assert.ok(!md.includes(s), s);
+  for (const s of ["`P5`, comments:", "`P6`, the watcher:", "write no reply"]) assert.ok(md.includes(s), s);
+  assert.ok(core().includes("Run `node S watch --restart`") && core().includes("only when the operator asks you to watch again"));
+});
+ok("the watch brief is filled by the script", () => {
+  const w = read(REF, "watch.md"), md = SKILL_MD();
+  for (const s of ["<P4>", "<SCRIPT>", "<DUMP>", "<COUNT>", "Do not copy the block below by hand"]) assert.ok(w.includes(s), s);
+  for (const t of [md, w]) for (const s of ["wait.sh 120", "<wait script> 120"]) assert.ok(!t.includes(s), s);
+  for (const t of [md, w]) assert.ok(!/poll limit <?N>?/.test(t) && !/poll limit \d/.test(t));
+});
+ok("README has a Wake modes table", () => {
+  const r = read(ROOT, "README.md");
+  assert.ok(r.includes("## Wake modes") && r.includes("Cost while idle"));
+  for (const s of ["\n| `comment` | ", "\n| `poll` ", "\n| `both` ", "\n| `off` | "]) assert.ok(r.includes(s), s);
+});
+ok("SKILL.md holds the status rule line", () => {
+  const md = SKILL_MD(), step3 = section(md, "## Read and handle the answers");
+  assert.ok(md.includes("## Say what you do") && md.includes('node S status --idle --waiting "<what>"'));
+  assert.match(md, /never\s+starting with \x60--\x60/);
+  assert.ok(step3.includes('--result <id> "<what you did>"') && step3.includes("(several: in the order `read` printed them)"));
+  assert.ok(!md.includes("in the status guide"));
+});
+ok("references tell the agent about results, the status guide and the comments capability", () => {
+  assert.ok(read(REF, "cards.md").includes('--close <id> --result <id> "<what you checked>"'));
+  const g = read(REF, "guides.md");
+  assert.ok(g.includes("`status.guide`") && g.includes("A status guide uses the id"));
+  assert.ok(!g.includes("Update it after each batch you handle.") && !g.includes("Use the id"));
+  const dm = read(REF, "data-model.md");
+  assert.ok(dm.includes("\n| `status` | ") && dm.includes("\n| `wake` | "));
+  const block = /## Access rules[\s\S]*?```json\n([\s\S]*?)\n```/.exec(dm)[1];
+  assert.deepEqual(JSON.parse(block).comments, {});
+  assert.ok(read(REF, "build.md").includes("node S check --url URL"));
+});

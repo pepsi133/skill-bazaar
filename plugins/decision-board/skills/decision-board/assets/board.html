@@ -210,6 +210,12 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 .card.slim > .slimrow { display: flex; gap: 8px; align-items: center; min-height: 44px; min-width: 0; max-width: 100%; }
 .card.slim { padding: 4px 8px; opacity: 0.85; }
 .slimrow .open { flex: 1; min-width: 0; text-align: left; background: none; border: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.agentnow { margin: 10px 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 6px; min-width: 0; }
+.agentnow summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agentnow > * { min-width: 0; }
+.agentnow.stale { opacity: .6; }
+.agentnow .age { color: var(--muted); font-size: 13px; }
+.result { font-size: 13px; border-left: 3px solid var(--line); padding-left: 8px; }
 @media (prefers-reduced-motion: no-preference) { .card, .guide, .opt { transition: border-color 0.12s, background 0.12s, box-shadow 0.3s, opacity 0.25s; } }
 </style>
 
@@ -225,11 +231,14 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       <span id="lastbatch" class="small muted grow"></span>
       <span id="refreshed" class="small muted"></span>
       <button id="send" class="primary" type="button" disabled>Send (0)</button>
+      <button id="wake" type="button" hidden>Wake the agent</button>
     </div>
+    <div id="wakestate" class="small muted" aria-live="polite"></div>
   </div>
 </header>
 
 <div class="in">
+  <section id="agentnow" class="agentnow" hidden aria-label="Agent status"></section>
   <section id="due" class="due" hidden aria-label="Due today"></section>
   <section id="blocked" class="blocked" aria-label="Blocked on you"></section>
   <div id="tabs" class="tabs" role="tablist" aria-label="Board tabs"></div>
@@ -267,6 +276,11 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   var timers = new Map();     // itemId -> debounce timer
   var lingerUntil = new Map();   // itemId -> {until: ms, state: the cardState before the tap}
   var LINGER_MS = 4000;          // done, dismiss, Not ours and snooze keep the card in place this long, with Undo
+  // The agent's status (meta/status, coerced) and this viewer's seen map of cards (id -> updated; null: first visit).
+  var agentStatus = null, seenCards = null; var CKEY = "decision-board-cards-seen-v1";
+  var nowKey = null;
+  // The comments capability, the meta/wake document (the thread every wake writes into) and the notice under Send.
+  var comments = null, commentsOff = false, wakeDoc = null, wakeOutcome = "", wakeTimer = 0;
   // The state a lingering card keeps, or "" (read by cardState in "pure").
   function lingerOf(id) { var x = lingerUntil.get(id); return x && x.until > clockMs() ? x.state : ""; }
   var inflight = new Map();   // itemId -> number of writes in flight
@@ -306,6 +320,14 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   try { var rs = JSON.parse(localStorage.getItem(SKEY) || "{}"); if (rs && typeof rs === "object") seen = rs; } catch (e) {}
   function saveFilter() { try { localStorage.setItem(FKEY, JSON.stringify(f)); } catch (e) {} }
   function saveSeen() { try { localStorage.setItem(SKEY, JSON.stringify(seen)); } catch (e) {} }
+  try { seenCards = seenFrom(localStorage.getItem(CKEY)); } catch (e) { seenCards = null; }
+  function saveCardsSeen() { try { localStorage.setItem(CKEY, JSON.stringify(seenCards)); } catch (e) {} }
+  // The number of cards that show the agent-changed dot.
+  function dotCount() { var n = 0; items.forEach(function (it) { if (dotOn(it, seenCards)) n++; }); return n; }
+  // Mark all seen: every card as it is now; also the baseline of a first visit.
+  function markAllSeen() { if (loaded.items) { seenCards = seenOf(Array.from(items.values())); saveCardsSeen(); schedule(); } }
+  // One card seen: the operator answered it or changed a control on it.
+  function seenOne(id) { var it = items.get(id); if (seenCards && it) { seenCards[id] = it.updated; saveCardsSeen(); } }
 
   function showMsg(t) { var m = $("msg"); m.textContent = t || ""; m.hidden = !t; }
   function errText(e) { return e && (e.code || e.message) ? (e.code || "") + " " + (e.message || "") : String(e); }
@@ -318,7 +340,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // objects, m:<kind> map from an id to an object, o:<kind> one object or absent,
   // d a time stamp: ISO 8601 with an offset, or empty.
   var SCHEMA = {
-    max: { list: 50, options: 8, links: 10, s: 300, t: 20000, g: 200000 },
+    max: { list: 50, options: 8, links: 10, s: 300, t: 20000, g: 200000, line: 60, result: 200, statusBytes: 500 },
     idRe: /^(?!\.\.?$)[A-Za-z0-9_\-.~:@+]{1,100}$/,
     stampRe: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?[+-]\d{2}:\d{2}$/,
     // The one cards document: cards/main holds the card list and the time of the last sync.
@@ -326,7 +348,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     cards: { cards: "a:item", refreshed: "d" },
     item: { id: "s", title: "s", summary: "t", evidence: "t", draft: "t", draft_label: "s", options: "L", recommendation: "s", priority: "s",
       source: "s", rev: "r", kind: "s", blocks: "s", status: "s", created: "d", updated: "d",
-      links: "a:link", tags: "l", first_asked: "o:asked", due: "s", input: "s", source_key: "s" },
+      links: "a:link", tags: "l", first_asked: "o:asked", due: "s", input: "s", source_key: "s", result: "s", result_at: "d" },
     link: { label: "s", url: "t" },
     asked: { date: "s", who: "s" },
     response: { itemId: "s", choice: "s", note: "t", rev: "r", updated: "d", sent: "b", batch: "s", history: "a:hist",
@@ -339,6 +361,9 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     ctl: { rev: "r", assign: "s", snooze: "s", dismiss: "b", close: "b", done: "b", tags_on: "l", tags_off: "l" },
     bctl: { rev: "r", assign: "S", snooze: "S", dismiss: "S", close: "S", done: "S", tags_on: "L", tags_off: "L", keep: "o:bkeep" },
     bkeep: { assign: "S", dismiss: "S", done: "S" },
+    status: { now: "s", next: "l", waiting: "s", updated: "d", watch: "o:watch" },
+    watch: { started: "d", until: "d" },
+    wake: { thread: "s", updated: "d" },
     note: { id: "s", text: "t", item: "s", created: "d", sent: "b", batch: "s" },
     guide: { id: "s", kind: "s", title: "s", body: "g", sections: "a:section", status: "s", created: "d", updated: "d", item: "s" },
     section: { id: "s", title: "s", body: "g", updated: "d" },
@@ -352,6 +377,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     revBound: ["snooze", "dismiss", "close", "done"],
     placeKeys: ["assign", "dismiss", "done"],
     personRe: /^[a-z0-9][a-z0-9_-]{0,39}$/,
+    wakeModes: ["poll", "comment", "both", "off"],
     labels: ["Before", "Now", "Suggested", "Why", "Risk", "Your answer"]
   };
   function own(o, k) { return o != null && Object.prototype.hasOwnProperty.call(o, k); }
@@ -499,7 +525,9 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     sort: ["priority", "due", "created", "id"],
     week_start: "tuesday 12:00",
     controls: { assign: false, snooze: false, dismiss: false, close: false, done: false, tags: false },
-    people: []
+    people: [],
+    status: { stale_minutes: 30, guide: false },
+    wake: { mode: "both" }
   };
   // A config list: at most SCHEMA.max.list entries. A list of {id, label}: drop entries without a text id and later duplicates.
   function cfgList(a) { return Array.isArray(a) ? a.slice(0, SCHEMA.max.list) : []; }
@@ -517,6 +545,13 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     return new RegExp("^(" + list.map(function (l) { return l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|") + "):[ \\t]*(.*)$");
   }
   var LABEL_RE = labelRe(SCHEMA.labels.map(esc));
+  function intIn(v, lo, hi, def) { return Number.isInteger(v) && v >= lo && v <= hi ? v : def; }
+  function wakePlan(raw) {
+    var w = isObj(raw) ? raw : {}, mode = SCHEMA.wakeModes.indexOf(w.mode) >= 0 ? w.mode : DEFAULTS.wake.mode;
+    var poll = mode === "poll" || mode === "both", d = mode === "poll" ? [300, 24] : [900, 32];
+    return { mode: mode, comment: mode === "comment" || mode === "both", poll: poll,
+      poll_seconds: poll ? intIn(w.poll_seconds, 60, 86400, d[0]) : 0, poll_limit: poll ? intIn(w.poll_limit, 1, 1000, d[1]) : 0 };
+  }
   function normConfig(raw) {
     var c = isObj(raw) ? raw : {};
     function g(k) { return own(c, k) ? c[k] : undefined; }
@@ -553,6 +588,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     out.week_start = normWeek(g("week_start")) || DEFAULT_WEEK;
     out.controls = normControls(g("controls"));
     out.people = idList(g("people"), personOk).map(function (x) { return { id: x.id, label: x.label || x.id }; });
+    var st = g("status"); out.status = { stale_minutes: intIn(isObj(st) ? st.stale_minutes : undefined, 1, 1440, 30), guide: isObj(st) && st.guide === true };
+    out.wake = wakePlan(g("wake"));
     return out;
   }
   function normControls(v) { var o = {}; SCHEMA.controlNames.forEach(function (k) { o[k] = isObj(v) && own(v, k) && v[k] === true; }); return o; }
@@ -979,6 +1016,81 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     return { tags_on: on.sort(), tags_off: off.sort() };
   }
 
+  // ---- agent status. The strip of meta/status, the wake line, and the agent-changed dot of a card.
+  // How old a stamp is, in words; "" when it is unreadable. A future stamp is "just now".
+  function ageText(stamp, nowMs) {
+    var t = stampMs(stamp);
+    if (t === -Infinity) return "";
+    var m = Math.floor((nowMs - t) / 60000);
+    if (m < 1) return "just now";
+    if (m < 60) return m + " min ago";
+    if (m < 48 * 60) return Math.floor(m / 60) + " h ago";
+    return Math.floor(m / 1440) + " d ago";
+  }
+  // The strip of a coerced status (or null). fmtTime: a one-argument formatter (the page passes fmt).
+  function statusView(st, nowMs, fmtTime) {
+    var t = st ? stampMs(st.updated) : -Infinity, has = t !== -Infinity;
+    var idle = has && st.now.toLowerCase() === "idle";
+    var head = !has ? "No status from the agent yet" : idle ? "Idle" + (st.waiting ? ", waiting for: " + st.waiting : "") : "Now: " + st.now;
+    var age = has ? ageText(st.updated, nowMs) : "";
+    var stale = has && !idle && (nowMs - t > cfg.status.stale_minutes * 60000 || t - nowMs > 5 * 60000);
+    if (stale) age = "last heard " + age;
+    return { has: has, idle: idle, head: head, age: age, when: has ? fmtTime(st.updated) : "", stale: stale,
+      next: has ? st.next.slice(0, 3) : [], waiting: has && !idle ? st.waiting : "",
+      wake: wakeLine(cfg.wake, has ? st.watch || null : null, nowMs, fmtTime) };
+  }
+  // A card changed since this viewer last marked it seen. Instants, never text: stamps carry offsets.
+  function cardChanged(it, seenMap) {
+    if (seenMap === null) return false;
+    if (!own(seenMap, it.id)) return true;
+    if (seenMap[it.id] === it.updated) return false;
+    var a = stampMs(seenMap[it.id]), b = stampMs(it.updated);
+    if (a === -Infinity || b === -Infinity) return true;
+    return a < b;
+  }
+  // The seen map of a card list: id -> updated, on a null-prototype object.
+  function seenOf(list) { var m = Object.create(null); list.forEach(function (it) { m[it.id] = it.updated; }); return m; }
+  // The stored seen map, or null when there is none or it is unreadable.
+  function seenFrom(text) {
+    var v;
+    try { v = JSON.parse(text); } catch (e) { return null; }
+    if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+    var m = Object.create(null);
+    Object.keys(v).forEach(function (k) { if (typeof v[k] === "string") m[k] = v[k]; });
+    return m;
+  }
+  // The dot: changed, and not in Done or Not ours.
+  function dotOn(it, seenMap) { return cardChanged(it, seenMap) && cardState(it) !== "done" && cardState(it) !== "hidden"; }
+  // A wait in words: 300 -> 5 min.
+  function durText(s) { return s < 120 ? s + " s" : s < 7200 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h"; }
+  // How the agent learns of a Send, and the window of its last watcher.
+  function wakeLine(plan, watch, nowMs, fmtTime) {
+    if (plan.mode === "off") return "Wake: off. Tell the agent to read the board.";
+    if (plan.mode === "comment") return "Wake: a comment on Send";
+    var u = watch ? stampMs(watch.until) : -Infinity;
+    var part = u > nowMs ? ", watcher planned until " + fmtTime(watch.until) : u !== -Infinity ? ", watcher window ended " + fmtTime(watch.until) : ", no watcher started";
+    return (plan.mode === "poll" ? "Wake: poll every " : "Wake: a comment on Send, and a poll every ") + durText(plan.poll_seconds) + part;
+  }
+  // The line under Send for a wake outcome.
+  function wakeNotice(plan, outcome) {
+    if (plan.mode === "off") return "Sent. Tell the agent to read the board.";
+    if (plan.mode === "poll") return "Sent. The watcher picks it up within " + durText(plan.poll_seconds) + ".";
+    var both = plan.mode === "both";
+    if (outcome === "no_capability") return both
+      ? "Sent. This page cannot post comments: ask the agent to republish it. The poll every " + durText(plan.poll_seconds) + " picks it up."
+      : "Sent. This page cannot post comments: ask the agent to republish it, and to read the board.";
+    if (outcome === "sent") return "Sent, and the agent was woken by a comment.";
+    if (outcome === "sent_unsaved") return "Sent, and the agent was woken. The thread was not saved, so the next wake starts a new one.";
+    if (outcome === "mark_sent") return "Sent, but some answers were not marked sent. The agent was woken.";
+    if (outcome === "gesture") return "Sent. Tap Wake the agent to send the comment.";
+    if (outcome === "consent_required") return "Sent. Allow comments from this page, then tap Wake the agent.";
+    if (outcome === "rate_limited") return "Sent. Too many wakes just now; tap Wake the agent in a minute.";
+    return both ? "Sent. No agent session takes comments here; the poll every " + durText(plan.poll_seconds) + " picks it up."
+      : "Sent. No agent session takes comments here; tell the agent to read the board.";
+  }
+  // The text of the wake comment: never an answer, a batch id or a card.
+  var WAKE_TEXT = "Read the decision board: answers were sent.";
+
   // ---- visibility
   function stateOf(it) {
     var r = resp.get(it.id);
@@ -1234,6 +1346,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.due = h("span", { class: "tag", hidden: true });
     c.blocks = h("div", { class: "blocks" });
     c.changed = h("div", { class: "changed", hidden: true });
+    c.result = h("div", { class: "result", hidden: true });
+    c.dot = h("span", { class: "dot", title: "Changed by the agent since you last marked it seen", hidden: true });
     c.title = h("h2");
     c.asked = h("div", { class: "asked", hidden: true });
     c.chips = h("div", { class: "tags chips", hidden: true });
@@ -1253,8 +1367,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.about.addEventListener("click", function () { noteItem = c.it.id; render(); $("newnote").focus(); bringIntoView($("about"), false); });
     buildControls(c);
     c.el = h("article", { class: "card", id: "card-" + c.n, "data-item": it.id },
-      h("div", { class: "tags" }, c.pri, c.kind, c.due, c.state),
-      c.chead, c.chips, c.asked, c.blocks, c.changed, c.guide, c.summary, c.draft, c.links, c.ev, c.form, c.ta,
+      h("div", { class: "tags" }, c.dot, c.pri, c.kind, c.due, c.state),
+      c.chead, c.chips, c.asked, c.blocks, c.changed, c.result, c.guide, c.summary, c.draft, c.links, c.ev, c.form, c.ta,
       c.banner, c.ctl, c.snz, c.panel,
       h("div", { class: "foot" }, c.save, h("span", null, c.about, c.clear)), c.slimrow);
     c.optKey = null;
@@ -1358,6 +1472,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   }
   // The one write of a control: the whole response, through the item's chain, like saveResponse.
   function saveControls(id, patch) {
+    seenOne(id);
     var c = cards.get(id);
     if (!c || c.broken || !db) return Promise.resolve();
     var prev = resp.get(id) || null, doc = withControls(prev, id, patch, revOf(c.it), nowStamp());
@@ -1465,6 +1580,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.changed.hidden = !changed;
     c.changed.textContent = changed ? "Changed since your answer: this is version " + revOf(it) + ", you answered version " + revOf(r) +
       (r.choice ? " with “" + r.choice + "”" : "") + ". Answer again." : "";
+    c.result.textContent = it.result ? "Result: " + it.result + (fmt(it.result_at) ? " · " + fmt(it.result_at) : "") : ""; c.result.hidden = !it.result;
+    c.dot.hidden = !dotOn(it, seenCards);
     renderMeta(c, it, clockMs());
     // fmtText escapes the text. Write the HTML only when the text changed, so that a "Copied" label and a selection stay.
     var rich = JSON.stringify([it.summary, it.evidence]);
@@ -1513,6 +1630,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function render() {
     var now = clockMs(), today = todayOf(now); lastDay = today; lastWeek = weekStartOf(now);
     setCtlDay(today);
+    if (seenCards === null && loaded.items) markAllSeen();
     var glist = Array.from(guides.values());
     // A guide tab stays selected while the guides load, and an item tab while the config loads. An unknown tab falls back to All.
     if (isGuideTab(f.tab) ? (loaded.guides && !guideOfTab(glist, f.tab))
@@ -1523,6 +1641,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     try { renderGuide(guide); } catch (e) { $("guide").textContent = "Could not render the guide " + guide.id; }
     renderTabs(tabCounts(list, isActive), guideList(glist, false));
     renderArchived(guideList(glist, true));
+    renderNow();
     renderDue(dueList(list, today), today);
     renderBlocked(blockedList(list));
     var groups = groupCards(vis, now);
@@ -1553,6 +1672,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     $("refreshed").textContent = refreshedText(cardDocs.get(SCHEMA.cardsDoc), fmt);
     $("zone").textContent = zoneNote(cfg.tz);
     $("settings").textContent = cfg.settings; $("settings").hidden = !cfg.settings;
+    $("wake").hidden = !(wakeOutcome === "gesture" || wakeOutcome === "consent_required" || wakeOutcome === "rate_limited");
+    $("wakestate").textContent = wakeOutcome ? wakeNotice(cfg.wake, wakeOutcome) : "";
     $("ttl").textContent = boardTitle(meta);
     document.title = boardTitle(meta);
     $("newnote").placeholder = "A message to " + cfg.agent + " that is not tied to an item. It goes out with the next batch.";
@@ -1649,6 +1770,29 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     var fold = h("details", { class: "bfold" }, h("summary", null, "Blocked on you ", h("span", { class: "n", text: String(rows.length) })), list);
     fold.open = open;
     box.append(fold);
+  }
+  // The agent strip: the status head and its age (the exact time on hover), behind a tap the next steps, what the
+  // agent waits for, the wake line and Mark all seen. Text by textContent only; the fold keeps its open state.
+  function renderNow() {
+    var box = $("agentnow");
+    box.hidden = !loaded.config;
+    var view = statusView(agentStatus, clockMs(), fmt), n = dotCount(), key = JSON.stringify([view, n]);
+    if (key === nowKey) return;
+    nowKey = key;
+    var was = box.querySelector("details"), open = !!(was && was.open);
+    box.textContent = "";
+    box.classList.toggle("stale", view.stale);
+    var d = h("details", null, h("summary", null, h("span", { class: "tt", text: view.head }), " ", h("span", { class: "age", text: view.age, title: view.when })));
+    if (view.next.length) {
+      var ol = h("ol");
+      view.next.forEach(function (x) { ol.append(h("li", { text: x })); });
+      d.append(h("h4", { text: "Next" }), ol);
+    }
+    if (view.waiting) d.append(h("div", { text: "Waiting for: " + view.waiting }));
+    d.append(h("div", { class: "small muted", text: view.wake }));
+    if (n > 0) d.append(h("button", { type: "button", class: "link small", text: "Mark all seen", onclick: markAllSeen }));
+    d.open = open;
+    box.append(d);
   }
   // "Due today": a link per card, no card text and no Copy button. Hidden when no card is due.
   function renderDue(rows, today) {
@@ -1835,6 +1979,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     return saveResponse(id);
   }
   function saveResponse(id) {
+    seenOne(id);
     var c = cards.get(id);
     if (!c || c.broken || !db) return Promise.resolve();
     var checked = c.fs.querySelector("input[type=radio]:checked");
@@ -1908,12 +2053,44 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       return Promise.all(marks).then(null, function (e) { throw { stage: "mark", bid: bid, e: e }; });
     }, function (e) { throw { stage: "batch", e: e }; });
   }
+  // ---- wake: Send posts a short comment to Claude in the thread of meta/wake, when the config wake mode has comments.
+  // The anchor of a new thread, read at the start of the click (the gesture), before any await.
+  function wakeAnchor() {
+    return comments && typeof comments.anchorFor === "function" ? comments.anchorFor($("send")).catch(function () { return null; }) : Promise.resolve(null);
+  }
+  // The wake comment; called only from a click handler (Send or Wake), with the promise of wakeAnchor. Resolves to an outcome of wakeNotice.
+  function wakeAgent(anchorP) {
+    if (!cfg.wake.comment) return Promise.resolve("none");
+    if (!comments) return Promise.resolve(commentsOff ? "no_capability" : "unavailable");
+    if (typeof comments.sendToClaude !== "function") return Promise.resolve("unavailable");
+    return comments.canSendToClaude().then(function (v) {
+      if (v !== "available") return v;
+      var go = function (target) { return comments.sendToClaude(target).then(function (r) {
+          if (wakeDoc && wakeDoc.thread === r.threadId) return "sent";
+          return db.doc("meta/wake").set({ thread: r.threadId, updated: nowStamp() }).then(function () { return "sent"; }, function () { return "sent_unsaved"; });
+        }); };
+      var fresh = function () { return anchorP.then(function (an) { if (!an) throw { code: "unavailable" }; return go({ anchor: an, text: WAKE_TEXT }); }); };
+      return (wakeDoc && wakeDoc.thread ? go({ threadId: wakeDoc.thread, text: WAKE_TEXT }).catch(function (e) { if (e && e.code === "not_found") return fresh(); throw e; }) : fresh());
+    }).catch(function (e) {
+      var c = e && e.code;
+      return c === "claude_unavailable" ? "gesture" : c === "consent_required" || c === "forbidden" || c === "rate_limited" ? c : "unavailable";
+    });
+  }
+  // A plain notice clears after 30 s; a notice that shows the Wake button stays until the next press.
+  function setWakeOutcome(o) {
+    wakeOutcome = o; clearTimeout(wakeTimer);
+    if (o !== "gesture" && o !== "consent_required" && o !== "rate_limited") wakeTimer = setTimeout(function () { wakeOutcome = ""; schedule(); }, 30000);
+    schedule();
+  }
   function send() {
+    var anchorP = wakeAnchor(), went = false;
     if (sending || !ready()) return;
     sending = true; render();
-    flushAll().then(function () { var s = sendable(); if (s.r.length + s.n.length + s.c.length) return sendGroup(s); }).then(function () { showMsg(""); }, function (x) {
-      if (x && x.stage === "mark") showMsg("Batch " + x.bid + " went out, but some answers were not marked sent: " + errText(x.e) + ". They can go out again.");
-      else if (x && x.stage === "batch") showMsg("Send failed, nothing went out: " + errText(x.e));
+    flushAll().then(function () { var s = sendable(); if (s.r.length + s.n.length + s.c.length) { went = true; return sendGroup(s); } }).then(function () { showMsg(""); if (went) wakeAgent(anchorP).then(setWakeOutcome); }, function (x) {
+      if (x && x.stage === "mark") {
+        showMsg("Batch " + x.bid + " went out, but some answers were not marked sent: " + errText(x.e) + ". They can go out again.");
+        wakeAgent(anchorP).then(function (o) { setWakeOutcome(o === "sent" || o === "sent_unsaved" ? "mark_sent" : o); });
+      } else if (x && x.stage === "batch") showMsg("Send failed, nothing went out: " + errText(x.e));
       else showMsg("Send failed: " + errText(x));
     }).then(function () { sending = false; schedule(); });
   }
@@ -1948,13 +2125,14 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   }
   function applyMeta(d) { var x = d && d.exists ? d.data() : null; meta = isObj(x) ? x : null; schedule(); }
   function applyConfigDoc(d) { applyConfig(d && d.exists ? d.data() : null); loaded.config = true; schedule(); }
+  function applyStatus(d) { var x = d && d.exists ? d.data() : null; agentStatus = isObj(x) ? coerce("status", x) : null; schedule(); }
   var COLS = [["cards", cardDocs], ["responses", resp], ["batches", batches], ["notes", notes], ["guides", guides]];
   function refresh() {
     if (!db) return;
     $("refresh").disabled = true;
     Promise.all(COLS.map(function (c) { return db.collection(c[0]).get().then(function (s) { applySnap(c[1], s, c[0], true); }); }))
-      .then(function () { return Promise.all([db.doc("meta/board").get(), db.doc("meta/config").get()]); })
-      .then(function (d) { applyMeta(d[0]); applyConfigDoc(d[1]); })
+      .then(function () { return Promise.all([db.doc("meta/board").get(), db.doc("meta/config").get(), db.doc("meta/status").get()]); })
+      .then(function (d) { applyMeta(d[0]); applyConfigDoc(d[1]); applyStatus(d[2]); })
       .catch(function (e) { showMsg("Refresh failed: " + errText(e)); })
       .then(function () { $("refresh").disabled = false; });
   }
@@ -1970,10 +2148,13 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     });
     db.doc("meta/board").onSnapshot(applyMeta, function () {});
     db.doc("meta/config").onSnapshot(applyConfigDoc, function () { applyConfigDoc(null); });
+    db.doc("meta/status").onSnapshot(applyStatus, function () {});
+    db.doc("meta/wake").onSnapshot(function (d) { var x = d && d.exists ? d.data() : null; wakeDoc = isObj(x) ? coerce("wake", x) : null; }, function () {});
   }
 
   // ---- wiring
   $("send").addEventListener("click", send);
+  $("wake").addEventListener("click", function () { var anchorP = wakeAnchor(); wakeAgent(anchorP).then(setWakeOutcome); });
   $("refresh").addEventListener("click", refresh);
   $("addnote").addEventListener("click", addNote);
   // Copy button of a preformatted block. If the clipboard is closed, select the text instead.
@@ -1985,11 +2166,13 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
   window.addEventListener("focus", refresh);
   setInterval(function () { var t = clockMs(); if (todayOf(t) !== lastDay || weekStartOf(t) !== lastWeek) schedule(); }, 60000);
+  setInterval(renderNow, 60000);
   $("notours").addEventListener("toggle", schedule);
 
   render();
   if (window.claude && window.claude.use) {
     window.claude.use("db").then(start, function () { start(null); });
+    window.claude.use("comments").then(function (c) { comments = c || null; commentsOff = !c; }, function () { commentsOff = true; });
   } else { start(null); }
 })();
 </script>

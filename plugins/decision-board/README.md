@@ -36,6 +36,27 @@ with the answers, `read` prints one `control` line per changed control with the 
 `ack` applies the ones that only move a card. Only a `close` control or an assign to the agent
 lets the agent write to a source, and only in that one item.
 
+The agent says what it does with `status`: one small write that the page shows as a strip at the top,
+greyed when it is old. `ack --result` puts one line under a card, saying what the agent did with the
+answer. A dot marks a card the agent changed since you last marked it seen.
+
+## Wake modes
+
+`wake.mode` in the config sets how the agent learns of a Send; `skills/decision-board/scripts/board.mjs watch` reads it and says what to do.
+
+| Mode | How | Cost while idle | Cost per Send |
+|---|---|---|---|
+| `comment` | Send posts a short comment to Claude, which wakes the session that watches the board; if the page cannot post it, a Wake the agent button shows | none | one full read in the owning session |
+| `poll` (300 s, 24 polls) | a background watcher on a cheap model | 3 watcher tool calls per poll, 36 an hour, for at most 2 hours | the watcher's report, then one full read |
+| `both` (default; 900 s, 32 polls) | a comment, and a slow poll that catches a missed one | 4 watcher tool calls per poll (the 900 s wait is two calls), 16 an hour, for at most 8 hours | one full read; a poll that sees the same batch adds a read that finds nothing |
+| `off` | you tell the agent to read the board | none | one full read |
+
+Each watcher tool call is a model turn, and the watcher's context grows over its run. The figures count calls,
+not measured tokens. When a watcher reaches its poll limit it stops, and no new watcher starts until you ask the
+agent to watch again; the status strip then shows that the window ended. The strip shows the window of the
+last watcher the agent started; it does not prove that the watcher still runs. A page published before version
+0.9.0 cannot post comments: the agent republishes it ("Change the page" in `references/build.md`).
+
 ## Layout
 
 The agent needs only `skills/` while it runs a board:
@@ -44,7 +65,7 @@ The agent needs only `skills/` while it runs a board:
 - `skills/decision-board/assets/board.html`: the page. `SCHEMA` in it defines the fields for the
   page and the script.
 - `skills/decision-board/scripts/board.mjs`: `check`, `sync`, `close`, `read`, `waiting`, `ack`,
-  `guide`, `purge`, `adopt`, `push`.
+  `status`, `watch`, `guide`, `purge`, `adopt`, `push`.
 - `skills/decision-board/assets/wait.sh`: the pause of a watcher between two polls.
 - `skills/decision-board/assets/config.example.json`: an example config with example checks.
 - `skills/decision-board/references/`: cards, guides, the data model and access rules, the watch

@@ -11,18 +11,21 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const WAIT_SH = path.resolve(HERE, "..", "assets", "wait.sh");
 const SELF = path.relative(process.cwd(), fileURLToPath(import.meta.url)) || "board.mjs";
 const USAGE = `Usage: node ${SELF} <command> ... [--state <file>]
-  check                                     merge the config layers, check them and the state; print the meta/config write when it changed
+  check [--url <link>]                      merge the config layers, check them and the state; print the meta/config write when it changed; --url stores the artifact link for watch
   sync <file> [--source <s>] [<file> [--source <s>]]... [--allow-close]   add and change cards; a --source closes that source's cards its file no longer holds
   close <id>...                             close cards
   read --dump <dir> [--all] --dumped        the batches that wait (dump: batches with status "sent"); --dumped: the dump calls succeeded; --all also prints handled ones
-  waiting --dump <dir>                      only the ids of the batches that wait, or "none"
-  ack <batch id> [--close <id>...] --dump <dir>   mark a batch handled, apply its controls, and close cards
+  waiting --dump <dir> [--count <watch file>]   the ids of the batches that wait, or "none"; --count: the watcher's step, with the poll count
+  ack <batch id> [--close <id>...] [--result <id> <text>]... --dump <dir>   mark a batch handled, apply its controls, close cards, store result lines
+  status [--now <text>] [--next <text>...] [--waiting <text>] [--idle]   say what you do; one write of meta/status
+  watch [--restart]                         what to do about a watcher, from the config wake mode; may write meta/status; --restart: a new window after the poll limit, only when the operator asks
   guide [<file.md>] --id <id> [--kind text|status|reference] [--item <card id>] [--archive | --delete] --dump <dir>
   purge (--ids <id>... | --closed-before <YYYY-MM-DD>) --dump <dir>
-  adopt [cards | guides/<id> | meta/config | batches/<id> | purge/<stamp>] --dump <dir> --dumped   after a refused write: merge the board copy, print the write again
-  push [cards | guides/<id> | meta/config | batches/<id> | purge/<stamp>]   print the last write of a document again
+  adopt [cards | guides/<id> | meta/config | meta/status | batches/<id> | purge/<stamp>] --dump <dir> --dumped   after a refused write: merge the board copy, print the write again
+  push [cards | guides/<id> | meta/config | meta/status | batches/<id> | purge/<stamp>]   print the last write of a document again
 --state defaults to board/state.json; config.json, config.local.json, config.merged.json, rules.md, out/, purged/ and decisions.md sit beside it.
 The user config is $BOARD_USER_CONFIG, else $XDG_CONFIG_HOME/decision-board/config.json, else ~/.config/decision-board/config.json. <dir> holds the ArtifactData
 dumps: <dir>/<collection>/<doc id>.json; a missing folder is an empty collection. Every time written or printed is
@@ -60,19 +63,21 @@ class Stop extends Error {}
 function fail(lines) { throw new Stop([].concat(lines).join("\n")); }
 
 // ---- arguments: positionals, and flags that take every value up to the next flag. sync reads the raw order.
-const SWITCHES = ["archive", "delete", "allow-close", "all", "dumped"];
+const SWITCHES = ["archive", "delete", "allow-close", "all", "dumped", "idle", "restart"];
 // The flags each command takes. A later cluster adds a line here for a new command.
 export const FLAGS = {
-  check: ["state"],
+  check: ["state", "url"],
   sync: ["state", "source", "allow-close"],
   close: ["state"],
   read: ["state", "dump", "all", "dumped"],
-  waiting: ["dump"],
-  ack: ["state", "dump", "close"],
+  waiting: ["dump", "count"],
+  ack: ["state", "dump", "close", "result"],
   guide: ["state", "dump", "id", "kind", "item", "archive", "delete"],
   purge: ["state", "dump", "ids", "closed-before"],
   adopt: ["state", "dump", "dumped"],
   push: ["state"],
+  status: ["state", "now", "next", "waiting", "idle"],
+  watch: ["state", "restart"],
 };
 function parseArgs(argv) {
   const a = { _: [], raw: argv };
@@ -321,7 +326,7 @@ class Run {
   card(id) { return this.st.cards.find((c) => c.id === id); }
   needCards(ids, cmd) {
     const missing = ids.filter((id) => !this.card(id));
-    if (missing.length) fail(cmd + ": no card " + missing.join(", ") + " in " + this.file);
+    if (missing.length) fail(cmd + ": no card " + missing.map(qid).join(", ") + " in " + this.file);
   }
   // A write of a document whose version the state keeps: pinned to next, else to the dumped version (a
   // document that this state never wrote), else a create.
@@ -407,7 +412,7 @@ class Run {
 function dumpCalls(group) {
   if (group === "cards") return "P2 cards with versions";
   if (group.startsWith("guides/")) return "P2 guides with versions";
-  if (group === "meta/config") return "P2 meta with versions";
+  if (group === "meta/config" || group === "meta/status") return "P2 meta with versions";
   if (group.startsWith("batches/")) return "P4 and P2 cards";
   return "P2 responses, batches and cards with versions";
 }
@@ -434,7 +439,7 @@ const cell = (s) => String(s).replace(/\s*\n\s*/g, " ").replace(/\|/g, "\\|");
 
 // ---- cards
 const CONTENT = ["title", "summary", "evidence", "draft", "draft_label", "options", "recommendation", "kind", "links"];
-const MANAGED = ["rev", "created", "updated"];
+const MANAGED = ["rev", "created", "updated", "result", "result_at"];
 // The fields that the answer depends on. A change of one of them raises rev; other changes keep it.
 const contentKey = (x) => { const c = P.coerce("item", x); return JSON.stringify(CONTENT.map((k) => (c[k] === undefined ? null : c[k]))); };
 function parseCardFile(file) {
@@ -606,7 +611,7 @@ function cmdSync(a, log) {
       cards.push({ c, f });
     });
   }
-  cards.forEach(({ c }, i) => { errs.push(...cardProblems(c, c && typeof c.id === "string" && c.id ? c.id : "#" + (i + 1), ids)); if (c && typeof c.id === "string") ids.add(c.id); });
+  cards.forEach(({ c }, i) => { if (P.isObj(c) && (has(c, "result") || has(c, "result_at"))) errs.push(`${typeof c.id === "string" && c.id ? c.id : "#" + (i + 1)}: result: set only by ack --result`); errs.push(...cardProblems(c, c && typeof c.id === "string" && c.id ? c.id : "#" + (i + 1), ids)); if (c && typeof c.id === "string") ids.add(c.id); });
   const ck = compileChecks(r.config.checks === undefined ? [] : r.config.checks);
   if (ck.problems.length) fail(ck.problems.concat("fix the config, then run `node " + SELF + " check`"));
   let hit = false;
@@ -623,6 +628,7 @@ function cmdSync(a, log) {
   const warn = [];
   const defPri = P.cfg.priorities[Math.min(1, P.cfg.priorities.length - 1)].id;
   const ctl = Object.assign({}, r.st.ctl_closed || {});
+  let dropped = 0;
   for (const { c, f } of cards) {
     const ex = r.card(c.id), old = ex ? plain(P.coerce("item", ex)) : null, doc = { id: c.id };
     for (const k of Object.keys(S.item)) if (k !== "id" && !MANAGED.includes(k) && c[k] !== undefined) doc[k] = c[k];
@@ -647,6 +653,7 @@ function cmdSync(a, log) {
     if (old && strip(doc) === strip(ex)) { n.same++; continue; }
     if (old && old.status === "closed" && doc.status === "open") reopened.push(c.id);
     doc.rev = old ? old.rev + (content || back ? 1 : 0) : 1;
+    if (old && ex.result) { if (doc.rev === old.rev) { doc.result = ex.result; doc.result_at = ex.result_at; } else dropped++; }
     doc.created = (old && old.created) || t;
     doc.updated = t;
     if (ex) r.st.cards[r.st.cards.indexOf(ex)] = doc; else r.st.cards.push(doc);
@@ -659,7 +666,7 @@ function cmdSync(a, log) {
   const size = JSON.stringify(r.cardsDoc()).length;
   if (size > MAX_DOC) fail(`sync: the cards document would be ${size} characters, over ${MAX_DOC}. Nothing changed. Close and purge old cards first`);
   log(`sync: ${n.new} new, ${n.rev} changed (rev up), ${n.changed} changed (same rev), ${n.same} unchanged, ${closed.length} closed${closed.length ? " (" + closed.join(", ") + ")" : ""}` +
-    (reopened.length ? `, ${reopened.length} reopened (${reopened.join(", ")})` : ""));
+    (reopened.length ? `, ${reopened.length} reopened (${reopened.join(", ")})` : "") + (dropped ? `, ${dropped} results dropped (rev up)` : ""));
   noLink.forEach((id) => log(`note: ${qid(id)}: no link`));
   warn.slice(0, 3).forEach((l) => log(l));
   if (warn.length > 3) log(`warning: and ${warn.length - 3} more drafts that start with a label`);
@@ -730,10 +737,10 @@ const itemOf = (c) => {
 function ctlHint(c, e, flags) {
   if (flags.length) return "(skip)";
   const v = e.x[e.key];
-  if (e.key === "close" && v === "on") return `(close ${itemOf(c)} in its source with the operator's own tool for it; change nothing else there; then add --close ${qid(e.id)} to the ack line; if you cannot, leave the card and say why in your reply)`;
+  if (e.key === "close" && v === "on") return `(close ${itemOf(c)} in its source with the operator's own tool for it; change nothing else there; then add --close ${qid(e.id)} to the ack line; if you cannot, add --result ${qid(e.id)} "not closed: <why, in a few words>" to it instead)`;
   if (e.key === "assign" && v === "agent") return typeof c.source_key === "string" && c.source_key.trim()
-    ? `(do the work the card asks; in a source change only ${itemOf(c)}; leave the card open and say what you did in your reply)`
-    : "(do the work the card asks, with no write to any source; leave the card open and say what you did in your reply)";
+    ? `(do the work the card asks; in a source change only ${itemOf(c)}; leave the card open and add --result ${qid(e.id)} "<what you did, in a few words>" to the ack line)`
+    : `(do the work the card asks, with no write to any source; leave the card open and add --result ${qid(e.id)} "<what you did, in a few words>" to the ack line)`;
   if (e.key === "assign" || e.key === "dismiss" || e.key === "done") return "(ack applies it)";
   if (e.key === "snooze" && v !== "") return `(no follow-up before ${v})`;
   return "(nothing to do)";
@@ -759,8 +766,21 @@ const waiting = (dump) => batchesOf(dump).filter((b) => b.status === "sent");
 const shown = (s) => P.localStamp(s, P.cfg.tz) || s;
 // waiting needs no state: it reads only <dump>/batches.
 function cmdWaiting(a, log) {
-  const list = waiting(readDump(one(a, "dump"), "batches"));
-  log(list.length ? list.map((b) => qid(b.id)).join("\n") : "none");
+  const dir = one(a, "dump"), list = waiting(readDump(dir, "batches"));
+  if (!a.count) { log(list.length ? list.map((b) => qid(b.id)).join("\n") : "none"); return; }   // A's form
+  const file = path.resolve(one(a, "count")), w = readWatch(file);
+  if (!w) fail(`waiting: ${file} is not a watch file. Report "watch file missing, run node S watch" and stop`);
+  if (path.resolve(dir) !== w.dump) fail(`waiting: --dump is not the dump folder of ${file}. Report "wrong dump folder, run node S watch" and stop`);
+  fs.rmSync(w.dump, { recursive: true, force: true });                 // the next poll starts clean; no rm in the brief
+  if (list.length) {
+    w.reported = true; fs.writeFileSync(file, JSON.stringify(w) + "\n");
+    log(`batches ${list.map((b) => qid(b.id)).join(" ")} wait. Report exactly: "batches wait: run Read and handle the answers". Then stop.`);
+    return;
+  }
+  // At the limit already: say so again and keep the count at the limit, so watch still sees the ended window.
+  if (w.poll < w.limit) { w.poll += 1; fs.writeFileSync(file, JSON.stringify(w) + "\n"); }
+  if (w.poll >= w.limit) { log(`none, poll ${w.poll} of ${w.limit}: the limit. Report exactly: "no batch, poll limit reached: run node S watch and do what it prints". Then stop.`); return; }
+  log(`none, poll ${w.poll} of ${w.limit}. Run bash "${WAIT_SH}" ${w.seconds} in the foreground, then go to step 1.`);
 }
 // read: what the agent does with one answer or note line of a sent batch, printed in brackets at its end.
 // flags: the line's flags, a list. The script decides, the agent follows.
@@ -825,18 +845,46 @@ const pushHint = (bid, r) => `ack ${qid(bid)}: its write is printed but not conf
 function cmdAck(a, log) {
   const bid = a._[1], dump = readDump(one(a, "dump")), r = new Run(a), b = bid && dump.col("batches").get(bid);
   const batch = b ? batchOf(b.data, bid) : null;
-  if (batch && batch.status === "handled") { log(`ack ${bid}: already handled`); delete r.st.pending["batches/" + bid]; return r.finish(log); }
+  // --result is checked in every branch, before the already-handled one, so a rerun after a lost reply still
+  // stores it. A pending ack stores none (its write goes again through push); a batch missing from the dump with
+  // no pending ack fails first with the no-batch line.
+  const pend = !!(bid && r.st.pending["batches/" + bid]);
+  const res = batch || pend ? a.result || [] : [], t = now(), pairs = [];
+  const nFlags = batch || pend ? a.raw.filter((x) => x === "--result").length : 0;
+  if (res.length % 2 || res.length !== 2 * nFlags) fail("ack --result: give a card id and one text per --result");
+  for (let i = 0; i < res.length; i += 2) pairs.push([res[i], cleanText(res[i + 1], S.max.result)]);
+  r.needCards(pairs.map((p) => p[0]), "ack");
+  const rerr = [], seenIds = new Set();
+  for (const [id, text] of pairs) {
+    if (seenIds.has(id)) rerr.push(`ack --result: card ${qid(id)} twice`); seenIds.add(id);
+    if (!text) rerr.push(`ack --result ${qid(id)}: empty text`);
+  }
+  if (rerr.length) fail(rerr.join("\n"));
+  const setResults = () => { for (const [id, text] of pairs) { const c = r.card(id); c.result = text; c.result_at = t; c.updated = t; } return pairs.length; };
+  // What was stored, after cleanText, one line per result (printed after the ack line in both branches).
+  const resultLines = () => pairs.map(([id, text]) => `  result ${qid(id)}: ${q(text)}`);
+  if (batch && batch.status === "handled") {
+    if (pairs.length) {
+      const m = setResults();
+      r.putCards();
+      log(`ack ${bid}: already handled, ${m} results stored`);
+      for (const l of resultLines()) log(l);
+    } else log(`ack ${bid}: already handled`);
+    delete r.st.pending["batches/" + bid];
+    return r.finish(log);
+  }
   // An ack this state already printed whose write the dump does not show yet: acking it again would apply its
   // controls a second time. Its write goes again through push; a --close of this run is not applied.
-  if (bid && r.st.pending["batches/" + bid]) {
+  if (pend) {
     log(pushHint(bid, r));
     const close = a.close || [];
     if (close.length) log(`ack ${bid}: --close ${close.map(qid).join(" ")} not applied. After the push is confirmed, run: node ${SELF} close ${close.map(qid).join(" ")}${r.ctx().state}`);
+    if (pairs.length) log(`ack ${bid}: --result not stored. After the push is confirmed, run this ack again with --result`);
     return r.finish(log);
   }
   if (!b) fail("ack: no batch " + (bid || "named") + " in the dump");
   if (batch.status !== "sent") fail(`ack: batch ${bid} has status ${q(batch.status)}, not "sent". Nothing written`);
-  const close = a.close || [], t = now();
+  const close = a.close || [];
   r.needCards(close, "ack");
   const mineIds = new Set(batch.controlIds);
   // An earlier batch that this state already acked (its write is pending, not yet in the dump) does not block:
@@ -875,13 +923,21 @@ function cmdAck(a, log) {
   const k1 = r.closeCards(Array.from(toClose), t);
   const j = r.openCards(Array.from(toOpen), t);
   const k2 = r.closeCards(close, t), k = k1 + k2;
-  if (k + j > 0) r.pinned("set", "cards", CARDS, r.cardsDoc(), undefined, "batches/" + bid);
+  const m = setResults();
+  if (k + j + m > 0) r.pinned("set", "cards", CARDS, r.cardsDoc(), undefined, "batches/" + bid);
   const day = P.stampMs(batch.created) === -Infinity ? "" : P.dayIn(P.stampMs(batch.created), P.cfg.tz);
   r.st.unlogged[bid] = batch.itemIds.map((key) => { const x = batch.answers[key] || { answer: "", note: "" }; return [key, x.answer, x.note, day]; })
     .concat(controlsOf(batch).map((e) => { const fl = ctlFlags(r, e); return [e.id, "control " + e.key + " " + ctlPlain(e) + (fl.length ? " " + fl.join(" ") : ""), "", day]; }))
     .concat(batch.noteIds.map((id) => { const x = batch.notes[id] || { text: "", item: "" }; return [x.item || "", "", x.text, day]; }));
-  log(`ack ${bid}: handled, ${k} cards closed, ${j} reopened. The answers go to decisions.md when the next read no longer lists the batch`);
+  log(`ack ${bid}: handled, ${k} cards closed, ${j} reopened, ${m} results. The answers go to decisions.md when the next read no longer lists the batch`);
+  for (const l of resultLines()) log(l);
+  if (P.cfg.status.guide) log(statusGuideLine(r, a, "Add what you did with this batch"));
   r.finish(log);
+}
+// The status guide line of ack and guide.
+function statusGuideLine(r, a, what) {
+  const f = rel(path.join(r.dir, "status.md")), st = a.state ? " --state " + q(one(a, "state")) : "";
+  return `status guide: on in the config. ${what} in ${f}, dump guides with versions, then run node ${SELF} guide ${f} --id status --kind status --dump ${one(a, "dump") || "board/dump"}${st} and pass its array`;
 }
 
 // ---- guide
@@ -935,6 +991,7 @@ function cmdGuide(a, log) {
     if (a.delete) r.pinned("delete", "guides", id, null, dumped);
     else if (old.status !== "archived") r.pinned("update", "guides", id, { status: "archived", updated: t }, dumped);
     log(`guide ${id}: ${a.delete ? "delete" : "archive"}`);
+    if (P.cfg.status.guide && (a.archive || a.delete) && id !== "status") log(statusGuideLine(r, a, `Say under "Done" that ${id} is done`));
     return r.finish(log);
   }
   const file = a._[1];
@@ -1169,8 +1226,36 @@ function configLines(load) {
   out.push(`config ids: tags ${P.cfg.tags.map((t) => t.id).join(", ") || "none"}; priorities ${P.cfg.priorities.map((p) => p.id).join(", ")}`);
   return out;
 }
+// The problems of config "status", on the merged config.
+function statusProblems(raw) {
+  const v = raw.status, out = [];
+  if (v === undefined) return out;
+  if (!P.isObj(v)) return ["config status: not an object"];
+  for (const k of Object.keys(v)) if (k !== "stale_minutes" && k !== "guide") out.push("config status: unknown field " + q(k));
+  if (v.stale_minutes !== undefined && P.intIn(v.stale_minutes, 1, 1440, null) === null)
+    out.push("config status.stale_minutes: a whole number from 1 to 1440");
+  if (v.guide !== undefined && typeof v.guide !== "boolean") out.push("config status.guide: true or false");
+  return out;
+}
+// The problems of config "wake", on the merged config.
+function wakeProblems(raw) {
+  const v = raw.wake, out = [];
+  if (v === undefined) return out;
+  if (!P.isObj(v)) return ["config wake: not an object"];
+  for (const k of Object.keys(v)) if (!["mode", "poll_seconds", "poll_limit"].includes(k)) out.push("config wake: unknown field " + q(k));
+  if (v.mode !== undefined && !S.wakeModes.includes(v.mode)) out.push("config wake.mode: not one of poll, comment, both, off");
+  if (v.poll_seconds !== undefined && P.intIn(v.poll_seconds, 60, 86400, null) === null) out.push("config wake.poll_seconds: a whole number from 60 to 86400");
+  if (v.poll_limit !== undefined && P.intIn(v.poll_limit, 1, 1000, null) === null) out.push("config wake.poll_limit: a whole number from 1 to 1000");
+  return out;
+}
 function cmdCheck(a, log) {
   const r = new Run(a, { create: true }), errs = [];
+  if (a.url) {
+    const u = one(a, "url");
+    // An https link with no space or quote; the egress test bans a literal URL in this file, so the regex is escaped.
+    if (!/^https:\/\/[^\s"'`\\]{1,300}$/.test(u)) fail("check --url: the https link of the artifact, with no space or quote");
+    r.st.url = u;
+  }
   const t = now();
   const rs = rulesState(r);
   // Two state files in one folder would share the out files and drop cards.
@@ -1199,6 +1284,7 @@ function cmdCheck(a, log) {
       else if (typeof raw.controls[k] !== "boolean") errs.push(`config controls.${k}: true or false`);
     }
   }
+  errs.push(...statusProblems(raw), ...wakeProblems(raw));
   const ck = compileChecks(raw.checks === undefined ? [] : raw.checks);
   errs.push(...ck.problems);
   if (r.config.standing !== undefined && !standingOk(r.config.standing)) errs.push("config standing: a list of 1 to 50 texts, each 1 to 40 characters");
@@ -1241,7 +1327,117 @@ function cmdCheck(a, log) {
   r.finish(log);
 }
 
-export const COMMANDS = { check: cmdCheck, sync: cmdSync, close: cmdClose, read: cmdRead, waiting: cmdWaiting, ack: cmdAck, guide: cmdGuide, purge: cmdPurge, adopt: cmdAdopt, push: cmdPush };
+// ---- status: what the agent does now, one write of meta/status.
+const has = (a, k) => Object.hasOwn(a, k);
+// The stored status in the state, coerced; a fresh one when absent.
+function storedStatus(r) {
+  const x = isPlain(r.st.status) ? P.coerce("status", r.st.status) : {};
+  return { now: x.now || "", next: x.next || [], waiting: x.waiting || "", updated: x.updated || "", watch: P.isObj(x.watch) ? x.watch : undefined };
+}
+function statusDoc(s) { return Object.assign({ now: s.now, next: s.next, waiting: s.waiting, updated: s.updated }, s.watch ? { watch: { started: s.watch.started, until: s.watch.until } } : {}); }
+// The one write of meta/status, pinned like meta/config (ArtifactData refuses an unpinned write of an existing document).
+function putStatus(r, s) {
+  r.st.status = statusDoc(s);
+  r.pinned("set", "meta", "status", statusDoc(s));
+}
+// Text the agent typed on a command line. Line breaks
+// and runs of white space become one space, a double quote becomes ', $ and backtick are dropped, and a text over
+// max characters is cut to max - 3 characters plus "...". The caller refuses only an empty result.
+// Control characters other than white space, bidi controls, zero-width characters (not the emoji joiner U+200D)
+// and lone surrogates are dropped; the cut never splits a character (a surrogate pair stays
+// whole), and the result stays within max UTF-16 units, the unit of the SCHEMA limits.
+function cleanText(v, max) {
+  const s = String(v).replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u200b\u200c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
+    .replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "").replace(/"/g, "'").replace(/[$`]/g, "").replace(/\s+/g, " ").trim();
+  if (s.length <= max) return s;
+  let out = "";
+  for (const ch of s) { if (out.length + ch.length > max - 3) break; out += ch; }
+  return out + "...";
+}
+function cmdStatus(a, log) {
+  const r = new Run(a); r.needConfig();
+  if (!["now", "next", "waiting", "idle"].some((k) => has(a, k))) fail("status: give --now, --next, --waiting or --idle");
+  const errs = [], s = storedStatus(r);
+  let nowText = has(a, "now") ? cleanText(one(a, "now"), S.max.line) : null;
+  if (nowText !== null && !nowText) errs.push("status --now: empty text");
+  if (nowText !== null && lower(nowText) === "idle") nowText = "idle";      // --now idle is the same as --idle
+  if (has(a, "idle") && nowText !== null && nowText !== "idle") errs.push("status: --idle and --now together; give one");
+  if (has(a, "idle")) nowText = "idle";
+  if (nowText) {
+    if (nowText !== "idle") s.waiting = "";                                  // call C6: a new task ends the old wait, first
+    s.now = nowText;
+  }
+  if (has(a, "next")) {
+    const raw = a.next.map((x) => cleanText(x, S.max.line));
+    if (raw.some((x) => !x)) errs.push("status --next: an empty line");
+    s.next = raw.filter(Boolean);
+  }
+  if (has(a, "waiting")) s.waiting = cleanText(one(a, "waiting"), S.max.line);   // after the clear above, so it wins
+  if (s.next.length > 3) errs.push("status --next: at most 3 lines");
+  s.updated = now();
+  const bytes = Buffer.byteLength(JSON.stringify(statusDoc(Object.assign({}, s, { watch: { started: s.updated, until: s.updated } }))));
+  if (!errs.length && bytes > S.max.statusBytes) errs.push(`status: ${bytes} bytes with a watcher, over ${S.max.statusBytes}; shorten the lines`);
+  if (errs.length) fail(errs.join("\n"));
+  putStatus(r, s);
+  log(`status: now ${q(s.now)}, next ${JSON.stringify(s.next)}, waiting ${q(s.waiting)}`);   // what was stored, after cleanText
+  r.finish(log);
+}
+
+// ---- watch: what to do about a watcher, from the config wake mode.
+// The watch file of the board: written by watch when it starts a watcher, counted by waiting --count.
+const watchFile = (r) => path.join(r.dir, "watch.json");
+function readWatch(file) {
+  // The poll count holds the watcher's stop condition: the ranges of config wake poll_limit and poll_seconds.
+  try {
+    const w = JSON.parse(fs.readFileSync(file, "utf8"));
+    return isPlain(w) && typeof w.dump === "string" && P.intIn(w.limit, 1, 1000, null) !== null && P.intIn(w.poll, 0, w.limit, null) !== null &&
+      P.intIn(w.seconds, 60, 86400, null) !== null ? w : null;
+  } catch (e) { return null; }
+}
+const COMMENTS_LINE = "comments: if this session has not run P5 for this board yet, run it now.";
+// The watcher's prompt: the text block of references/watch.md with every value filled in.
+function briefText(url, dump, wf) {
+  const md = fs.readFileSync(path.join(HERE, "..", "references", "watch.md"), "utf8"), m = md.match(/```text\n([\s\S]*?)\n```/);
+  if (!m) fail("watch: references/watch.md has no text block");
+  const p4 = JSON.stringify({ action: "query", url, collection: "batches", out_dir: dump, query: { where: [["status", "==", "sent"]], limit: 1000 } });
+  return m[1].split("<P4>").join(p4).split("<SCRIPT>").join(fileURLToPath(import.meta.url)).split("<DUMP>").join(dump).split("<COUNT>").join(wf);
+}
+function cmdWatch(a, log) {
+  const r = new Run(a); r.needConfig();
+  const bad = wakeProblems(r.load.config);
+  if (bad.length) fail(bad.concat([`fix the config, then run \`node ${SELF} check\``]).join("\n"));
+  const w = P.cfg.wake, wf = watchFile(r), cur = readWatch(wf);
+  if (w.mode === "off") log("wake off: start no watcher. Read the board when the operator asks.");
+  else if (w.mode === "comment") { log("wake comment: start no watcher; a comment on the board wakes you."); log(COMMENTS_LINE); }
+  else if (cur && cur.poll >= cur.limit && !has(a, "restart")) {
+    // Operator answers wake-modes-limit-reached and wake-limit-restart: the watcher stopped; the page shows the
+    // window ended; a new window only on watch --restart, which the agent runs when the operator asks.
+    if (!cur.ended) {
+      const s = storedStatus(r), t = now();
+      if (s.watch) { s.watch = { started: s.watch.started, until: t }; s.updated = t; putStatus(r, s); }
+      cur.ended = true; fs.writeFileSync(wf, JSON.stringify(cur) + "\n");
+    }
+    log(`wake ${w.mode}: the watcher window ended at its poll limit; start none. Start a new one only when the operator asks you to watch again: node ${SELF} watch --restart.` + (w.comment ? " A comment on the board still wakes you." : " Read the board when the operator asks."));
+    if (w.comment) log(COMMENTS_LINE);
+  } else if (cur && cur.poll < cur.limit && !cur.reported && P.stampMs(cur.until) > nowMs()) {
+    log(`wake ${w.mode}: a watcher runs until ${cur.until}; start none.`);
+    if (w.comment) log(COMMENTS_LINE);
+  } else {
+    if (!r.st.url) fail(`watch: no board URL in ${r.file}. Run node ${SELF} check --url <the artifact link> once, then watch again`);
+    const dump = path.join(r.dir, "watch-dump");
+    for (const p of [dump, wf, fileURLToPath(import.meta.url)]) if (p.includes('"')) fail(`watch: the path ${p} holds a double quote; move the board`);
+    const t = now(), until = P.stampIn(P.stampMs(t) + w.poll_seconds * w.poll_limit * 1000, P.cfg.tz, false);
+    fs.rmSync(dump, { recursive: true, force: true });
+    fs.writeFileSync(wf, JSON.stringify({ dump, seconds: w.poll_seconds, limit: w.poll_limit, poll: 0, started: t, until }) + "\n");
+    const s = storedStatus(r); s.watch = { started: t, until }; s.updated = t; putStatus(r, s);
+    log(`wake ${w.mode}: start one watcher, every ${w.poll_seconds} s, at most ${w.poll_limit} polls, until ${until}. Pass the array below to P3, then start P6 with the lines between "--- brief" and "--- end" as its prompt.`);
+    log("--- brief"); log(briefText(r.st.url, dump, wf)); log("--- end");
+    if (w.comment) log(COMMENTS_LINE);
+  }
+  r.finish(log);
+}
+
+export const COMMANDS = { check: cmdCheck, sync: cmdSync, close: cmdClose, read: cmdRead, waiting: cmdWaiting, ack: cmdAck, status: cmdStatus, watch: cmdWatch, guide: cmdGuide, purge: cmdPurge, adopt: cmdAdopt, push: cmdPush };
 export function run(argv, log = console.log) {
   const a = parseArgs(argv), cmd = COMMANDS[a._[0]];
   if (!cmd) { log(USAGE); return 2; }
