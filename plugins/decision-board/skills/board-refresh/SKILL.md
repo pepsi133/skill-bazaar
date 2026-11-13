@@ -31,7 +31,7 @@ description: Refresh the cards of a decision board from outside sources, such as
    `title`, `kind`, `options`, `recommendation`, `blocks`, `evidence`, `status` (`"closed"` only)
    and `drop` (`true` leaves the card out). It wins for the fields it names; its `tags` replace the
    map's. Map again with `--overrides <file>`.
-6. **Sync** with `node S sync board/tracker.json --source tracker --agent <key>` (the `--source` given
+6. **Sync** with `node S sync board/tracker.json --source tracker` (the `--source` given
    to `map`), as the decision-board skill says. If sync refuses to close cards, check the fetch first;
    add `--allow-close` only when those closes are real. A card closed on the page reopens while its
    row stays open; `"status": "closed"` keeps it closed.

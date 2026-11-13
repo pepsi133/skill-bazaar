@@ -8,6 +8,11 @@ import path from "node:path";
 import { run } from "../skills/board-refresh/scripts/refresh.mjs";
 import { run as board } from "../skills/decision-board/scripts/board.mjs";
 import { writesOf } from "./fakedb.mjs";
+import { createRequire } from "node:module";
+
+// The page pure part, for its default zone and dayIn (a test never names the default zone).
+const P = createRequire(import.meta.url)("./_page.js").load();
+const REFRESH = new URL("../skills/board-refresh/scripts/refresh.mjs", import.meta.url);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "refresh-test-"));
 let n = 0;
@@ -34,7 +39,7 @@ const ROWS = [...GOOD, ...BAD];
 const MAP = { key: "iid", title: "title", url: "web_url", created: "created_at", who: "author.login",
   closed: { field: "state", equals: ["closed", "resolved"] },
   tags: [{ field: "labels.name", equals: "security", tag: "security" }, { field: "labels.name", equals: ["cost", "billing"], tag: "cost" }] };
-const CONFIG = { link_hosts: ["example.com"], tags: [{ id: "cost", label: "Costs money" }, { id: "security", label: "Security" }] };
+const CONFIG = { link_hosts: ["example.com"], tags: [{ id: "cost", label: "Costs money" }, { id: "security", label: "Security" }], tz: "UTC" };
 function map(rows = GOOD, m = MAP, ...more) {
   const out = path.join(tmp, ++k + "-cards.json");
   const r = sh(run, "map", put("rows.json", rows), "--map", put("map.json", m), "--source", "tracker", "--out", out, ...more);
@@ -93,7 +98,13 @@ ok("map: title required; a bad url, a long title or label, a bad or future date 
   assert.deepEqual(reason({ created_at: "2026-02-03" }), ["created date 2026-02-03 is in the future"]);
   assert.deepEqual(reason({ created_at: "last week" }), ["created date cannot be read"]);
   assert.deepEqual(reason({ created_at: undefined }), ["no created date"]);
-  assert.equal(one({ created_at: "2026-02-02" }).code, 0, "tomorrow is allowed");
+  assert.equal(one({ created_at: "2026-02-02" }, MAP, "--config", put("c-utc.json", CONFIG)).code, 0, "tomorrow is allowed");
+  const auck = put("c-auck.json", Object.assign({}, CONFIG, { tz: "Pacific/Auckland" }));
+  assert.equal(one({ created_at: "2026-02-03" }, MAP, "--config", auck).code, 0, "01:00 on 02-02 in Auckland: 02-03 is tomorrow");
+  const late = one({ created_at: "2026-02-04" }, MAP, "--config", auck);
+  assert.deepEqual([late.code, late.details.skipped[0].reasons], [1, ["created date 2026-02-04 is in the future"]]);
+  const mars = one({}, MAP, "--config", put("c-mars.json", Object.assign({}, CONFIG, { tz: "Mars/Base" })));
+  assert.deepEqual([mars.code, mars.lines], [1, ['--config: tz "Mars/Base" is not a time zone name such as "Europe/Warsaw" or "UTC"']]);
   assert.equal(one({ created_at: undefined, state: "closed" }).code, 0, "a closed row needs no date");
   assert.equal(one({ created_at: undefined }, Object.assign({}, MAP, { kind: "info" })).code, 0, "an info card needs no date");
 });
@@ -103,7 +114,7 @@ ok("map: --config checks link_hosts and tag ids", () => {
   assert.equal(map(GOOD, MAP, "--config", cfg).code, 0);
   const off = one({ web_url: "https://tracker.other.invalid/1" }, MAP, "--config", cfg);
   assert.deepEqual(off.details.skipped[0].reasons, ["url host tracker.other.invalid not in the config link_hosts"]);
-  const tag = one({ labels: [{ name: "security" }] }, MAP, "--config", put("c2.json", { link_hosts: ["example.com"], tags: [] }));
+  const tag = one({ labels: [{ name: "security" }] }, MAP, "--config", put("c2.json", { link_hosts: ["example.com"], tags: [], tz: "UTC" }));
   assert.deepEqual(tag.details.skipped[0].reasons, ["tag security not in the config tags"]);
 });
 
@@ -174,13 +185,13 @@ ok("xref: shared keys across files, grouped by resolved path; CVE, UTF-8 and the
 ok("the map output passes the core sync (links on link_hosts, first_asked, source) and prints one write", () => {
   const dir = fs.mkdtempSync(path.join(tmp, "board-")), state = path.join(dir, "state.json");
   fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(CONFIG));
-  assert.equal(sh(board, "check", "--agent", "refresh", "--state", state).code, 0);
+  assert.equal(sh(board, "check", "--state", state).code, 0);
   const r = map();
-  const sync = (f, src, ...more) => sh(board, "sync", f, "--source", src, "--agent", "refresh", "--state", state, ...more);
+  const sync = (f, src, ...more) => sh(board, "sync", f, "--source", src, "--state", state, ...more);
   const s = sync(r.out, "tracker");
   assert.equal(s.code, 0, s.text);
   assert.equal(s.lines[0], "sync: 4 new, 0 changed (rev up), 0 changed (same rev), 0 unchanged, 0 closed");
-  assert.deepEqual(writesOf(s.lines).flat().map((w) => [w.op, w.collection, w.doc_id]), [["set", "cards", "refresh"]]);
+  assert.deepEqual(writesOf(s.lines).flat().map((w) => [w.op, w.collection, w.doc_id]), [["set", "cards", "main"]]);
   assert.deepEqual(sync(map().out, "tracker").lines, ["sync: 0 new, 0 changed (rev up), 0 changed (same rev), 4 unchanged, 0 closed", "no writes"]);
   const swapped = sync(map().out, "mail");
   assert.equal(swapped.code, 1, "a swapped --source fails");
@@ -193,5 +204,36 @@ ok("the map output passes the core sync (links on link_hosts, first_asked, sourc
   assert.equal(sync(short, "tracker", "--allow-close").code, 0);
 });
 
+ok("map: created is the day in the config tz", () => {
+  const warsaw = put("c-waw.json", Object.assign({}, CONFIG, { tz: "Europe/Warsaw" })), day = (v, ...more) => one({ created_at: v }, MAP, ...more).cards[0].first_asked.date;
+  assert.equal(day("2026-01-10T23:30:00Z", "--config", warsaw), "2026-01-11");
+  assert.equal(day("2026-01-10T23:30:00+00:00", "--config", warsaw), "2026-01-11");
+  assert.equal(day("2026-01-10T23:30:00", "--config", warsaw), "2026-01-10", "a timestamp without a zone keeps its own date");
+  assert.equal(day("2026-01-10", "--config", warsaw), "2026-01-10");
+  assert.equal(day(Date.UTC(2026, 0, 10, 23, 30), "--config", warsaw), "2026-01-11");
+  assert.equal(day("2026-01-10T23:30:00Z", "--config", put("c-utc2.json", CONFIG)), "2026-01-10");
+  const want = P.dayIn(Date.UTC(2026, 0, 10, 23, 30), P.DEFAULTS.tz);
+  const noTz = put("c-none.json", { link_hosts: CONFIG.link_hosts, tags: CONFIG.tags });
+  assert.equal(day("2026-01-10T23:30:00Z", "--config", noTz), want, "a config without tz: the default zone");
+  assert.equal(day("2026-01-10T23:30:00Z"), want, "no --config: the default zone");
+  assert.equal(one({ web_url: "https://any.invalid/1" }).code, 0, "without --config the host and tag checks stay off");
+});
+ok("map: created rejects an impossible date inside a timestamp", () => {
+  const r = one({ created_at: "2026-02-30T10:00:00Z" }, MAP, "--config", put("c-utc3.json", CONFIG));
+  assert.equal(r.code, 1, r.text);
+  assert.deepEqual(r.details.skipped[0].reasons, ["created date 2026-02-30 is not a real date"]);
+});
+ok("map: created with a trailing space is trimmed", () => {
+  assert.equal(one({ created_at: "2026-01-10 " }, MAP, "--config", put("c-utc4.json", CONFIG)).cards[0].first_asked.date, "2026-01-10");
+});
+ok("map: created with a leading space before a Z time is the day in the config tz", () => {
+  const warsaw = put("c-waw2.json", Object.assign({}, CONFIG, { tz: "Europe/Warsaw" }));
+  assert.equal(one({ created_at: " 2026-01-10T23:30:00Z" }, MAP, "--config", warsaw).cards[0].first_asked.date, "2026-01-11");
+});
+ok("refresh's default zone is the page's", () => {
+  const m = /const DEFAULT_TZ = "([^"]+)"/.exec(fs.readFileSync(REFRESH, "utf8"));
+  assert.ok(m, "DEFAULT_TZ in refresh.mjs");
+  assert.equal(m[1], P.DEFAULTS.tz);
+});
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`${n} tests passed`);

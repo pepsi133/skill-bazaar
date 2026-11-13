@@ -13,7 +13,7 @@ function cut(a, b) {
 }
 function load(state, extra) {
   const ctx = vm.createContext(Object.assign({
-    items: new Map(), resp: new Map(), notes: new Map(), guides: new Map(), batches: new Map(), acks: new Map(),
+    items: new Map(), resp: new Map(), notes: new Map(), guides: new Map(), batches: new Map(),
     f: { tab: "all" },
     loaded: { config: true }, isPending: () => false, URL,
   }, state || {}));

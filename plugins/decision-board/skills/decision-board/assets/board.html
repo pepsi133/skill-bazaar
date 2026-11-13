@@ -135,7 +135,6 @@ main.in { padding-bottom: 48px; }
 .tag.now { background: var(--now-bg); color: var(--now); }
 .tag.soon { background: var(--soon-bg); color: var(--soon); }
 .tag.later { background: var(--later-bg); color: var(--later); }
-.tag.agent { border: 1px solid var(--line); background: none; }
 .tag.good { background: var(--good-bg); color: var(--good); }
 .tag.chip { text-transform: none; letter-spacing: 0; font-weight: 500; border-radius: 999px; padding: 1px 9px; }
 .asked { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
@@ -165,6 +164,7 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 4
 .rec { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--good); background: var(--good-bg); border-radius: 4px; padding: 0 6px; margin-left: 6px; white-space: nowrap; }
 textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; }
 .foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; min-height: 18px; }
+.page-foot { margin-top: 24px; padding: 12px 0; }
 .empty { padding: 28px 8px; text-align: center; color: var(--muted); }
 .msg { padding: 8px 10px; border-radius: 6px; background: var(--now-bg); color: var(--now); }
 .notes { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
@@ -210,6 +210,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     <div id="nlist" class="nlist"></div>
   </section>
   <section id="archived" class="notes" hidden aria-label="Archived guides"></section>
+  <footer id="foot" class="page-foot"><span id="zone" class="small muted"></span></footer>
 </main>
 
 <script>
@@ -217,9 +218,9 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   "use strict";
   var FKEY = "decision-board-filter-v1", SKEY = "decision-board-seen-v1";
   var db = null;
-  var cardDocs = new Map(), items = new Map(), resp = new Map(), batches = new Map(), notes = new Map(), guides = new Map(), acks = new Map();
+  var cardDocs = new Map(), items = new Map(), resp = new Map(), batches = new Map(), notes = new Map(), guides = new Map();
   var meta = null;
-  var loaded = { cards: false, items: false, responses: false, batches: false, notes: false, guides: false, acks: false, config: false };
+  var loaded = { cards: false, items: false, responses: false, batches: false, notes: false, guides: false, config: false };
   var cards = new Map();      // itemId -> {el, n, ...refs}. n is the card number, the source of every DOM id of the card.
   var timers = new Map();     // itemId -> debounce timer
   var inflight = new Map();   // itemId -> number of writes in flight
@@ -245,15 +246,14 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     kids.forEach(function (c) { if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(String(c))); });
     return e;
   }
-  function iso() { return new Date().toISOString(); }
+  function clockMs() { return Date.now(); }
+  function nowStamp() { return stampIn(clockMs(), cfg.tz, true); }
+  function idStamp() { return compactStamp(nowStamp()); }
+  function savedTime() { return new Date(clockMs()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: cfg.tz }); }
   function fmt(s) {
-    if (!s) return "";
-    var d = new Date(s);
-    if (isNaN(d.getTime())) return "";
-    try { return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; }
+    return fmtTime(s, cfg.tz);
   }
   function rid() { return Math.random().toString(36).slice(2, 6); }
-  function stamp() { return iso().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"); }
 
   // per-viewer memory: the selected tab and the status guides already seen
   try { var raw = localStorage.getItem(FKEY); if (raw) { var o = JSON.parse(raw); if (o && typeof o.tab === "string") f.tab = o.tab; } } catch (e) {}
@@ -269,27 +269,29 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // ---- schema: the one definition of fields, kinds and limits. scripts/board.mjs reads it from here.
   // Field types: s short text, t long text, g guide text, l list of texts, L list of texts or absent,
   // S text or absent, r revision (a whole number, default 1), b true or false, a:<kind> list of
-  // objects, m:<kind> map from an id to an object, o:<kind> one object or absent.
+  // objects, m:<kind> map from an id to an object, o:<kind> one object or absent,
+  // d a time stamp: ISO 8601 with an offset, or empty.
   var SCHEMA = {
     max: { list: 50, options: 8, links: 10, s: 300, t: 20000, g: 200000 },
     idRe: /^(?!\.\.?$)[A-Za-z0-9_\-.~:@+]{1,100}$/,
-    // One document per agent: cards/<agent key> holds that agent's list and the time of its last sync.
-    cards: { cards: "a:item", refreshed: "s" },
-    agentRe: /^[a-z0-9_\-~@+]{1,40}$/,
+    stampRe: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?[+-]\d{2}:\d{2}$/,
+    // The one cards document: cards/main holds the card list and the time of the last sync.
+    cardsDoc: "main",
+    cards: { cards: "a:item", refreshed: "d" },
     item: { id: "s", title: "s", summary: "t", evidence: "t", options: "L", recommendation: "s", priority: "s",
-      source: "s", rev: "r", kind: "s", blocks: "s", status: "s", created: "s", updated: "s",
+      source: "s", rev: "r", kind: "s", blocks: "s", status: "s", created: "d", updated: "d",
       links: "a:link", tags: "l", first_asked: "o:asked" },
     link: { label: "s", url: "t" },
     asked: { date: "s", who: "s" },
-    response: { itemId: "s", choice: "s", note: "t", rev: "r", "for": "S", updated: "s", sent: "b", batch: "s", history: "a:hist" },
-    hist: { choice: "s", note: "t", rev: "r", updated: "s", batch: "s" },
-    batch: { id: "s", created: "s", "for": "s", itemIds: "l", noteIds: "l", answers: "m:answer", notes: "m:bnote", status: "s", delivered_at: "s" },
+    response: { itemId: "s", choice: "s", note: "t", rev: "r", updated: "d", sent: "b", batch: "s", history: "a:hist" },
+    hist: { choice: "s", note: "t", rev: "r", updated: "d", batch: "s" },
+    batch: { id: "s", created: "d", itemIds: "l", noteIds: "l", answers: "m:answer", notes: "m:bnote", status: "s", handled_at: "d" },
+    batchStatuses: ["sent", "handled"],
     answer: { answer: "s", note: "t", rev: "r" },
     bnote: { text: "t", item: "s" },
-    note: { id: "s", text: "t", item: "s", "for": "S", created: "s", sent: "b", batch: "s" },
-    guide: { id: "s", kind: "s", title: "s", body: "g", sections: "a:section", status: "s", created: "s", updated: "s", item: "s" },
-    section: { id: "s", title: "s", body: "g", updated: "s" },
-    ack: { at: "s", items: "l" },
+    note: { id: "s", text: "t", item: "s", created: "d", sent: "b", batch: "s" },
+    guide: { id: "s", kind: "s", title: "s", body: "g", sections: "a:section", status: "s", created: "d", updated: "d", item: "s" },
+    section: { id: "s", title: "s", body: "g", updated: "d" },
     kinds: [{ id: "decision", label: "Decision" },
       { id: "action", label: "Action", options: ["Done", "Done in part, see note", "Later", "Other, see note"] },
       { id: "info", label: "Info", options: ["Acknowledge"] }],
@@ -336,7 +338,10 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       var k = qk(key);
       if (!own(spec, key)) { out.push(k + ": unknown field"); return; }
       var t = spec[key].split(":"), c = t[0], v = raw[key];
-      if ("stgS".indexOf(c) >= 0) {
+      if (c === "d") {
+        if (typeof v !== "string") out.push(k + ": not text");
+        else if (v !== "" && !SCHEMA.stampRe.test(v)) out.push(k + ": not a time with an offset, such as 2026-11-13T13:31:08+01:00");
+      } else if ("stgS".indexOf(c) >= 0) {
         var lim = M[c === "S" ? "s" : c];
         if (typeof v !== "string") out.push(k + ": not text"); else if (v.length > lim) out.push(k + ": longer than " + lim);
       } else if (c === "l" || c === "L") {
@@ -357,6 +362,64 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     return out;
   }
 
+  // ---- time. A stamp is ISO 8601 with the offset of the config tz, never Z: the script writes seconds, the page
+  // milliseconds. Stamps are never compared as strings: every compare goes through stampMs or cmpStamp.
+  var TZ_RE = /^(UTC|[A-Za-z][A-Za-z0-9_+\-]*(\/[A-Za-z0-9_+\-]+){1,2})$/;
+  // A time zone: an IANA name or UTC that the runtime accepts. A fixed offset such as +01:00 is not one.
+  function tzOk(v) {
+    if (typeof v !== "string" || !TZ_RE.test(v)) return false;
+    try { new Intl.DateTimeFormat("en-US", { timeZone: v }); return true; } catch (e) { return false; }
+  }
+  // The canonical name of a zone (europe/warsaw -> Europe/Warsaw), or "" when it is no zone.
+  function normTz(v) {
+    if (!tzOk(v)) return "";
+    try { return new Intl.DateTimeFormat("en-US", { timeZone: v }).resolvedOptions().timeZone; } catch (e) { return ""; }
+  }
+  var ZONE_FMT = Object.create(null);
+  // The wall clock of an instant in a zone, as 2-digit strings (the year 4).
+  function zoneParts(ms, tz) {
+    var fm = ZONE_FMT[tz] || (ZONE_FMT[tz] = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric",
+      month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+    var p = {};
+    fm.formatToParts(new Date(ms)).forEach(function (x) { if (x.type !== "literal") p[x.type] = x.value; });
+    return { year: p.year, month: p.month, day: p.day, hour: p.hour === "24" ? "00" : p.hour, minute: p.minute, second: p.second };
+  }
+  // The stamp of an instant in a zone: YYYY-MM-DDTHH:MM:SS[.mmm]±HH:MM. UTC is +00:00.
+  function stampIn(ms, tz, withMs) {
+    var s = Math.floor(ms / 1000) * 1000, p = zoneParts(s, tz);
+    var wall = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+    var off = Math.round((wall - s) / 60000), a = Math.abs(off);
+    function two(n) { return (n < 10 ? "0" : "") + n; }
+    return p.year + "-" + p.month + "-" + p.day + "T" + p.hour + ":" + p.minute + ":" + p.second +
+      (withMs ? "." + String(ms - s).padStart(3, "0") : "") + (off < 0 ? "-" : "+") + two(Math.floor(a / 60)) + ":" + two(a % 60);
+  }
+  // The stamp inside ids and folder names: 2026-11-13T13:31:08.412+01:00 -> 20261113T133108+0100.
+  function compactStamp(s) { return s.slice(0, 19).replace(/[-:]/g, "") + s.slice(-6).replace(":", ""); }
+  // The instant of a stamp in ms; an unreadable stamp is -Infinity.
+  function stampMs(v) {
+    var t = typeof v === "string" ? Date.parse(v) : NaN;
+    return isNaN(t) ? -Infinity : t;
+  }
+  // -1, 0 or 1 by instant. Two unreadable stamps are equal.
+  function cmpStamp(a, b) { var x = stampMs(a), y = stampMs(b); return x < y ? -1 : x > y ? 1 : 0; }
+  // The calendar day YYYY-MM-DD of an instant in a zone.
+  function dayIn(ms, tz) { return stampIn(ms, tz, false).slice(0, 10); }
+  // The day n calendar days after day (a calendar add, not n times 24 hours).
+  function addDays(day, n) {
+    var p = String(day).split("-"), t = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2] + n));
+    return t.getUTCFullYear() + "-" + String(t.getUTCMonth() + 1).padStart(2, "0") + "-" + String(t.getUTCDate()).padStart(2, "0");
+  }
+  // A stamp again in the zone, or "" when it is unreadable.
+  function localStamp(v, tz) { var ms = stampMs(v); return ms === -Infinity ? "" : stampIn(ms, tz, false); }
+  // A stamp as short text in the zone's wall clock, or "".
+  function fmtTime(v, tz) {
+    var ms = stampMs(v);
+    if (ms === -Infinity) return "";
+    try { return new Date(ms).toLocaleString([], { timeZone: tz, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; }
+  }
+  // The footer line. It names the config zone, never the device zone.
+  function zoneNote(tz) { return "Times in " + tz; }
+
   // ---- board config. The document meta/config overrides these defaults field by field.
   var DEFAULTS = {
     title: "Decision board",
@@ -365,7 +428,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     priorities: [{ id: "now", label: "Now" }, { id: "soon", label: "Soon" }, { id: "later", label: "Later" }],
     domains: [],
     link_hosts: [],
-    tags: []
+    tags: [],
+    tz: "Europe/Warsaw"
   };
   // A config list: at most SCHEMA.max.list entries. A list of {id, label}: drop entries without a text id and later duplicates.
   function cfgList(a) { return Array.isArray(a) ? a.slice(0, SCHEMA.max.list) : []; }
@@ -408,6 +472,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     // Hosts that the links of a card can point to, by the same rules.
     out.link_hosts = hostList(g("link_hosts"));
     out.tags = idList(g("tags")).map(function (x) { return { id: x.id, label: x.label || x.id }; });
+    // The time zone of every stamp and of every time shown. A bad name or a fixed offset keeps the default.
+    out.tz = normTz(g("tz")) || DEFAULTS.tz;
     return out;
   }
   // A host entry has two labels or more. An entry of digits and dots is a full IPv4 address. A
@@ -455,28 +521,28 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function guideKey(g) { return "guide:" + g.id; }
   function isGuideTab(tab) { return String(tab).indexOf("guide:") === 0; }
   function guideKind(g) { return SCHEMA.guideKinds.indexOf(g.kind) >= 0 ? g.kind : "text"; }
-  // The agent of a guide: the part of its id before the first "." (an agent key has none). Each agent shows one status guide, its newest.
-  function guideAgent(g) { return String(g.id).split(".")[0]; }
+  // The board shows one status guide: the newest active one.
   function guideList(list, archived) {
-    var newest = Object.create(null);
-    list.forEach(function (g) { if (guideKind(g) === "status" && !archived && g.status !== "archived" && !(newest[guideAgent(g)] && newest[guideAgent(g)].updated >= g.updated)) newest[guideAgent(g)] = g; });
-    return list.filter(function (g) { return (g.status === "archived") === archived && (archived || guideKind(g) !== "status" || newest[guideAgent(g)] === g); }).sort(function (a, b) {
+    var newest = null;
+    if (!archived) list.forEach(function (g) { if (guideKind(g) === "status" && g.status !== "archived" && !(newest && cmpStamp(newest.updated, g.updated) >= 0)) newest = g; });
+    return list.filter(function (g) { return (g.status === "archived") === archived && (archived || guideKind(g) !== "status" || newest === g); }).sort(function (a, b) {
       var sa = guideKind(a) === "status" ? 0 : 1, sb = guideKind(b) === "status" ? 0 : 1;
       if (sa !== sb) return sa - sb;
-      if (a.created !== b.created) return a.created < b.created ? -1 : 1;
-      return a.id < b.id ? -1 : 1;
+      var c = cmpStamp(a.created, b.created);
+      if (c) return c;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
     });
   }
-  // The tab label of a guide; with several status guides, each names its agent.
-  function guideLabel(g, statuses) { return (g.title || g.id) + (guideKind(g) === "status" && statuses > 1 ? " · " + agentName(guideAgent(g)) : ""); }
+  // The tab label of a guide.
+  function guideLabel(g) { return g.title || g.id; }
   function guideOfTab(list, tab) { return guideList(list, false).filter(function (g) { return guideKey(g) === tab; })[0] || null; }
   function guideForItem(list, itemId) { return guideList(list, false).filter(function (g) { return g.item === itemId; })[0] || null; }
   // A status guide changed since this viewer looked at it.
-  function guideChanged(g, seenMap) { return guideKind(g) === "status" && !!g.updated && String(own(seenMap, g.id) ? seenMap[g.id] : "") < g.updated; }
+  function guideChanged(g, seenMap) { return guideKind(g) === "status" && !!g.updated && cmpStamp(own(seenMap, g.id) ? seenMap[g.id] : "", g.updated) < 0; }
   // A guide shows its sections, or its body as one section.
   function guideSections(g) { return g.sections.length ? g.sections : [{ id: "", title: "", body: g.body, updated: "" }]; }
 
-  // ---- kinds, priorities, agents
+  // ---- kinds, priorities, the cards document
   function kindDef(it) { return cfg.kinds.filter(function (k) { return k.id === it.kind; })[0] || cfg.kinds[0]; }
   function kindOf(it) { return kindDef(it).id; }
   function isDefaultKind(k) { return k === cfg.kinds[0].id; }
@@ -486,31 +552,13 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function priRank(p) { for (var i = 0; i < cfg.priorities.length; i++) if (cfg.priorities[i].id === p) return i; return 99; }
   function priClass(p) { return ["now", "soon", "later"][priRank(p)] || ""; }
   function priLabel(p) { var i = priRank(p); return i < 99 ? cfg.priorities[i].label : (p || "none"); }
-  // The key of an agent: its name trimmed and in lower case. An empty name is the configured agent.
-  function agentKey(v) { return str(v).toLowerCase() || cfg.agent.toLowerCase(); }
-  function agentName(k) { return k === cfg.agent.toLowerCase() ? cfg.agent : k; }
-  // The cards of all agents in one map. The key of a card is "<agent key>:<card id>"; it becomes the id
-  // that responses, batches and guides use. An agent key has no ":", so two agents never share a key.
-  // A document whose id is no agent key, a card without a valid id, and a repeated id are left out.
-  // "Refreshed <time>" per agent, from the time of each agent's last sync. fmtTime turns a time into text.
-  function refreshedText(docs, fmtTime) {
-    var parts = [];
-    docs.forEach(function (d, agent) {
-      var t = SCHEMA.agentRe.test(agent) && d.refreshed ? fmtTime(d.refreshed) : "";
-      if (t) parts.push(docs.size > 1 ? agentName(agent) + " " + t : t);
-    });
-    return parts.length ? "Refreshed " + parts.join(", ") : "";
-  }
-  function mergeCards(docs) {
+  // "Refreshed <time>" from the time of the last sync. d is the coerced cards document or undefined; show turns a time into text.
+  function refreshedText(d, show) { return d && d.refreshed && show(d.refreshed) ? "Refreshed " + show(d.refreshed) : ""; }
+  // The cards of cards/main by card id, the key that responses, batches, notes and guides use.
+  // A card without a valid id and a repeated id are left out; the first wins.
+  function cardsOf(d) {
     var out = new Map();
-    docs.forEach(function (d, agent) {
-      if (!SCHEMA.agentRe.test(agent)) return;
-      d.cards.forEach(function (c) {
-        var key = agent + ":" + c.id;
-        if (!SCHEMA.idRe.test(c.id) || out.has(key)) return;
-        out.set(key, Object.assign({}, c, { id: key, cid: c.id, agent: agent }));
-      });
-    });
+    (d && Array.isArray(d.cards) ? d.cards : []).forEach(function (c) { if (SCHEMA.idRe.test(c.id) && !out.has(c.id)) out.set(c.id, c); });
     return out;
   }
 
@@ -560,11 +608,11 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   }
   // who: empty, or at most 40 characters of the id pattern, so it cannot write a sentence into the age line.
   function whoOk(v) { return v === "" || (typeof v === "string" && v.length <= 40 && SCHEMA.idRe.test(v)); }
-  // "First asked MM-DD (who), N days": N whole calendar days from the date to the day of now in the viewer's time zone.
-  function askedText(fa, now) {
+  // "First asked MM-DD (who), N days": N whole calendar days from the date to the day of nowMs in the config tz.
+  function askedText(fa, nowMs, tz) {
     if (!isObj(fa) || !realDate(fa.date)) return "";
-    var p = fa.date.split("-"), who = whoOk(fa.who) ? fa.who : "";
-    var n = Math.round((Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - Date.UTC(+p[0], +p[1] - 1, +p[2])) / 86400000);
+    var p = fa.date.split("-"), who = whoOk(fa.who) ? fa.who : "", d = dayIn(nowMs, tz).split("-");
+    var n = Math.round((Date.UTC(+d[0], +d[1] - 1, +d[2]) - Date.UTC(+p[0], +p[1] - 1, +p[2])) / 86400000);
     n = Math.max(0, n);
     return "First asked " + p[1] + "-" + p[2] + (who ? " (" + who + ")" : "") + ", " + n + (n === 1 ? " day" : " days");
   }
@@ -577,16 +625,16 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // A note without an option on a card with options is a question to the agent.
   function isQuestion(it, r) { return !!(r && r.note && !r.choice && optionsOf(it).length); }
   // The response a save writes. A sent answer moves into history. An unsent draft is replaced.
-  function nextResponse(prev, itemId, choice, note, rev, forAgent, now) {
+  function nextResponse(prev, itemId, choice, note, rev, now) {
     var hist = prev && Array.isArray(prev.history) ? prev.history.slice() : [];
     if (prev && prev.sent === true && (prev.choice || prev.note))
       hist.push({ choice: prev.choice || "", note: prev.note || "", rev: revOf(prev), updated: prev.updated || "", batch: prev.batch || "" });
-    var doc = { itemId: itemId, choice: choice, note: note, rev: rev, "for": forAgent, updated: now, sent: false, batch: "" };
+    var doc = { itemId: itemId, choice: choice, note: note, rev: rev, updated: now, sent: false, batch: "" };
     if (hist.length) doc.history = hist;
     return doc;
   }
-  // Of two versions of one response, the one with the newer "updated" wins. A tie keeps the database copy.
-  function newerDoc(got, mine) { return mine && (!got || String(mine.updated) > String(got.updated)) ? mine : got; }
+  // Of two versions of one response, the one with the later "updated" instant wins. A tie keeps the database copy.
+  function newerDoc(got, mine) { return mine && (!got || cmpStamp(mine.updated, got.updated) > 0) ? mine : got; }
   // What Send takes: unsent answers of cards that exist, are not closed, and did not change after the
   // answer, and every unsent note.
   function sendable() {
@@ -599,24 +647,18 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     notes.forEach(function (x) { if (!x.sent && x.text) n.push(x); });
     return { r: r, n: n };
   }
-  // One batch per agent, by the "for" that a response or note got when it was saved.
-  function splitByAgent(s) {
-    var groups = [], by = Object.create(null);
-    function g(a) { if (!by[a]) { by[a] = { "for": a, r: [], n: [] }; groups.push(by[a]); } return by[a]; }
-    s.r.forEach(function (x) { g(agentKey(own(x, "for") ? x["for"] : (items.get(x.itemId) || {}).agent)).r.push(x); });
-    s.n.forEach(function (x) { g(agentKey(own(x, "for") ? x["for"] : (items.get(x.item) || {}).agent)).n.push(x); });
-    return groups;
-  }
-  // The batch carries a copy of every answer and note at send time. Agents read the batch only.
-  function batchDoc(bid, now, gp) {
+  // The batch carries a copy of every answer and note at send time; the agent reads the batch only.
+  // s is sendable()'s {r, n}; a missing list is empty. The page writes a batch once, with status "sent".
+  function batchDoc(bid, now, s) {
+    var rs = s.r || [], ns = s.n || [];
     var answers = Object.create(null), nn = Object.create(null);
-    gp.r.forEach(function (x) { answers[x.itemId] = { answer: x.choice, note: x.note, rev: revOf(x) }; });
-    gp.n.forEach(function (x) { nn[x.id] = { text: x.text, item: x.item || "" }; });
-    return { id: bid, created: now, "for": gp["for"], itemIds: gp.r.map(function (x) { return x.itemId; }),
-      noteIds: gp.n.map(function (x) { return x.id; }), answers: answers, notes: nn, status: "new" };
+    rs.forEach(function (x) { answers[x.itemId] = { answer: x.choice, note: x.note, rev: revOf(x) }; });
+    ns.forEach(function (x) { nn[x.id] = { text: x.text, item: x.item || "" }; });
+    return { id: bid, created: now, itemIds: rs.map(function (x) { return x.itemId; }),
+      noteIds: ns.map(function (x) { return x.id; }), answers: answers, notes: nn, status: "sent" };
   }
-  // A batch is handled when its agent wrote acks/<batch id>, or when an older batch says done or delivered.
-  function isHandled(b, ackMap) { return ackMap.has(b.id) || b.status === "done" || b.status === "delivered"; }
+  // A batch is handled when the agent's ack set its status to "handled".
+  function isHandled(b) { return b.status === "handled"; }
 
   // ---- visibility
   function stateOf(it) {
@@ -642,8 +684,9 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     return Array.from(items.values()).sort(function (a, b) {
       var pa = priRank(a.priority), pb = priRank(b.priority);
       if (pa !== pb) return pa - pb;
-      if (a.created !== b.created) return a.created < b.created ? -1 : 1;
-      return a.id < b.id ? -1 : 1;
+      var c = cmpStamp(a.created, b.created);
+      if (c) return c;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
     });
   }
   function unsentCount() { var s = sendable(); return s.r.length + s.n.length; }
@@ -693,7 +736,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 
   // ---- reference guides: HTML and inline SVG through allowlists. The parse happens in an inert
   // document, so nothing runs or loads. An element outside the list goes with its content. An
-  // attribute outside the list goes, and so does every attribute value with a backslash or "/*", and
+  // attribute outside the list goes, and so does every attribute value with a "\" or "/*", and
   // every value of a presentation attribute with a function other than url(), rgb(), rgba(), hsl() or hsla()
   // (transform and gradienttransform also allow matrix, translate, scale, rotate, skewX and skewY).
   // A url() stays only for a #id in the guide or an https: host on the config list domains.
@@ -788,7 +831,6 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.pri = h("span", { class: "tag" });
     c.state = h("span", { class: "tag" });
     c.kind = h("span", { class: "tag" });
-    c.from = h("span", { class: "tag agent" });
     c.blocks = h("div", { class: "blocks" });
     c.changed = h("div", { class: "changed", hidden: true });
     c.title = h("h2");
@@ -808,7 +850,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.guide.addEventListener("click", function () { var g = guideForItem(Array.from(guides.values()), c.it.id); if (g) openGuide(g.id); });
     c.about.addEventListener("click", function () { noteItem = c.it.id; render(); $("newnote").focus(); bringIntoView($("about"), false); });
     c.el = h("article", { class: "card", id: "card-" + c.n, "data-item": it.id },
-      h("div", { class: "tags" }, c.pri, c.kind, c.from, c.state),
+      h("div", { class: "tags" }, c.pri, c.kind, c.state),
       c.title, c.chips, c.asked, c.blocks, c.changed, c.guide, c.summary, c.links, c.ev, c.form, c.ta,
       h("div", { class: "foot" }, c.save, h("span", null, c.about, c.clear)));
     c.optKey = null;
@@ -844,7 +886,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       });
     }
     c.links.hidden = !links.length;
-    c.asked.textContent = askedText(it.first_asked, now);
+    c.asked.textContent = askedText(it.first_asked, now, cfg.tz);
     c.asked.hidden = !c.asked.textContent;
   }
   function updateCard(c, it) {
@@ -852,19 +894,16 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     var r = resp.get(it.id), k = kindOf(it), st = stateOf(it), changed = st === "changed";
     c.pri.className = "tag " + priClass(it.priority);
     c.pri.textContent = priLabel(it.priority);
-    c.title.textContent = it.title || it.cid || it.id;
+    c.title.textContent = it.title || it.id;
     c.kind.textContent = kindLabel(k);
     c.kind.hidden = isDefaultKind(k);
     c.kind.className = "tag" + (isDefaultKind(k) ? "" : " now");
-    var other = !!it.agent && it.agent !== agentKey("");
-    c.from.textContent = other ? "from " + it.agent : "";
-    c.from.hidden = !other;
     c.blocks.textContent = blocksOf(it) ? "Blocks: " + blocksOf(it) : "";
     c.blocks.hidden = !blocksOf(it);
     c.changed.hidden = !changed;
     c.changed.textContent = changed ? "Changed since your answer: this is version " + revOf(it) + ", you answered version " + revOf(r) +
       (r.choice ? " with “" + r.choice + "”" : "") + ". Answer again." : "";
-    renderMeta(c, it, new Date());
+    renderMeta(c, it, clockMs());
     // fmtText escapes the text. Write the HTML only when the text changed, so that a "Copied" label and a selection stay.
     var rich = JSON.stringify([it.summary, it.evidence]);
     if (c.rich !== rich) { c.rich = rich; c.summary.innerHTML = fmtText(it.summary); c.evBody.innerHTML = fmtText(it.evidence); }
@@ -932,19 +971,19 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     else { em.textContent = emptyText(items.size, active.length, done.length); em.hidden = !em.textContent; }
 
     // header: every count comes from the items and responses
-    var n = unsentCount(), b = $("send"), to = splitByAgent(sendable()).map(function (g) { return g["for"]; });
+    var n = unsentCount(), b = $("send");
     $("c-open").textContent = openCount();
     $("c-unsent").textContent = n;
-    b.textContent = sending ? "Sending (" + n + ")" : (to.length > 1 ? "Send to " + to.length + " agents (" + n + ")" : "Send to " + agentName(to[0] || agentKey("")) + " (" + n + ")");
+    b.textContent = sending ? "Sending (" + n + ")" : "Send to " + cfg.agent + " (" + n + ")";
     b.disabled = sending || n === 0 || !ready();
-    var lb = Array.from(batches.values()).sort(function (a, b2) { return b2.created < a.created ? -1 : 1; })[0];
-    var ack = lb ? acks.get(lb.id) : null;
-    var sentAt = lb ? fmt(lb.created) : "", doneAt = lb ? fmt(ack ? ack.at : lb.delivered_at) : "";
+    var lb = Array.from(batches.values()).sort(function (a, b2) { return cmpStamp(b2.created, a.created); })[0];
+    var sentAt = lb ? fmt(lb.created) : "", doneAt = lb ? fmt(lb.handled_at) : "";
     $("lastbatch").textContent = lb
-      ? "Last sent" + (sentAt ? " " + sentAt : "") + ", " + (lb.itemIds.length + lb.noteIds.length) + " in batch" +
-        (lb["for"] ? " for " + agentName(agentKey(lb["for"])) : "") + ", " + (isHandled(lb, acks) ? "handled" + (doneAt ? " " + doneAt : "") : "not handled yet")
+      ? "Last sent" + (sentAt ? " " + sentAt : "") + ", " + (lb.itemIds.length + lb.noteIds.length) + " in batch, " +
+        (isHandled(lb) ? "handled" + (doneAt ? " " + doneAt : "") : "not handled yet")
       : (loaded.batches ? "Nothing sent yet" : "");
-    $("refreshed").textContent = refreshedText(cardDocs, fmt);
+    $("refreshed").textContent = refreshedText(cardDocs.get(SCHEMA.cardsDoc), fmt);
+    $("zone").textContent = zoneNote(cfg.tz);
     $("ttl").textContent = boardTitle(meta);
     document.title = boardTitle(meta);
     $("newnote").placeholder = "A message to " + cfg.agent + " that is not tied to an item. It goes out with the next batch.";
@@ -1040,9 +1079,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       box.textContent = "";
       box.append(tabButton("all", "All", false));
       tabs.forEach(function (t) { box.append(tabButton(t.id, t.label, false)); });
-      var statuses = gl.filter(function (g) { return guideKind(g) === "status"; }).length;
       gl.forEach(function (g) {
-        var b = tabButton(guideKey(g), guideLabel(g, statuses), true);
+        var b = tabButton(guideKey(g), guideLabel(g), true);
         if (guideChanged(g, seen)) b.append(h("span", { class: "dot", title: "Changed since you looked" }));
         box.append(b);
       });
@@ -1101,7 +1139,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // The one write of the page to "guides": the status and the time of the change.
   function setGuideStatus(id, status) {
     if (!db) return;
-    var now = iso();
+    var now = nowStamp();
     db.doc("guides/" + id).update({ status: status, updated: now }).then(function () {
       var g = guides.get(id);
       if (g) { g.status = status; g.updated = now; }
@@ -1118,7 +1156,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       h("button", { class: "link small", type: "button", text: "Not about a card", onclick: function () { noteItem = ""; render(); } }));
     box.textContent = "";
     Array.from(notes.values()).filter(function (x) { return !x.sent; })
-      .sort(function (a, b) { return a.created < b.created ? -1 : 1; })
+      .sort(function (a, b) { return cmpStamp(a.created, b.created); })
       .forEach(function (x) {
         var about = x.item && items.get(x.item);
         box.append(h("div", { class: "nitem" }, h("span", { text: (about ? "About “" + (about.title || about.id) + "”: " : "") + x.text }),
@@ -1158,10 +1196,10 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       var rev = revOf(c.it);
       // Nothing changed: no write. The same answer on a card with a newer rev is a new answer.
       if (prev ? prev.choice === choice && prev.note === note && revOf(prev) === rev : !choice && !note) return null;
-      var doc = nextResponse(prev, id, choice, note, rev, agentKey(c.it.agent), iso());
+      var doc = nextResponse(prev, id, choice, note, rev, nowStamp());
       lastDoc.set(id, doc); resp.set(id, doc);
       return db.doc("responses/" + id).set(doc).then(function () {
-        lastSaved = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        lastSaved = savedTime();
         showMsg("");
       });
     }).catch(function (e) {
@@ -1183,8 +1221,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function addNote() {
     var t = $("newnote").value.trim();
     if (!t || !db) return;
-    var id = "n" + stamp() + "-" + rid(), it = noteItem ? items.get(noteItem) : null;
-    var doc = { id: id, text: t, item: it ? it.id : "", "for": agentKey(it ? it.agent : ""), created: iso(), sent: false, batch: "" };
+    var id = "n" + idStamp() + "-" + rid(), it = noteItem ? items.get(noteItem) : null;
+    var doc = { id: id, text: t, item: it ? it.id : "", created: nowStamp(), sent: false, batch: "" };
     $("notestate").textContent = "Saving";
     db.doc("notes/" + id).set(doc).then(function () {
       $("newnote").value = ""; noteItem = ""; $("notestate").textContent = "Added, goes out with the next batch"; schedule();
@@ -1192,21 +1230,22 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   }
   function removeNote(id) { if (db) db.doc("notes/" + id).delete().catch(function (e) { showMsg(errText(e)); }); }
 
-  // Send: one batch per agent. The page first writes the batch with a copy of every answer and note,
-  // and only then marks them sent. A failure before the batch leaves everything unsent; a failure
-  // after it can send an answer twice, never lose one. An answer changed during the send stays unsent.
-  function sendGroup(gp) {
-    var bid = "b" + stamp() + "-" + rid();
-    return db.doc("batches/" + bid).set(batchDoc(bid, iso(), gp)).then(function () {
-      var marks = gp.r.map(function (x) {
+  // Send: one batch. The page first writes the batch with a copy of every answer and note, and only
+  // then marks them sent. A failure before the batch leaves everything unsent; a failure after it can
+  // send an answer twice, never lose one. An answer changed during the send stays unsent. The page
+  // writes a batch once, with set and a fresh id, and never again: a resend is a new batch.
+  function sendGroup(s) {
+    var bid = "b" + idStamp() + "-" + rid();
+    return db.doc("batches/" + bid).set(batchDoc(bid, nowStamp(), s)).then(function () {
+      var marks = s.r.map(function (x) {
         return enqueue(x.itemId, function () {
           var cur = resp.get(x.itemId);
           if (!cur || cur.sent || cur.updated !== x.updated) return null;
-          var d = Object.assign({}, cur, { sent: true, batch: bid, updated: iso() });
+          var d = Object.assign({}, cur, { sent: true, batch: bid, updated: nowStamp() });
           lastDoc.set(x.itemId, d); resp.set(x.itemId, d);
           return db.doc("responses/" + x.itemId).set(d);
         });
-      }).concat(gp.n.map(function (x) {
+      }).concat(s.n.map(function (x) {
         return db.doc("notes/" + x.id).update({ sent: true, batch: bid }).then(function () { var nn = notes.get(x.id); if (nn) { nn.sent = true; nn.batch = bid; } });
       }));
       return Promise.all(marks).then(null, function (e) { throw { stage: "mark", bid: bid, e: e }; });
@@ -1215,11 +1254,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function send() {
     if (sending || !ready()) return;
     sending = true; render();
-    flushAll().then(function () {
-      var seq = Promise.resolve();
-      splitByAgent(sendable()).forEach(function (gp) { seq = seq.then(function () { return sendGroup(gp); }); });
-      return seq;
-    }).then(function () { showMsg(""); }, function (x) {
+    flushAll().then(function () { var s = sendable(); if (s.r.length + s.n.length) return sendGroup(s); }).then(function () { showMsg(""); }, function (x) {
       if (x && x.stage === "mark") showMsg("Batch " + x.bid + " went out, but some answers were not marked sent: " + errText(x.e) + ". They can go out again.");
       else if (x && x.stage === "batch") showMsg("Send failed, nothing went out: " + errText(x.e));
       else showMsg("Send failed: " + errText(x));
@@ -1228,7 +1263,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 
   // ---- reads. Every document goes through coerce. For responses, the newer copy wins over a late
   // get(), and a copy that this page wrote wins until a live snapshot confirms it.
-  var KIND = { cards: "cards", responses: "response", batches: "batch", notes: "note", guides: "guide", acks: "ack" };
+  var KIND = { cards: "cards", responses: "response", batches: "batch", notes: "note", guides: "guide" };
   function applySnap(map, snap, name, isGet) {
     var next = new Map();
     snap.docs.forEach(function (d) {
@@ -1251,12 +1286,12 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     map.clear();
     next.forEach(function (v, k) { map.set(k, v); });
     loaded[name] = true;
-    if (name === "cards") { items = mergeCards(map); loaded.items = true; }
+    if (name === "cards") { items = cardsOf(map.get(SCHEMA.cardsDoc)); loaded.items = true; }
     schedule();
   }
   function applyMeta(d) { var x = d && d.exists ? d.data() : null; meta = isObj(x) ? x : null; schedule(); }
   function applyConfigDoc(d) { applyConfig(d && d.exists ? d.data() : null); loaded.config = true; schedule(); }
-  var COLS = [["cards", cardDocs], ["responses", resp], ["batches", batches], ["notes", notes], ["guides", guides], ["acks", acks]];
+  var COLS = [["cards", cardDocs], ["responses", resp], ["batches", batches], ["notes", notes], ["guides", guides]];
   function refresh() {
     if (!db) return;
     $("refresh").disabled = true;

@@ -1,0 +1,12 @@
+{
+ "version": 2,
+ "data": {
+  "itemId": "old-dns",
+  "choice": "No",
+  "note": "",
+  "rev": 1,
+  "sent": true,
+  "batch": "b20260102T000000+0000-aaaa",
+  "updated": "2026-01-01T10:00:00+00:00"
+ }
+}

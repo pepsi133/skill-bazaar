@@ -14,8 +14,8 @@
     "priority": "soon",
     "status": "open",
     "rev": 2,
-    "created": "2026-01-01T10:00:00Z",
-    "updated": "2026-01-01T10:00:00Z",
+    "created": "2026-01-01T10:00:00+00:00",
+    "updated": "2026-01-01T10:00:00+00:00",
     "links": [
      {
       "label": "Disk graph",
@@ -40,8 +40,8 @@
     ],
     "priority": "later",
     "status": "closed",
-    "created": "2026-01-01T10:00:00Z",
-    "updated": "2026-01-05T00:00:00Z",
+    "created": "2026-01-01T10:00:00+00:00",
+    "updated": "2026-01-05T00:00:00+00:00",
     "links": [
      {
       "label": "",

@@ -35,7 +35,7 @@ Cluster A facts this spec builds on (from `decision-board-spec-a-core.md`, final
   so B changes no `FLAGS` line;
 - every printed write array is followed by its `if refused:` and `if the reply is lost:` lines (A 2.4 step 8);
   a write of `guides/<id>` has the group `guides/<id>`;
-- the page footer is `<footer id="foot" class="foot"><span id="zone" class="small muted"></span></footer>`, `#zone`
+- the page footer is `<footer id="foot" class="page-foot"><span id="zone" class="small muted"></span></footer>`, `#zone`
   first, and `render()` holds `$("zone").textContent = zoneNote(cfg.tz);`; B adds the settings line as the next
   child of `#foot`;
 - the build, change-the-page and clean-up text is in `REF/build.md` and `REF/cleanup.md`, not in `SKILL`; `SKILL`
@@ -83,7 +83,7 @@ and report the name and the grep that failed.
 | no agent in `Run` | `grep -c "this.agent" skills/decision-board/scripts/board.mjs` prints `0` |
 | `if refused:` lines | `grep -n "if refused: rm -rf" skills/decision-board/scripts/board.mjs` |
 | `tz` in `DEFAULTS` | `grep -n 'tz: "Europe/Warsaw"' skills/decision-board/assets/board.html` |
-| the footer | `grep -n '<footer id="foot" class="foot"><span id="zone" class="small muted"></span></footer>' skills/decision-board/assets/board.html` |
+| the footer | `grep -n '<footer id="foot" class="page-foot"><span id="zone" class="small muted"></span></footer>' skills/decision-board/assets/board.html` |
 | the zone note in `render()` | `grep -n '$("zone").textContent = zoneNote(cfg.tz);' skills/decision-board/assets/board.html` |
 | `DEFAULT_TZ` and `tz` in `readConfig` of `R` | `grep -n 'const DEFAULT_TZ = "Europe/Warsaw"' skills/board-refresh/scripts/refresh.mjs` |
 | `REF/build.md` step 3 and step 4 | `grep -n "to change it." skills/decision-board/references/build.md`, `grep -n "every card needs a link to one" skills/decision-board/references/build.md` and `grep -n "It makes the state, checks the config and the cards, and writes" skills/decision-board/references/build.md` |
@@ -299,9 +299,9 @@ The page reads `meta/config` only; `check` writes the merged page part there. On
 - `normConfig(raw)`: before `return out`, add `out.settings = str(g("settings")).slice(0, 200);`
   (`str` trims and gives `""` for a non-text).
 - HTML: the footer of A 3.5 becomes exactly
-  `<footer id="foot" class="foot"><span id="zone" class="small muted"></span><span id="settings" class="small muted" hidden></span></footer>`
+  `<footer id="foot" class="page-foot"><span id="zone" class="small muted"></span><span id="settings" class="small muted" hidden></span></footer>`
   (`#zone` stays the first child).
-- CSS: beside A's `.foot { margin-top: 24px; padding: 12px 0; }` add `.foot span { display: block; }` (one line each).
+- CSS: beside A's `.page-foot { margin-top: 24px; padding: 12px 0; }` add `.page-foot span { display: block; }` (one line each).
 - `render()`: directly after A's `$("zone").textContent = zoneNote(cfg.tz);` add
   `$("settings").textContent = cfg.settings; $("settings").hidden = !cfg.settings;`.
 - No toggle, no input, no write: the line is text from `meta/config` through `textContent`.
@@ -458,7 +458,7 @@ In the "Web links" item (today line 215): replace `Every card carries 1 to 10 <c
 
 `tests/render-test.js` (A's footer case is there): add `the footer names where the settings live`:
 the page source contains exactly
-`<footer id="foot" class="foot"><span id="zone" class="small muted"></span><span id="settings" class="small muted" hidden></span></footer>`
+`<footer id="foot" class="page-foot"><span id="zone" class="small muted"></span><span id="settings" class="small muted" hidden></span></footer>`
 and `$("settings").textContent = cfg.settings; $("settings").hidden = !cfg.settings;`; with the page pure part loaded
 (`load()` of `_page.js`), `applyConfig({ tz: "UTC", settings: "Settings: board/config.json" })` gives
 `cfg.settings === "Settings: board/config.json"`, and `applyConfig({ tz: "UTC", settings: 5 })` and

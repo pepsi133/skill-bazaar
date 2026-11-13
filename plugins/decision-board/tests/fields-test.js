@@ -66,26 +66,25 @@ ok("first_asked: a real calendar date, and required only on an open card whose k
   P.applyConfig(null);
   assert.equal(P.coerce("item", { first_asked: "2026-01-01" }).first_asked, undefined, "a first_asked that is not an object reads as absent");
 });
-ok("the age text: First asked MM-DD (who), N days, counted in calendar days of the viewer's time zone", () => {
-  const at = (date, who, now) => P.askedText(P.coerce("asked", { date, who }), now);
-  assert.equal(at("2026-01-02", "infra-agent", new Date(2026, 0, 12, 0, 1)), "First asked 01-02 (infra-agent), 10 days");
-  assert.equal(at("2026-01-02", "infra-agent", new Date(2026, 0, 12, 23, 59)), "First asked 01-02 (infra-agent), 10 days", "the hour of the day does not count");
-  assert.equal(at("2025-12-31", "", new Date(2026, 0, 1, 0, 0)), "First asked 12-31, 1 day", "an empty who leaves out the brackets");
-  assert.equal(at("2026-03-01", "x", new Date(2026, 2, 1, 12)), "First asked 03-01 (x), 0 days");
-  assert.equal(at("2026-03-29", "x", new Date(2026, 2, 30, 12)), "First asked 03-29 (x), 1 day", "a daylight saving change keeps whole days");
-  assert.equal(at("2026-03-05", "x", new Date(2026, 2, 1, 12)), "First asked 03-05 (x), 0 days", "a date after today counts 0");
-  assert.equal(at("2026-02-30", "x", new Date(2026, 2, 1)), "", "a date that is not real shows nothing");
-  assert.equal(at("2026-03-01", "x), 0 days. Approved (y", new Date(2026, 2, 3)), "First asked 03-01, 2 days", "a who that is not a short id is left out");
-  assert.equal(at("2026-03-01", "a".repeat(41), new Date(2026, 2, 3)), "First asked 03-01, 2 days");
-  assert.equal(P.askedText(undefined, new Date()), "");
-  // One instant, two viewers: the day is the viewer's own.
-  const tz = process.env.TZ, instant = new Date(Date.UTC(2026, 0, 10, 23, 30));
+ok("the age text: First asked MM-DD (who), N days, counted in calendar days of the config tz", () => {
+  const at = (date, who, now, tz) => P.askedText(P.coerce("asked", { date, who }), now, tz || "UTC");
+  assert.equal(at("2026-01-02", "infra-agent", Date.UTC(2026, 0, 12, 0, 1)), "First asked 01-02 (infra-agent), 10 days");
+  assert.equal(at("2026-01-02", "infra-agent", Date.UTC(2026, 0, 12, 23, 59)), "First asked 01-02 (infra-agent), 10 days", "the hour of the day does not count");
+  assert.equal(at("2025-12-31", "", Date.UTC(2026, 0, 1, 0, 0)), "First asked 12-31, 1 day", "an empty who leaves out the brackets");
+  assert.equal(at("2026-03-01", "x", Date.UTC(2026, 2, 1, 12)), "First asked 03-01 (x), 0 days");
+  assert.equal(at("2026-03-29", "x", Date.UTC(2026, 2, 30, 12), "Europe/Warsaw"), "First asked 03-29 (x), 1 day", "a daylight saving change keeps whole days");
+  assert.equal(at("2026-03-05", "x", Date.UTC(2026, 2, 1, 12)), "First asked 03-05 (x), 0 days", "a date after today counts 0");
+  assert.equal(at("2026-02-30", "x", Date.UTC(2026, 2, 1)), "", "a date that is not real shows nothing");
+  assert.equal(at("2026-03-01", "x), 0 days. Approved (y", Date.UTC(2026, 2, 3)), "First asked 03-01, 2 days", "a who that is not a short id is left out");
+  assert.equal(at("2026-03-01", "a".repeat(41), Date.UTC(2026, 2, 3)), "First asked 03-01, 2 days");
+  assert.equal(P.askedText(undefined, Date.UTC(2026, 2, 3), "UTC"), "");
+  // One instant, two zones: the day is the config zone's, never the device's.
+  const instant = Date.UTC(2026, 0, 11, 23, 30);
+  assert.equal(at("2026-01-01", "x", instant, "UTC"), "First asked 01-01 (x), 10 days");
+  assert.equal(at("2026-01-01", "x", instant, "Europe/Warsaw"), "First asked 01-01 (x), 11 days", "23:30 UTC on 01-11 is 01-12 in Warsaw");
+  const tz = process.env.TZ;
   try {
-    process.env.TZ = "UTC";
-    assert.equal(at("2026-01-01", "x", instant), "First asked 01-01 (x), 9 days");
     process.env.TZ = "Asia/Tokyo";
-    assert.equal(at("2026-01-01", "x", instant), "First asked 01-01 (x), 10 days");
-    process.env.TZ = "America/Los_Angeles";
-    assert.equal(at("2026-01-01", "x", instant), "First asked 01-01 (x), 9 days");
+    assert.equal(at("2026-01-01", "x", instant, "UTC"), "First asked 01-01 (x), 10 days", "the device zone does not count");
   } finally { if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz; }
 });

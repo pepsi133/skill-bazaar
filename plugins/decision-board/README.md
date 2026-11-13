@@ -1,9 +1,9 @@
 # decision-board
 
-A decision board is a private claude.ai artifact page with a database. Agents post cards (a
+A decision board is a private claude.ai artifact page with a database. An agent posts cards (a
 question with options, or an action) and guides (steps, status, reference pages). The operator
-answers on a phone or in a browser and presses Send. Each agent reads the answers that belong to
-it, acts, and marks its batch handled.
+answers on a phone or in a browser and presses Send. The agent reads the answers, acts, and marks
+the batch handled.
 
 One unchanged page serves many uses. A config, kept in `board/config.json` and written to the
 database, sets the title, the tabs, the priorities and the tags.
@@ -20,10 +20,10 @@ database, sets the title, the tabs, the priorities and the tags.
 
 The agent never reads or types card JSON in the conversation. Its cards live in a local state file,
 `board/state.json`. `skills/decision-board/scripts/board.mjs sync` applies a card file to it and
-prints one write: the agent's whole card list as one document, `cards/<agent>`, pinned to the
-version that the state keeps. The page merges the agents' documents. Answers come back as batches,
-which the agent dumps and reads with `read`, one short line per answer. The script has no network
-access.
+prints one write: the whole card list as one document, `cards/main`, pinned to the version that
+the state keeps. Answers come back as batches. A watcher queries only the batches whose status is
+`sent`, and `read` prints one short line per answer. Every time is written with the offset of the
+config `tz`. The script has no network access.
 
 ## Layout
 
@@ -36,7 +36,7 @@ The agent needs only `skills/` while it runs a board:
   `guide`, `purge`, `adopt`, `push`.
 - `skills/decision-board/assets/wait.sh`: the pause of a watcher between two polls.
 - `skills/decision-board/references/`: cards, guides, the data model and access rules, the watch
-  brief.
+  brief, building a board and changing the page, and the clean up.
 - `docs/how-it-works.html`: how the parts fit together.
 - `tests/`: node tests of the page logic and the script, on fixtures.
 
@@ -60,16 +60,16 @@ The tests need only Node 18 or later, no packages. Each exits with 1 when a chec
 
 - `tests/*-test.js` run the part of the page between "pure: start" and "pure: end" in a Node
   sandbox, through `tests/_page.js`: the schema checks, the config, tabs and guides, card states,
-  the merge of the agents' card documents, the Done section, what Send takes and the batch it
+  the cards document, the Done section, what Send takes and the batch it
   writes, and the text formatter. `render-test.js` runs the links, tags and age line of a card,
   the reference sanitizer, and the list of places that write HTML against a small DOM stub.
-  `cuts-test.js` checks that removed features stay removed. They take another page file as their
-  first argument.
+  `cuts-test.js` checks that removed features stay removed. `tests/time-test.js` covers the time
+  stamps, the zone and DST. They take another page file as their first argument.
 - `tests/board-test.mjs` runs every command of the script against the fixture state and dump in
   `tests/fixtures/` and applies the printed writes to a stand-in database (`tests/fakedb.mjs`),
   which refuses a write pinned to the wrong version as the real one does.
 - `tests/loss-test.mjs` covers the cases where a write could drop a card, a close or an answer
-  without a message: two state files of one agent, a refused purge or ack, and agent keys.
+  without a message: two state files in one folder, a refused purge or ack.
 - `tests/refresh-test.mjs` tests the `board-refresh` skill and its output against `sync`.
 
 No test renders the page in a browser, and no test covers the real database or a real phone.

@@ -29,7 +29,7 @@ All operator questions and open decisions of this cluster are answered; see "Cal
 | `responses` | the card id | the page | the draft answer, with the earlier sent answers in `history` |
 | `notes` | `n<compact stamp>-<4 chars>` | the page | a free note |
 | `batches` | `b<compact stamp>-<4 chars>` | the page creates it with `status: "sent"`; the agent's `ack` sets `status: "handled"` and `handled_at` | a copy of each answer and note |
-| `meta` | `config` | the agent: `check` | the config. (`meta/board` is still read for the title fallback; nothing in this cluster writes it.) |
+| `meta` | `config` | the agent: `check` | the config. (`meta/board` is still read for the title fallback; nothing writes it.) |
 
 Removed: the collection `acks`, the doc ids `cards/<agent key>`, guide ids `<agent>.<id>`, response ids
 `<agent>:<card id>`, every `for` field, `agentRe`.
@@ -692,8 +692,8 @@ Outside the pure part:
 - `render()`: the last-batch sort and `renderNotes` sort use `cmpStamp`.
 - Footer: in the HTML, as the last child of `<main class="in">`, directly after
   `<section id="archived" class="notes" hidden aria-label="Archived guides"></section>` (the last notes section), add
-  exactly `<footer id="foot" class="foot"><span id="zone" class="small muted"></span></footer>`. CSS: add
-  `.foot { margin-top: 24px; padding: 12px 0; }` beside the other layout rules. `#zone` is the first child of `#foot`
+  exactly `<footer id="foot" class="page-foot"><span id="zone" class="small muted"></span></footer>`. CSS: add
+  `.page-foot { margin-top: 24px; padding: 12px 0; }` beside the other layout rules. `#zone` is the first child of `#foot`
   and is never hidden; cluster B adds its settings line as the next child of `#foot`. In `render()`, add
   `$("zone").textContent = zoneNote(cfg.tz);` next to the `$("refreshed")` line. No device-zone code.
 

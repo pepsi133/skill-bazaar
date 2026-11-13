@@ -50,17 +50,17 @@ function parse(html) {
 const document = { createElement: (t) => new El(t), createDocumentFragment: () => new El("#fragment"), adoptNode: (n) => n };
 const DOMParser = class { parseFromString(s) { return parse(s); } };
 const P = load({ document, DOMParser },
-  cut("  function h(tag, attrs)", "  function iso()") + cut("  function set(s)", "  // ---- cards. Every DOM id") + cut("  function renderMeta", "  function updateCard"));
+  cut("  function h(tag, attrs)", "  function fmt(s)") + cut("  function set(s)", "  // ---- cards. Every DOM id") + cut("  function renderMeta", "  function updateCard"));
 
 const find = (n, tag) => n.querySelectorAll(tag);
 const card = () => ({ chips: new El("div"), links: new El("div"), asked: new El("div") });
 
 ok("a card renders only the valid links, with the parsed href, the label as text and the host after it", () => {
-  P.applyConfig({ link_hosts: ["example.com"], tags: [{ id: "cost", label: "Costs <b>money</b>" }] });
+  P.applyConfig({ tz: "UTC", link_hosts: ["example.com"], tags: [{ id: "cost", label: "Costs <b>money</b>" }] });
   const c = card(), label = "<img src=x onerror=alert(1)>";
   P.renderMeta(c, P.coerce("item", { id: "a", tags: ["cost", "nope"], first_asked: { date: "2026-03-01", who: "infra-agent" },
     links: [{ label: "first", url: "http://example.com/" }, { label, url: "https://Wiki.Example.com/a b" }, { label: "", url: "https://example.com/z" },
-      { label: "u", url: "https://u:p@example.com/" }, { label: "js", url: "javascript:alert(1)" }] }), new Date(2026, 2, 3));
+      { label: "u", url: "https://u:p@example.com/" }, { label: "js", url: "javascript:alert(1)" }] }), Date.UTC(2026, 2, 3));
   const as = find(c.links, "a");
   assert.deepEqual(as.map((a) => [a.getAttribute("href"), a.textContent, a.getAttribute("target"), a.getAttribute("rel")]),
     [["https://wiki.example.com/a%20b", label, "_blank", "noopener noreferrer"], ["https://example.com/z", "example.com", "_blank", "noopener noreferrer"]]);
@@ -69,17 +69,17 @@ ok("a card renders only the valid links, with the parsed href, the label as text
   assert.equal(c.asked.textContent, "First asked 03-01 (infra-agent), 2 days");
   assert.deepEqual(find(c.chips, "span").map((s) => s.textContent), ["Costs <b>money</b>"]);
   assert.deepEqual(htmlWrites, [], "no HTML is written");
-  P.applyConfig(null);
+  P.applyConfig({ tz: "UTC" });
 });
 ok("without valid links, tags or a first ask the boxes are empty and hidden", () => {
-  P.applyConfig({ link_hosts: ["example.com"] });
+  P.applyConfig({ tz: "UTC", link_hosts: ["example.com"] });
   const c = card();
-  P.renderMeta(c, P.coerce("item", { id: "b", links: [{ label: "x", url: "https://other.invalid/" }], tags: ["cost"], first_asked: { date: "2026-02-30" } }), new Date(2026, 2, 3));
+  P.renderMeta(c, P.coerce("item", { id: "b", links: [{ label: "x", url: "https://other.invalid/" }], tags: ["cost"], first_asked: { date: "2026-02-30" } }), Date.UTC(2026, 2, 3));
   assert.deepEqual([c.links.childNodes.length, c.links.hidden, c.chips.hidden, c.asked.textContent, c.asked.hidden], [0, true, true, "", true]);
-  P.applyConfig(null);
+  P.applyConfig({ tz: "UTC" });
 });
 ok("sanitizeRef: no script, no on* attribute, no javascript: href, no url() of an unlisted host", () => {
-  P.applyConfig({ domains: ["docs.example.com"] });
+  P.applyConfig({ tz: "UTC", domains: ["docs.example.com"] });
   const out = P.sanitizeRef('<p onclick="alert(1)" class="k">hi<script>alert(1)</script></p><a href="javascript:alert(1)">x</a><a href="https://docs.example.com/a">y</a>' +
     '<svg><rect fill="url(https://evil.invalid/a)" stroke="url(#g)"/><rect fill="url(https://docs.example.com/p.svg)"/></svg>' +
     '<span style="color: red; background-color: url(https://evil.invalid/x)" onmouseover="x()">s</span>');
@@ -89,7 +89,7 @@ ok("sanitizeRef: no script, no on* attribute, no javascript: href, no url() of a
     [[null, "_blank", "noopener noreferrer"], ["https://docs.example.com/a", "_blank", "noopener noreferrer"]]);
   assert.deepEqual(r.map((x) => [x.getAttribute("fill"), x.getAttribute("stroke")]), [[null, "url(#ref-g)"], ["url(https://docs.example.com/p.svg)", null]]);
   assert.deepEqual([s.getAttribute("style"), s.getAttribute("onmouseover")], ["color: red", null]);
-  P.applyConfig(null);
+  P.applyConfig({ tz: "UTC" });
 });
 ok("HTML reaches the page only at the known places, each through fmtText", () => {
   const src = fs.readFileSync(pageFile, "utf8"), js = src.slice(src.indexOf("<script>"));
@@ -98,4 +98,15 @@ ok("HTML reaches the page only at the known places, each through fmtText", () =>
   // The check sees every other way to write HTML.
   const probe = 'e["innerHTML"] = x; e[\'outerHTML\'] = x; Reflect.set(e, "innerHTML", x); e.setHTML(x); f.srcdoc = x; e.outerHTML = x; e.insertAdjacentHTML("beforeend", x); document.write(x); r.createContextualFragment(x);';
   assert.equal(probe.match(re).length, 9, "a positive control for the pattern");
+});
+ok("the footer always names the zone", () => {
+  const src = fs.readFileSync(pageFile, "utf8");
+  assert.match(src, /<footer id="foot" class="page-foot"><span id="zone" class="small muted"><\/span>/, "#zone is the first child of #foot");
+  assert.ok(!/<span id="zone"[^>]*hidden/.test(src), "#zone is not hidden");
+  assert.ok(/<section id="archived" class="notes" hidden aria-label="Archived guides"><\/section>\s*<footer id="foot"/.test(src), "the footer follows the last notes section");
+  const render = src.slice(src.indexOf("  function render() {"), src.indexOf("  // The cards of a list in order."));
+  assert.ok(render.includes('$("zone").textContent = zoneNote(cfg.tz);'));
+  P.applyConfig({ tz: "Europe/Warsaw" });
+  assert.equal(P.zoneNote(P.cfg.tz), "Times in Europe/Warsaw");
+  P.applyConfig({ tz: "UTC" });
 });
