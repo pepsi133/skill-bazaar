@@ -18,7 +18,7 @@ const USAGE = `Usage: node ${SELF} <command> ... [--state <file>]
   close <id>...                             close cards
   read --dump <dir> [--all] --dumped        the batches that wait (dump: batches with status "sent"); --dumped: the dump calls succeeded; --all also prints handled ones
   waiting --dump <dir>                      only the ids of the batches that wait, or "none"
-  ack <batch id> [--close <id>...] --dump <dir>   mark a batch handled, and close cards
+  ack <batch id> [--close <id>...] --dump <dir>   mark a batch handled, apply its controls, and close cards
   guide [<file.md>] --id <id> [--kind text|status|reference] [--item <card id>] [--archive | --delete] --dump <dir>
   purge (--ids <id>... | --closed-before <YYYY-MM-DD>) --dump <dir>
   adopt [cards | guides/<id> | meta/config | batches/<id> | purge/<stamp>] --dump <dir> --dumped   after a refused write: merge the board copy, print the write again
@@ -35,7 +35,7 @@ function loadPage() {
   const i = page.indexOf("  // ---- pure: start"), j = page.indexOf("  // ---- pure: end", i + 1);
   if (i < 0 || j < 0) throw new Error("the pure markers are missing in " + file);
   const ctx = vm.createContext({ items: new Map(), resp: new Map(), notes: new Map(), guides: new Map(), batches: new Map(),
-    f: { tab: "all" }, loaded: { config: true }, isPending: () => false, URL });
+    f: { tab: "all" }, loaded: { config: true }, isPending: () => false, lingerOf: () => "", URL });
   vm.runInContext(page.slice(i, j), ctx, { filename: file });
   return ctx;
 }
@@ -300,6 +300,10 @@ class Run {
     this.saved = saved;
     this.st = saved ? plain(saved) : { cards: [], next: {} };
     for (const k of ["pending", "unlogged"]) this.st[k] = isPlain(this.st[k]) ? this.st[k] : {};
+    for (const k of ["ctl_closed", "snoozed"]) if (this.st[k] !== undefined && !isPlain(this.st[k])) delete this.st[k];
+    // Values the script prints or acts on: only what it writes itself (a real wake day, a known close reason).
+    for (const [id, x] of Object.entries(this.st.snoozed || {})) if (!isPlain(x) || !P.realDate(x.day)) delete this.st.snoozed[id];
+    for (const [id, x] of Object.entries(this.st.ctl_closed || {})) if (!["other", "dismiss", "done"].includes(x)) delete this.st.ctl_closed[id];
     this.configFile = path.join(this.dir, "config.json");
     this.load = loadConfig(this.dir);
     this.config = this.load.any ? this.load.config : null;
@@ -335,6 +339,13 @@ class Run {
     let k = 0;
     for (const id of ids) { const c = this.card(id); if (c.status !== "closed") { c.status = "closed"; c.updated = t; k++; } }
     this.st.held = Array.from(new Set((this.st.held || []).concat(ids)));
+    return k;
+  }
+  // ack: undo a control close. Back to open, out of held; the content and rev stay.
+  openCards(ids, t) {
+    let k = 0;
+    for (const id of ids) { const c = this.card(id); if (c && c.status === "closed") { c.status = "open"; c.updated = t; k++; } }
+    this.st.held = (this.st.held || []).filter((x) => !ids.includes(x));
     return k;
   }
   put(op, collection, doc_id, data, if_version, key, also) { this.writes.push({ w: { op, collection, doc_id, if_version }, data, key, also }); }
@@ -374,6 +385,10 @@ class Run {
     if (this.st.purge && !this.st.purge.length) delete this.st.purge;
     if (this.st.held) this.st.held = this.st.held.filter((id) => this.card(id));
     if (this.st.held && !this.st.held.length) delete this.st.held;
+    for (const k of ["ctl_closed", "snoozed"]) if (this.st[k]) {
+      for (const id of Object.keys(this.st[k])) if (!this.card(id)) delete this.st[k][id];
+      if (!Object.keys(this.st[k]).length) delete this.st[k];
+    }
     if (JSON.stringify(this.st) !== JSON.stringify(this.saved)) {
       fs.mkdirSync(this.dir, { recursive: true });
       fs.writeFileSync(this.file + ".tmp", JSON.stringify(this.st, null, 1) + "\n");
@@ -585,6 +600,9 @@ function cmdSync(a, log) {
       if (ex && P.isObj(ex.first_asked)) c.first_asked = plain(ex.first_asked);
       if (f.source && c.source !== undefined && lower(c.source) !== f.source) errs.push(`${c.id}: source: not the --source ${q(f.source)}`);
       if (f.source) c.source = f.source;
+      // source_key names the item a Close or an assign to the agent may write to: only a map file, synced with its
+      // --source, carries it.
+      if (!f.source && P.isObj(c) && c.source_key !== undefined) errs.push(`${typeof c.id === "string" && c.id ? c.id : "?"}: source_key: set only by board-refresh map; sync that file with --source`);
       cards.push({ c, f });
     });
   }
@@ -604,26 +622,35 @@ function cmdSync(a, log) {
   const noLink = [];
   const warn = [];
   const defPri = P.cfg.priorities[Math.min(1, P.cfg.priorities.length - 1)].id;
+  const ctl = Object.assign({}, r.st.ctl_closed || {});
   for (const { c, f } of cards) {
     const ex = r.card(c.id), old = ex ? plain(P.coerce("item", ex)) : null, doc = { id: c.id };
     for (const k of Object.keys(S.item)) if (k !== "id" && !MANAGED.includes(k) && c[k] !== undefined) doc[k] = c[k];
+    // A card file without input keeps the stored marker (a row that lacks the field must not erase it).
+    if (doc.input === undefined && ex && typeof ex.input === "string") doc.input = ex.input;
     if (Array.isArray(doc.links)) doc.links = doc.links.map((l) => Object.assign({}, l, { url: new URL(l.url).href }));
     doc.priority = c.priority || (old && old.priority) || defPri;
     const content = !old || contentKey(doc) !== contentKey(old);
+    // A card the operator dismissed or marked done comes back as a new question (rev up) when its source brings a
+    // new input. A card without a stored input comes back only on a content change, so the first map run with an
+    // input key reopens nothing. Never a card the agent closed: its own work in the source changes that input.
+    const back = !!ex && held.has(c.id) && (ctl[c.id] === "dismiss" || ctl[c.id] === "done") && typeof doc.input === "string" &&
+      typeof ex.input === "string" && ex.input !== "" && doc.input !== ex.input;
     if (content) { const w = P.draftWarning(c.draft); if (w) warn.push(`warning: ${qid(c.id)}: draft starts with ${q(w)}; put notes in summary`); }
     // A card back in its source's file is open again, unless close or ack --close closed it (held); elsewhere a
     // closed card stays closed. Either way until its content changes.
-    if (content) held.delete(c.id);
-    doc.status = c.status || (old && !content && (!f.source || held.has(c.id)) ? old.status : "open") || "open";
+    if ((content || back) && ctl[c.id] !== "other") { held.delete(c.id); delete ctl[c.id]; }
+    doc.status = c.status || (old && !content && !back && (!f.source || held.has(c.id)) ? old.status : "open") || "open";
+    if (ctl[c.id] === "other") doc.status = "closed";
     if (doc.status === "open" && !(Array.isArray(doc.links) && doc.links.length)) noLink.push(c.id);
     const strip = (x) => { const y = plain(P.coerce("item", x)); MANAGED.forEach((k) => delete y[k]); return JSON.stringify(y); };
     if (old && strip(doc) === strip(ex)) { n.same++; continue; }
     if (old && old.status === "closed" && doc.status === "open") reopened.push(c.id);
-    doc.rev = old ? old.rev + (content ? 1 : 0) : 1;
+    doc.rev = old ? old.rev + (content || back ? 1 : 0) : 1;
     doc.created = (old && old.created) || t;
     doc.updated = t;
     if (ex) r.st.cards[r.st.cards.indexOf(ex)] = doc; else r.st.cards.push(doc);
-    if (!old) n.new++; else if (content) n.rev++; else n.changed++;
+    if (!old) n.new++; else if (content || back) n.rev++; else n.changed++;
   }
   const sources = new Set(files.map((f) => f.source).filter(Boolean));
   for (const c of r.st.cards) {
@@ -638,6 +665,7 @@ function cmdSync(a, log) {
   if (warn.length > 3) log(`warning: and ${warn.length - 3} more drafts that start with a label`);
   if (n.new + n.rev + n.changed + closed.length) { r.st.refreshed = t; r.putCards(); }
   r.st.held = Array.from(held);
+  r.st.ctl_closed = ctl;
   r.finish(log);
 }
 function cmdClose(a, log) {
@@ -653,8 +681,79 @@ function cmdClose(a, log) {
 // ---- read. Every database text goes through q(), and an id that is not a plain id too, so no value can forge a line.
 // The answers of a batch are keyed by card id. A batch waits while its status is "sent"; the order is by instant, then id.
 const qid = (s) => (S.idRe.test(s) ? s : q(s));
+// The control lines of a batch: one entry per changed control, in controlIds order, then SCHEMA.controlNames order.
+// tags is one entry when tags_on or tags_off is present. keep is never an entry (it is not in S.controlNames).
+// The number of cards a batch holds controls for: the ids of controlIds that have a controls entry.
+const nCtl = (b) => b.controlIds.filter((id) => b.controls[id]).length;
+function controlsOf(b) {
+  const out = [];
+  for (const id of b.controlIds) {
+    const x = b.controls[id];
+    if (!x) continue;
+    for (const key of S.controlNames) {
+      if (key === "tags" ? x.tags_on !== undefined || x.tags_off !== undefined : x[key] !== undefined) out.push({ id, key, x });
+    }
+  }
+  return out;
+}
+// The flags of one control line; an empty list means the agent and ack act on it.
+function ctlFlags(r, e) {
+  const c = r.card(e.id), flags = [];
+  if (!c) return ["[missing]"];
+  const rev = P.coerce("item", c).rev;
+  if (S.revBound.includes(e.key)) { if (e.x.rev < rev) flags.push("[stale-rev]"); else if (e.x.rev !== rev) flags.push("[other-rev]"); }
+  if (!P.cfg.controls[e.key]) flags.push("[not-enabled]");
+  const v = e.x[e.key], tagIds = P.cfg.tags.map((t) => t.id);
+  const bad = e.key === "assign" ? v !== "" && !P.assignIds().includes(v)
+    : e.key === "snooze" ? v !== "" && !P.realDate(v)
+    : e.key === "tags" ? [...(e.x.tags_on || []), ...(e.x.tags_off || [])].some((t) => !tagIds.includes(t))
+    : v !== "on" && v !== "off";
+  if (bad) flags.push("[bad-value]");
+  // A close needs the item: a card without source_key names none (only map cards have one).
+  if (e.key === "close" && v === "on" && !(typeof c.source_key === "string" && c.source_key.trim())) flags.push("[no-item]");
+  return flags;
+}
+// The value as read prints it. Database text goes through q() or JSON.stringify, so no value can forge a line.
+const ctlText = (e) => (e.key === "tags" ? `+${JSON.stringify(e.x.tags_on || [])} -${JSON.stringify(e.x.tags_off || [])}` : q(e.x[e.key]));
+// The value as decisions.md logs it.
+const ctlPlain = (e) => (e.key === "tags" ? [...(e.x.tags_on || []).map((t) => "+" + t), ...(e.x.tags_off || []).map((t) => "-" + t)].join(" ") || "none"
+  : e.x[e.key] === "" ? "none" : e.x[e.key]);
+// The source item of a card as read names it: source, source_key and the first link, each through q(); a card
+// with no link (links are optional, B) prints the bare words "link none" in the link's place.
+const itemOf = (c) => {
+  const url = Array.isArray(c.links) && c.links[0] && typeof c.links[0].url === "string" ? c.links[0].url : "";
+  return `item ${q(c.source || "")} ${q(c.source_key || "")} ${url ? q(url) : "link none"}`;
+};
+// What the agent does with one control line, printed in brackets at its end: the script decides, the agent follows.
+// flags: the line's flags ([superseded] included). This is the one place a later per-source close command would
+// change the close step.
+function ctlHint(c, e, flags) {
+  if (flags.length) return "(skip)";
+  const v = e.x[e.key];
+  if (e.key === "close" && v === "on") return `(close ${itemOf(c)} in its source with the operator's own tool for it; change nothing else there; then add --close ${qid(e.id)} to the ack line; if you cannot, leave the card and say why in your reply)`;
+  if (e.key === "assign" && v === "agent") return typeof c.source_key === "string" && c.source_key.trim()
+    ? `(do the work the card asks; in a source change only ${itemOf(c)}; leave the card open and say what you did in your reply)`
+    : "(do the work the card asks, with no write to any source; leave the card open and say what you did in your reply)";
+  if (e.key === "assign" || e.key === "dismiss" || e.key === "done") return "(ack applies it)";
+  if (e.key === "snooze" && v !== "") return `(no follow-up before ${v})`;
+  return "(nothing to do)";
+}
+// read: the running snoozes of the state, as one line, or "". Drops the ones whose day came (today in the config
+// tz), whose card changed rev, or whose card is closed or gone. ack writes r.st.snoozed (4.3 step 2b).
+function snoozedLine(r) {
+  const today = P.dayIn(nowMs(), P.cfg.tz), s = r.st.snoozed || {}, out = [];
+  for (const id of Object.keys(s)) {
+    const c = r.card(id), x = s[id];
+    if (!c || c.status === "closed" || !isPlain(x) || P.coerce("item", c).rev !== x.rev || !(String(x.day) > today)) delete s[id];
+    else out.push(`${qid(id)} before ${x.day}`);
+  }
+  if (r.st.snoozed && !Object.keys(r.st.snoozed).length) delete r.st.snoozed;
+  return out.length ? "snoozed: do not follow up on " + out.join(", ") : "";
+}
 const byTime = (x, y) => P.cmpStamp(x.created, y.created) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0);
-const batchesOf = (dump) => Array.from(dump.col("batches").entries()).map(([id, d]) => Object.assign(P.coerce("batch", d.data), { id })).sort(byTime);
+// A batch as the script reads it: coerced, with each card id once in controlIds (the first occurrence wins).
+const batchOf = (data, id) => { const b = Object.assign(P.coerce("batch", data), { id }); b.controlIds = Array.from(new Set(b.controlIds)); return b; };
+const batchesOf = (dump) => Array.from(dump.col("batches").entries()).map(([id, d]) => batchOf(d.data, id)).sort(byTime);
 const waiting = (dump) => batchesOf(dump).filter((b) => b.status === "sent");
 // A stamp as read prints it: in the config tz, or as it is when it is unreadable.
 const shown = (s) => P.localStamp(s, P.cfg.tz) || s;
@@ -680,10 +779,17 @@ function cmdRead(a, log) {
   { const rl = rulesLine(rulesState(r), "read", a); if (rl) log(rl); }
   const stand = standingRe(r.config ? r.config.standing : undefined);
   r.logHandled(dump, log);
+  { const sl = snoozedLine(r); if (sl) log(sl); }
   if (!list.length) log(a.all ? "no batches in the dump" : "no batches waiting");
+  // A control that a later waiting batch of this list sets again for the same card is superseded.
+  const later = new Set(), sup = new Set();
+  for (const b of list.slice().reverse()) if (b.status === "sent") for (const e of controlsOf(b)) {
+    const k = e.id + "\n" + e.key;
+    if (later.has(k)) sup.add(b.id + "\n" + k); else later.add(k);
+  }
   for (const b of list) {
     const sent = b.status === "sent";
-    log(`batch ${qid(b.id)}  ${q(shown(b.created))}  ${b.itemIds.length} answers  ${b.noteIds.length} notes${b.status === "handled" ? `  handled ${q(shown(b.handled_at))}` : ""}`);
+    log(`batch ${qid(b.id)}  ${q(shown(b.created))}  ${b.itemIds.length} answers  ${b.noteIds.length} notes${nCtl(b) ? "  controls on " + nCtl(b) + " cards" : ""}${b.status === "handled" ? `  handled ${q(shown(b.handled_at))}` : ""}`);
     for (const key of b.itemIds) {
       const x = b.answers[key], flags = [], it = x && r.card(key);
       if (!it) flags.push("[missing]");
@@ -696,34 +802,85 @@ function cmdRead(a, log) {
       if (!flags.length && it && lower(it.source) === "rules") flags.push("[rule]"); else if (!flags.length && x && stand.test(x.note || "")) flags.push("[standing]");
       log(`  ${qid(key)}  ${q(x ? x.answer : "")}  ${q(x ? x.note : "")}${flags.length ? "  " + flags.join(" ") : ""}${sent ? "  " + lineHint(flags, a) : ""}`);
     }
+    for (const e of controlsOf(b)) {
+      const fl = ctlFlags(r, e).concat(sup.has(b.id + "\n" + e.id + "\n" + e.key) ? ["[superseded]"] : []);
+      log(`  ${qid(e.id)}  control ${e.key} ${ctlText(e)}${fl.length ? "  " + fl.join(" ") : ""}${b.status === "sent" ? "  " + ctlHint(r.card(e.id), e, fl) : ""}`);
+    }
     for (const id of b.noteIds) {
       const nb = b.notes[id] || { text: "", item: "" }, nflags = [];
       if (stand.test(nb.text)) nflags.push("[standing]");
       log(`  note ${qid(id)}${nb.item ? "  item " + q(nb.item) : ""}  ${q(nb.text)}${nflags.length ? "  " + nflags.join(" ") : ""}${sent ? "  " + lineHint(nflags, a) : ""}`);
     }
-    if (sent) log(`  when handled: node ${SELF} ack ${qid(b.id)} --dump ${one(a, "dump")}${a.state ? " --state " + q(one(a, "state")) : ""}`);
+    if (sent && r.st.pending["batches/" + b.id]) log("  " + pushHint(b.id, r));
+    else if (sent) log(`  when handled: node ${SELF} ack ${qid(b.id)} --dump ${one(a, "dump")}${a.state ? " --state " + q(one(a, "state")) : ""}`);
   }
   r.finish(() => {});
 }
 
+// ack and read: the line for a batch whose ack this state printed but the dump does not show as handled.
+const pushHint = (bid, r) => `ack ${qid(bid)}: its write is printed but not confirmed. Run: node ${SELF} push batches/${bid}${r.ctx().state}`;
 // ---- ack: an update of batches/<id> to status "handled", pinned to version 1 (the page writes a batch once, with
 // set, and never again), with the cards write of --close. Its answers go to decisions.md once a read no longer
 // lists the batch as waiting.
 function cmdAck(a, log) {
   const bid = a._[1], dump = readDump(one(a, "dump")), r = new Run(a), b = bid && dump.col("batches").get(bid);
+  const batch = b ? batchOf(b.data, bid) : null;
+  if (batch && batch.status === "handled") { log(`ack ${bid}: already handled`); delete r.st.pending["batches/" + bid]; return r.finish(log); }
+  // An ack this state already printed whose write the dump does not show yet: acking it again would apply its
+  // controls a second time. Its write goes again through push; a --close of this run is not applied.
+  if (bid && r.st.pending["batches/" + bid]) {
+    log(pushHint(bid, r));
+    const close = a.close || [];
+    if (close.length) log(`ack ${bid}: --close ${close.map(qid).join(" ")} not applied. After the push is confirmed, run: node ${SELF} close ${close.map(qid).join(" ")}${r.ctx().state}`);
+    return r.finish(log);
+  }
   if (!b) fail("ack: no batch " + (bid || "named") + " in the dump");
-  const batch = Object.assign(P.coerce("batch", b.data), { id: bid });
-  if (batch.status === "handled") { log(`ack ${bid}: already handled`); return r.finish(log); }
   if (batch.status !== "sent") fail(`ack: batch ${bid} has status ${q(batch.status)}, not "sent". Nothing written`);
   const close = a.close || [], t = now();
   r.needCards(close, "ack");
+  const mineIds = new Set(batch.controlIds);
+  // An earlier batch that this state already acked (its write is pending, not yet in the dump) does not block:
+  // the agent may ack several batches from one dump, in the order read printed them.
+  const first = waiting(dump).find((x) => x.id !== bid && byTime(x, batch) < 0 && !r.st.pending["batches/" + x.id] &&
+    x.controlIds.some((id) => mineIds.has(id)));
+  if (first) fail(`ack: ack ${qid(first.id)} first: it holds controls for the same cards. Nothing written`);
+  // The placement of each card: closed for a control (ctl_closed holds why), or reopened when the control that
+  // closed it is undone. A card the agent closed itself never enters ctl_closed.
+  const toClose = new Set(), toOpen = new Set(), ctl = Object.assign({}, r.st.ctl_closed || {});
+  // The value of one place key: the changed value, else the kept one; undefined when absent or flagged.
+  const v = (id, key) => {
+    const x = batch.controls[id], raw = x[key] !== undefined ? x[key] : x.keep ? x.keep[key] : undefined;
+    if (raw === undefined) return undefined;
+    return ctlFlags(r, { id, key, x: { rev: x.rev, [key]: raw } }).length ? undefined : raw;
+  };
+  for (const id of batch.controlIds) {
+    const x = batch.controls[id];
+    if (!x || !r.card(id) || !S.placeKeys.some((k) => x[k] !== undefined)) continue;
+    const why = v(id, "assign") === "other" ? "other" : v(id, "dismiss") === "on" ? "dismiss" : v(id, "done") === "on" ? "done" : "";
+    const wasOpen = r.card(id).status !== "closed";
+    if (why && (wasOpen || ctl[id])) { toClose.add(id); ctl[id] = why; }   // an agent's own close never enters ctl
+    else if (!why && ctl[id]) { toOpen.add(id); delete ctl[id]; }
+  }
+  r.st.ctl_closed = ctl;
+  // The running snoozes; a flagged snooze changes nothing.
+  const sn = Object.assign({}, r.st.snoozed || {});
+  for (const e of controlsOf(batch)) {
+    if (e.key !== "snooze" || ctlFlags(r, e).length) continue;
+    if (e.x.snooze === "") delete sn[e.id]; else sn[e.id] = { day: e.x.snooze, rev: e.x.rev };
+  }
+  r.st.snoozed = sn;                                              // finish() deletes an empty object
+  // An explicit --close wins over a reopen: the card is now the agent's own close.
+  for (const id of close) toOpen.delete(id);
   r.put("update", "batches", bid, { status: "handled", handled_at: t }, 1, "batches/" + bid);
-  const k = r.closeCards(close, t);
-  if (k) r.pinned("set", "cards", CARDS, r.cardsDoc(), undefined, "batches/" + bid);
+  const k1 = r.closeCards(Array.from(toClose), t);
+  const j = r.openCards(Array.from(toOpen), t);
+  const k2 = r.closeCards(close, t), k = k1 + k2;
+  if (k + j > 0) r.pinned("set", "cards", CARDS, r.cardsDoc(), undefined, "batches/" + bid);
   const day = P.stampMs(batch.created) === -Infinity ? "" : P.dayIn(P.stampMs(batch.created), P.cfg.tz);
   r.st.unlogged[bid] = batch.itemIds.map((key) => { const x = batch.answers[key] || { answer: "", note: "" }; return [key, x.answer, x.note, day]; })
+    .concat(controlsOf(batch).map((e) => { const fl = ctlFlags(r, e); return [e.id, "control " + e.key + " " + ctlPlain(e) + (fl.length ? " " + fl.join(" ") : ""), "", day]; }))
     .concat(batch.noteIds.map((id) => { const x = batch.notes[id] || { text: "", item: "" }; return [x.item || "", "", x.text, day]; }));
-  log(`ack ${bid}: handled, ${k} cards closed. The answers go to decisions.md when the next read no longer lists the batch`);
+  log(`ack ${bid}: handled, ${k} cards closed, ${j} reopened. The answers go to decisions.md when the next read no longer lists the batch`);
   r.finish(log);
 }
 
@@ -865,7 +1022,8 @@ function cmdPurge(a, log) {
   const gone = new Set(ids), rows = [];
   ids.forEach((id) => { if (resps.has(id)) rows.push(["responses", id, resps.get(id)]); });
   const all = batchesOf(dump), newest = all[all.length - 1];
-  all.filter((b) => b !== newest && b.itemIds.length && !b.noteIds.length && b.itemIds.every((x) => gone.has(x)) && P.isHandled(b))
+  const cardsOfBatch = (b) => Array.from(new Set(b.itemIds.concat(b.controlIds)));
+  all.filter((b) => b !== newest && cardsOfBatch(b).length && !b.noteIds.length && cardsOfBatch(b).every((x) => gone.has(x)) && P.isHandled(b))
     .forEach((b) => rows.push(["batches", b.id, batches.get(b.id)]));
   rows.forEach(([c, id, d]) => pin(c, id, d));
   const stamp = P.compactStamp(now()), keep = path.join(r.dir, "purged", stamp);
@@ -1025,7 +1183,7 @@ function cmdCheck(a, log) {
   r.needConfig(true);
   const raw = r.config, c = P.cfg;
   errs.push(...r.load.problems.map((p) => "config " + p));
-  for (const k of ["tabs", "priorities", "domains", "link_hosts", "tags", "groups", "sort"]) {
+  for (const k of ["tabs", "priorities", "domains", "link_hosts", "tags", "groups", "sort", "people"]) {
     const def = k === "groups" ? P.DEFAULT_GROUPS : P.DEFAULTS[k];
     if (raw[k] === undefined) continue;
     const got = c[k] === def && Array.isArray(raw[k]) && raw[k].length ? 0 : c[k].length;
@@ -1034,6 +1192,13 @@ function cmdCheck(a, log) {
   errs.push(...r.load.unknown);
   if (raw.tz !== undefined && !P.tzOk(raw.tz)) errs.push(`config tz: ${q(raw.tz)} is not a time zone name such as "Europe/Warsaw" or "UTC"`);
   if (raw.week_start !== undefined && !P.normWeek(raw.week_start)) errs.push(`config week_start: ${q(raw.week_start)} is not a day and a time such as "tuesday 12:00"`);
+  if (raw.controls !== undefined) {
+    if (!isPlain(raw.controls)) errs.push("config controls: not an object");
+    else for (const k of Object.keys(raw.controls)) {
+      if (!S.controlNames.includes(k)) errs.push(`config controls: unknown field ${q(k)}`);
+      else if (typeof raw.controls[k] !== "boolean") errs.push(`config controls.${k}: true or false`);
+    }
+  }
   const ck = compileChecks(raw.checks === undefined ? [] : raw.checks);
   errs.push(...ck.problems);
   if (r.config.standing !== undefined && !standingOk(r.config.standing)) errs.push("config standing: a list of 1 to 50 texts, each 1 to 40 characters");

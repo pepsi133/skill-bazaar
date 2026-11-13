@@ -188,7 +188,29 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 .nlist { display: grid; gap: 4px; }
 .nitem { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start; padding: 6px 8px; background: var(--surface-2); border-radius: 6px; }
 .nitem span { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
-@media (prefers-reduced-motion: no-preference) { .card, .guide, .opt { transition: border-color 0.12s, background 0.12s, box-shadow 0.3s; } }
+.chead { display: flex; gap: 8px; align-items: flex-start; }
+.chead h2 { flex: 1; min-width: 0; }
+.gut { flex: none; display: grid; place-items: center; width: 44px; height: 44px; margin: -10px 0 -10px -10px; cursor: pointer; }
+.gut input { width: 22px; height: 22px; margin: 0; accent-color: var(--good); }
+.ctl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ctl select, .ctl button, .snz button, .snz input { min-height: 40px; }
+.snz, .panel { display: grid; gap: 6px; padding: 8px; background: var(--surface-2); border-radius: 6px; }
+.snz .row { display: flex; flex-wrap: wrap; gap: 6px; }
+.sw { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 4px 0; background: none; border: 0; text-align: left; }
+.sw .k { flex: none; position: relative; width: 44px; height: 26px; border-radius: 13px; background: var(--line); }
+.sw .k::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); }
+.sw[aria-checked="true"] .k { background: var(--good); }
+.sw[aria-checked="true"] .k::after { left: 21px; }
+.sw:disabled { opacity: 0.5; }
+.chip[aria-pressed] { min-height: 36px; cursor: pointer; border: 1px solid var(--line); background: var(--surface); }
+.chip[aria-pressed="true"] { border-color: var(--accent); background: var(--surface-2); font-weight: 600; }
+.banner { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 6px 8px; border-radius: 6px; background: var(--surface-2); font-size: 13px; }
+.slimrow { display: none; }
+.card.slim > * { display: none; }
+.card.slim > .slimrow { display: flex; gap: 8px; align-items: center; min-height: 44px; min-width: 0; max-width: 100%; }
+.card.slim { padding: 4px 8px; opacity: 0.85; }
+.slimrow .open { flex: 1; min-width: 0; text-align: left; background: none; border: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+@media (prefers-reduced-motion: no-preference) { .card, .guide, .opt { transition: border-color 0.12s, background 0.12s, box-shadow 0.3s, opacity 0.25s; } }
 </style>
 
 <header class="bar">
@@ -220,6 +242,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     <nav id="side" class="side" hidden aria-label="Groups"></nav>
     <div id="groups" class="groups"></div>
   </div>
+  <details id="notours" class="grp" hidden><summary id="nosum"></summary><div id="nolist" class="glist"></div></details>
   <div id="empty" class="empty" hidden></div>
   <section class="notes" aria-label="New note">
     <h3>New note</h3>
@@ -242,6 +265,10 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   var loaded = { cards: false, items: false, responses: false, batches: false, notes: false, guides: false, config: false };
   var cards = new Map();      // itemId -> {el, n, ...refs}. n is the card number, the source of every DOM id of the card.
   var timers = new Map();     // itemId -> debounce timer
+  var lingerUntil = new Map();   // itemId -> {until: ms, state: the cardState before the tap}
+  var LINGER_MS = 4000;          // done, dismiss, Not ours and snooze keep the card in place this long, with Undo
+  // The state a lingering card keeps, or "" (read by cardState in "pure").
+  function lingerOf(id) { var x = lingerUntil.get(id); return x && x.until > clockMs() ? x.state : ""; }
   var inflight = new Map();   // itemId -> number of writes in flight
   var chains = new Map();     // itemId -> promise chain
   var lastDoc = new Map();    // itemId -> the response this page wrote last, until a snapshot confirms it
@@ -299,15 +326,19 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     cards: { cards: "a:item", refreshed: "d" },
     item: { id: "s", title: "s", summary: "t", evidence: "t", draft: "t", draft_label: "s", options: "L", recommendation: "s", priority: "s",
       source: "s", rev: "r", kind: "s", blocks: "s", status: "s", created: "d", updated: "d",
-      links: "a:link", tags: "l", first_asked: "o:asked", due: "s" },
+      links: "a:link", tags: "l", first_asked: "o:asked", due: "s", input: "s", source_key: "s" },
     link: { label: "s", url: "t" },
     asked: { date: "s", who: "s" },
-    response: { itemId: "s", choice: "s", note: "t", rev: "r", updated: "d", sent: "b", batch: "s", history: "a:hist" },
+    response: { itemId: "s", choice: "s", note: "t", rev: "r", updated: "d", sent: "b", batch: "s", history: "a:hist",
+      controls: "o:ctl", controls_sent: "o:ctl" },
     hist: { choice: "s", note: "t", rev: "r", updated: "d", batch: "s" },
-    batch: { id: "s", created: "d", itemIds: "l", noteIds: "l", answers: "m:answer", notes: "m:bnote", status: "s", handled_at: "d" },
+    batch: { id: "s", created: "d", itemIds: "l", noteIds: "l", controlIds: "l", controls: "m:bctl", answers: "m:answer", notes: "m:bnote", status: "s", handled_at: "d" },
     batchStatuses: ["sent", "handled"],
     answer: { answer: "s", note: "t", rev: "r" },
     bnote: { text: "t", item: "s" },
+    ctl: { rev: "r", assign: "s", snooze: "s", dismiss: "b", close: "b", done: "b", tags_on: "l", tags_off: "l" },
+    bctl: { rev: "r", assign: "S", snooze: "S", dismiss: "S", close: "S", done: "S", tags_on: "L", tags_off: "L", keep: "o:bkeep" },
+    bkeep: { assign: "S", dismiss: "S", done: "S" },
     note: { id: "s", text: "t", item: "s", created: "d", sent: "b", batch: "s" },
     guide: { id: "s", kind: "s", title: "s", body: "g", sections: "a:section", status: "s", created: "d", updated: "d", item: "s" },
     section: { id: "s", title: "s", body: "g", updated: "d" },
@@ -316,6 +347,11 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       { id: "info", label: "Info", options: ["Acknowledge"] }],
     guideKinds: ["text", "status", "reference"],
     statuses: ["open", "closed"],
+    controlNames: ["assign", "snooze", "dismiss", "close", "done", "tags"],
+    assignFixed: ["me", "agent", "other"],
+    revBound: ["snooze", "dismiss", "close", "done"],
+    placeKeys: ["assign", "dismiss", "done"],
+    personRe: /^[a-z0-9][a-z0-9_-]{0,39}$/,
     labels: ["Before", "Now", "Suggested", "Why", "Risk", "Your answer"]
   };
   function own(o, k) { return o != null && Object.prototype.hasOwnProperty.call(o, k); }
@@ -461,7 +497,9 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       { id: "done", label: "Done", match: { state: "done" } }
     ],
     sort: ["priority", "due", "created", "id"],
-    week_start: "tuesday 12:00"
+    week_start: "tuesday 12:00",
+    controls: { assign: false, snooze: false, dismiss: false, close: false, done: false, tags: false },
+    people: []
   };
   // A config list: at most SCHEMA.max.list entries. A list of {id, label}: drop entries without a text id and later duplicates.
   function cfgList(a) { return Array.isArray(a) ? a.slice(0, SCHEMA.max.list) : []; }
@@ -513,8 +551,12 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     out.groups = Array.isArray(rawGroups) && (gs.length || !rawGroups.length) ? gs : DEFAULT_GROUPS;
     out.sort = normSort(g("sort"));
     out.week_start = normWeek(g("week_start")) || DEFAULT_WEEK;
+    out.controls = normControls(g("controls"));
+    out.people = idList(g("people"), personOk).map(function (x) { return { id: x.id, label: x.label || x.id }; });
     return out;
   }
+  function normControls(v) { var o = {}; SCHEMA.controlNames.forEach(function (k) { o[k] = isObj(v) && own(v, k) && v[k] === true; }); return o; }
+  function personOk(id) { return SCHEMA.personRe.test(id) && SCHEMA.assignFixed.indexOf(id) < 0; }
   // A host entry has two labels or more. An entry of digits and dots is a full IPv4 address. A
   // two-label entry of two short labels ("co.uk") looks like a public suffix and is dropped.
   var IPV4 = /^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
@@ -593,7 +635,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // match lists the item's source (after trim and lower case), then for a tab whose match lists one
   // of its tags. Then the item goes to the first tab with rest: true. Otherwise it shows only under All.
   function bySource(tab, it) { var l = tab.match.source; return !!l && typeof it.source === "string" && l.indexOf(it.source.trim().toLowerCase()) >= 0; }
-  function byTag(tab, it) { var l = tab.match.tags; return !!l && strs(it.tags).some(function (t) { return l.indexOf(t) >= 0; }); }
+  function byTag(tab, it) { var l = tab.match.tags; return !!l && tagsOf(it).some(function (t) { return l.indexOf(t) >= 0; }); }
   function tabOf(it, tabs) {
     var i;
     for (i = 0; i < tabs.length; i++) if (bySource(tabs[i], it)) return tabs[i].id;
@@ -682,7 +724,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // The tags a card shows: the ids that the config knows, once each, with their labels.
   function tagChips(it) {
     var out = [], had = Object.create(null);
-    strs(it.tags).forEach(function (id) {
+    tagsOf(it).forEach(function (id) {
       var t = cfg.tags.filter(function (x) { return x.id === id; })[0];
       if (t && !had[id]) { had[id] = true; out.push(t); }
     });
@@ -762,7 +804,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // "Due today": the cards due today or earlier that are not closed, the most overdue first, then in the order of
   // sorted. An answered card stays until it is closed.
   function dueList(sorted, today) {
-    return sorted.filter(function (it) { return str(it.status) !== "closed" && realDate(it.due) && it.due <= today; })
+    return sorted.filter(function (it) { return str(it.status) !== "closed" && !ctlDone(it) && realDate(it.due) && it.due <= today; })
       .sort(function (a, b) { return a.due < b.due ? -1 : a.due > b.due ? 1 : 0; });
   }
 
@@ -780,6 +822,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       hist.push({ choice: prev.choice || "", note: prev.note || "", rev: revOf(prev), updated: prev.updated || "", batch: prev.batch || "" });
     var doc = { itemId: itemId, choice: choice, note: note, rev: rev, updated: now, sent: false, batch: "" };
     if (hist.length) doc.history = hist;
+    if (prev && prev.controls) doc.controls = prev.controls;
+    if (prev && prev.controls_sent) doc.controls_sent = prev.controls_sent;
     return doc;
   }
   // Of two versions of one response, the one with the later "updated" instant wins. A tie keeps the database copy.
@@ -787,27 +831,153 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // What Send takes: unsent answers of cards that exist, are not closed, and did not change after the
   // answer, and every unsent note.
   function sendable() {
-    var r = [], n = [];
+    var r = [], n = [], c = [];
     resp.forEach(function (x, id) {
       var it = items.get(id);
+      // A control change goes out on a closed card too: an undo there must reach the agent.
+      if (it && ctlUnsent(it, x)) c.push(x);
       if (x.sent || !(x.choice || x.note) || !it || it.status === "closed" || revOf(x) < revOf(it)) return;
       r.push(x);
     });
     notes.forEach(function (x) { if (!x.sent && x.text) n.push(x); });
-    return { r: r, n: n };
+    return { r: r, n: n, c: c };
   }
   // The batch carries a copy of every answer and note at send time; the agent reads the batch only.
-  // s is sendable()'s {r, n}; a missing list is empty. The page writes a batch once, with status "sent".
+  // s is sendable()'s {r, n, c}; a missing list is empty. The page writes a batch once, with status "sent".
   function batchDoc(bid, now, s) {
     var rs = s.r || [], ns = s.n || [];
-    var answers = Object.create(null), nn = Object.create(null);
+    var cs = s.c || [];
+    var answers = Object.create(null), nn = Object.create(null), cc = Object.create(null);
     rs.forEach(function (x) { answers[x.itemId] = { answer: x.choice, note: x.note, rev: revOf(x) }; });
     ns.forEach(function (x) { nn[x.id] = { text: x.text, item: x.item || "" }; });
+    cs.forEach(function (x) { cc[x.itemId] = controlDiff(x.controls_sent, x.controls, revOf(items.get(x.itemId))); });
     return { id: bid, created: now, itemIds: rs.map(function (x) { return x.itemId; }),
-      noteIds: ns.map(function (x) { return x.id; }), answers: answers, notes: nn, status: "sent" };
+      noteIds: ns.map(function (x) { return x.id; }), controlIds: cs.map(function (x) { return x.itemId; }),
+      answers: answers, notes: nn, controls: cc, status: "sent" };
   }
   // A batch is handled when the agent's ack set its status to "handled".
   function isHandled(b) { return b.status === "handled"; }
+
+  // ---- quick controls. The operator's control state of a card lives in its response (controls); controls_sent is
+  // the state as of the last batch that carried it. Every control is off until cfg.controls turns it on.
+  // The assignees, in order: me, the agent, the people of the config, then "Not ours". "" is nobody.
+  function assignList() {
+    return [{ id: "me", label: "Me" }, { id: "agent", label: cfg.agent }].concat(cfg.people.map(function (x) { return { id: x.id, label: x.label }; }),
+      [{ id: "other", label: "Not ours" }]);
+  }
+  function assignIds() { return assignList().map(function (x) { return x.id; }); }
+  function anyControl() { return SCHEMA.controlNames.some(function (k) { return cfg.controls[k]; }); }
+  function ctlDefault() { return { rev: 1, assign: "", snooze: "", dismiss: false, close: false, done: false, tags_on: [], tags_off: [] }; }
+  // A control state read for a card at rev: snooze, dismiss, close and done answer one rev and clear when the card
+  // rev is higher; a control the config turns off reads as its default; bad values are cleared; tags are config
+  // ids, once each, sorted, never in both lists.
+  function ctlNorm(c, rev) {
+    var o = ctlDefault();
+    if (isObj(c)) {
+      ["assign", "snooze"].forEach(function (k) { if (typeof c[k] === "string") o[k] = c[k]; });
+      ["dismiss", "close", "done"].forEach(function (k) { o[k] = c[k] === true; });
+      o.tags_on = strs(c.tags_on); o.tags_off = strs(c.tags_off);
+    }
+    if (wholeRev(c && c.rev) < rev) { o.snooze = ""; o.dismiss = o.close = o.done = false; }
+    var d = ctlDefault();
+    SCHEMA.controlNames.forEach(function (k) {
+      if (cfg.controls[k]) return;
+      if (k === "tags") { o.tags_on = []; o.tags_off = []; } else o[k] = d[k];
+    });
+    if (assignIds().indexOf(o.assign) < 0) o.assign = "";
+    if (!realDate(o.snooze)) o.snooze = "";
+    var known = cfg.tags.map(function (t) { return t.id; });
+    function clean(l) { return l.filter(function (t, i) { return known.indexOf(t) >= 0 && l.indexOf(t) === i; }).sort(); }
+    var on = clean(o.tags_on), off = clean(o.tags_off);
+    o.tags_on = on.filter(function (t) { return off.indexOf(t) < 0; });
+    o.tags_off = off.filter(function (t) { return on.indexOf(t) < 0; });
+    o.rev = rev;
+    return o;
+  }
+  function ctlOf(it) { var r = resp.get(it.id); return ctlNorm(r && r.controls, revOf(it)); }
+  // What one Send carries for a card: rev plus only the changed controls; the unchanged enabled place keys ride in
+  // keep when a place key changed. null when nothing changed.
+  function controlDiff(sent, cur, rev) {
+    var a = ctlNorm(sent, rev), b = ctlNorm(cur, rev), out = { rev: rev };
+    SCHEMA.controlNames.forEach(function (k) {
+      if (!cfg.controls[k]) return;
+      if (k === "tags") {
+        if (a.tags_on.join("\n") !== b.tags_on.join("\n") || a.tags_off.join("\n") !== b.tags_off.join("\n")) { out.tags_on = b.tags_on; out.tags_off = b.tags_off; }
+      } else if (a[k] !== b[k]) out[k] = typeof b[k] === "boolean" ? (b[k] ? "on" : "off") : b[k];
+    });
+    if (SCHEMA.placeKeys.some(function (p) { return own(out, p); })) {
+      var keep = {};
+      SCHEMA.placeKeys.forEach(function (p) {
+        if (cfg.controls[p] && !own(out, p)) keep[p] = p === "assign" ? b.assign : (b[p] ? "on" : "off");
+      });
+      if (Object.keys(keep).length) out.keep = keep;
+    }
+    return Object.keys(out).length > 1 ? out : null;
+  }
+  function ctlUnsent(it, r) { return !!r && controlDiff(r.controls_sent, r.controls, revOf(it)) !== null; }
+  // The response doc after a control tap: the answer, history and controls_sent stay; the controls take the patch.
+  function withControls(prev, itemId, patch, rev, now) {
+    var doc = prev ? Object.assign({}, prev, { updated: now }) : { itemId: itemId, choice: "", note: "", rev: rev, updated: now, sent: false, batch: "" };
+    var c = ctlNorm(prev && prev.controls, rev);
+    Object.keys(patch || {}).forEach(function (k) { if (k !== "rev" && own(SCHEMA.ctl, k)) c[k] = patch[k]; });
+    doc.controls = ctlNorm(c, rev);
+    return doc;
+  }
+  // A control moved the card out of the open cards: dismissed, marked done, or Not ours.
+  function ctlDone(it) { var c = ctlOf(it); return c.dismiss || c.done || c.assign === "other"; }
+  // Why a card is in Done (or hidden): the control first, else the answer state ("closed" or "sent").
+  function doneReason(it) {
+    var c = ctlOf(it);
+    return c.assign === "other" ? "not ours" : c.dismiss ? "dismissed" : c.done ? "done" : stateOf(it);
+  }
+  // The day YYYY-MM-DD in cfg.tz that cardState compares a snooze with. render() sets it; the pure part reads no clock.
+  var ctlDay = "";
+  function setCtlDay(day) { ctlDay = day; }
+  // A snoozed card wakes at 00:00 of the wake day in cfg.tz: a day compare.
+  function isSnoozed(it, today) { return !isDone(it) && ctlOf(it).snooze > today; }
+  // The cards set to Not ours, in list order.
+  function notOursList(list) { return list.filter(function (it) { return cardState(it) === "hidden"; }); }
+  // The text key of a card's state tag: the reason in Done, "unsent" for an unsent control, else the answer state.
+  function stateLabel(it) {
+    var cs = cardState(it);
+    if (cs === "done" || cs === "hidden") return doneReason(it);
+    var st = stateOf(it);
+    if (st !== "closed" && st !== "changed" && ctlUnsent(it, resp.get(it.id))) return "unsent";
+    return st;
+  }
+  // The banner of a card, or "".
+  function ctlNote(it, today) {
+    var c = ctlOf(it);
+    if (c.assign === "other") return "Not ours: the agent stops tracking it";
+    if (c.close && it.status !== "closed") return "Close requested: the agent closes it in " + (str(it.source) || "the source");
+    if (c.dismiss) return "Dismissed: it comes back when something new arrives";
+    if (c.done) return "Marked done";
+    if (c.snooze > today) return "Snoozed until " + fmtDay(c.snooze);
+    return "";
+  }
+  // A day YYYY-MM-DD as short text, such as "Fri, Nov 20", or "".
+  function fmtDay(day) {
+    if (!realDate(day)) return "";
+    var p = day.split("-");
+    try { return new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])).toLocaleDateString([], { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }); } catch (e) { return ""; }
+  }
+  function snoozeDay(today, pick) { return pick === "day" ? addDays(today, 1) : pick === "week" ? addDays(today, 7) : ""; }
+  // A picked wake day: after today and at most 366 days ahead.
+  function snoozeOk(day, today) { return realDate(day) && day > today && day <= addDays(today, 366); }
+  // The tags a card has on the page: its own tags minus the ones the operator took off, plus the ones added.
+  function tagsOf(it) {
+    var c = ctlOf(it), out = strs(it.tags).filter(function (t) { return c.tags_off.indexOf(t) < 0; });
+    c.tags_on.forEach(function (t) { if (out.indexOf(t) < 0) out.push(t); });
+    return out;
+  }
+  // The tag lists after a tap on the chip of tag id.
+  function tagPatch(it, id) {
+    var c = ctlOf(it), own0 = strs(it.tags).indexOf(id) >= 0;
+    var on = c.tags_on.filter(function (t) { return t !== id; }), off = c.tags_off.filter(function (t) { return t !== id; });
+    if (tagsOf(it).indexOf(id) >= 0) { if (own0) off.push(id); }
+    else if (!own0) on.push(id);
+    return { tags_on: on.sort(), tags_off: off.sort() };
+  }
 
   // ---- visibility
   function stateOf(it) {
@@ -818,9 +988,17 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     return "open";
   }
   // Answered and closed cards are done: they go to the folded group of done cards in each tab.
-  function isDone(it) { var st = stateOf(it); return st === "sent" || st === "closed"; }
-  // The state a group matches. C2 adds "snoozed" here; nothing else needs to change for it.
-  function cardState(it) { return isDone(it) ? "done" : "active"; }
+  function isDone(it) { var st = stateOf(it); return st === "sent" || st === "closed" || ctlDone(it); }
+  // The state a group matches: hidden (Not ours: no group takes it), done, snoozed or active. A card that a control
+  // just moved keeps its old state while it lingers (lingerOf, outside "pure"; the tests and the script stub it as
+  // function () { return ""; }). A snooze is compared with ctlDay, the day render() set.
+  function cardState(it) {
+    var held = lingerOf(it.id);
+    if (held) return held;
+    if (ctlOf(it).assign === "other") return "hidden";
+    if (isDone(it)) return "done";
+    return isSnoozed(it, ctlDay) ? "snoozed" : "active";
+  }
   function isActive(it) { return cardState(it) === "active"; }
   // The text where the cards of a tab would be: "" when the tab shows a card.
   function emptyText(total, active, done) {
@@ -854,9 +1032,9 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function sortedItems() { return Array.from(items.values()).sort(cardCmp(cfg.sort)); }
   // now: the time in ms for the due buckets (the caller reads the clock, the pure part never does).
   function matchOne(m, it, now) {
-    if (m.state !== "any" && m.state !== cardState(it)) return false;
+    var st = cardState(it); if (st === "hidden" || (m.state !== "any" && m.state !== st && !(st === "snoozed" && m.state === "active"))) return false;
     if (m.source && !(typeof it.source === "string" && m.source.indexOf(it.source.trim().toLowerCase()) >= 0)) return false;
-    if (m.tags && !strs(it.tags).some(function (t) { return m.tags.indexOf(t) >= 0; })) return false;
+    if (m.tags && !tagsOf(it).some(function (t) { return m.tags.indexOf(t) >= 0; })) return false;
     if (m.priority && m.priority.indexOf(str(it.priority)) < 0) return false;
     if (m.kind && m.kind.indexOf(kindOf(it)) < 0) return false;
     if (m.due && m.due.indexOf(dueBucket(it.due, now)) < 0) return false;
@@ -871,13 +1049,15 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     var gs = cfg.groups.map(function (g) { return { id: g.id, label: g.label, fold: g.fold, cards: [] }; });
     var other = { id: "_other", label: gs.length ? "Other" : "Open", fold: false, cards: [] }, done = { id: "_done", label: "Done", fold: true, cards: [] };
     list.forEach(function (it) {
+      if (cardState(it) === "hidden") return;
       for (var i = 0; i < cfg.groups.length; i++) if (groupMatch(cfg.groups[i], it, now)) { gs[i].cards.push(it); return; }
       (cardState(it) === "done" ? done : other).cards.push(it);
     });
     return gs.concat([other, done]);
   }
-  function unsentCount() { var s = sendable(); return s.r.length + s.n.length; }
-  function openCount() { var n = 0; items.forEach(function (it) { var s = stateOf(it); if (s === "open" || s === "changed") n++; }); return n; }
+  // A card with an answer and a control counts once.
+  function unsentCount() { var s = sendable(), ids = {}; s.r.concat(s.c).forEach(function (x) { ids[x.itemId] = true; }); return Object.keys(ids).length + s.n.length; }
+  function openCount() { var n = 0; items.forEach(function (it) { var s = stateOf(it); if ((s === "open" || s === "changed") && cardState(it) === "active") n++; }); return n; }
 
   // ---- card text formatter. Escapes HTML first, then adds only the tags below.
   // Markers: blank line = paragraph, "- " = bullet, "1. " = numbered step, "### " = heading,
@@ -1071,10 +1251,12 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.guide = h("button", { class: "link small gopen", type: "button", text: "Open guide", hidden: true });
     c.guide.addEventListener("click", function () { var g = guideForItem(Array.from(guides.values()), c.it.id); if (g) openGuide(g.id); });
     c.about.addEventListener("click", function () { noteItem = c.it.id; render(); $("newnote").focus(); bringIntoView($("about"), false); });
+    buildControls(c);
     c.el = h("article", { class: "card", id: "card-" + c.n, "data-item": it.id },
       h("div", { class: "tags" }, c.pri, c.kind, c.due, c.state),
-      c.title, c.chips, c.asked, c.blocks, c.changed, c.guide, c.summary, c.draft, c.links, c.ev, c.form, c.ta,
-      h("div", { class: "foot" }, c.save, h("span", null, c.about, c.clear)));
+      c.chead, c.chips, c.asked, c.blocks, c.changed, c.guide, c.summary, c.draft, c.links, c.ev, c.form, c.ta,
+      c.banner, c.ctl, c.snz, c.panel,
+      h("div", { class: "foot" }, c.save, h("span", null, c.about, c.clear)), c.slimrow);
     c.optKey = null;
     c.ta.addEventListener("input", function () {
       setSave(c, "Typing");
@@ -1089,6 +1271,160 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     return c;
   }
   function setSave(c, t) { c.save.textContent = t; }
+  // ---- quick controls on a card: the Done box in the gutter, Assign and Snooze in a row with the Edit button, the
+  // edit panel with the Dismiss and Close switches and the tag chips. Every element is made with h() and text.
+  function buildControls(c) {
+    c.doneBox = h("input", { type: "checkbox", id: "x" + c.n });
+    c.gut = h("label", { class: "gut", for: "x" + c.n, title: "Done" }, c.doneBox);
+    c.doneBox.addEventListener("change", function () { var v = c.doneBox.checked; setControl(c, { done: v }, v ? { done: false } : null); });
+    c.chead = h("div", { class: "chead" }, c.gut, c.title);
+    c.assign = h("select", { "aria-label": "Assign" });
+    c.assign.addEventListener("change", function () {
+      var was = ctlOf(c.it).assign, v = c.assign.value;
+      setControl(c, { assign: v }, v === "other" ? { assign: was } : null);
+    });
+    c.snzBtn = h("button", { type: "button", "aria-expanded": "false" });
+    c.snzBtn.addEventListener("click", function () { c.snzOpen = true; render(); });
+    c.more = h("button", { type: "button", class: "link small", "aria-expanded": "false", text: "Edit" });
+    c.more.addEventListener("click", function () { c.panelOpen = !c.panelOpen; c.more.setAttribute("aria-expanded", String(c.panelOpen)); render(); });
+    c.ctl = h("div", { class: "ctl" }, c.assign, c.snzBtn, c.more);
+    function snoozeTo(pick) {
+      var today = todayOf(clockMs()), ctl = ctlOf(c.it);
+      c.snzOpen = false; c.expanded = false;          // a new snooze folds the card again
+      setControl(c, { snooze: snoozeDay(today, pick) }, { snooze: ctl.snooze });
+    }
+    c.snzDay = h("button", { type: "button", text: "+1 day" });
+    c.snzDay.addEventListener("click", function () { snoozeTo("day"); });
+    c.snzWeek = h("button", { type: "button", text: "+1 week" });
+    c.snzWeek.addEventListener("click", function () { snoozeTo("week"); });
+    c.snzWake = h("button", { type: "button", text: "Wake now" });
+    c.snzWake.addEventListener("click", function () { setControl(c, { snooze: "" }, null); });
+    c.snzDate = h("input", { type: "date", id: "d" + c.n });
+    c.snzDate.addEventListener("change", function () {
+      var today = todayOf(clockMs()), ctl = ctlOf(c.it), day = c.snzDate.value;
+      if (!snoozeOk(day, today)) { c.snzDate.value = ""; return; }
+      c.snzOpen = false; c.expanded = false;
+      setControl(c, { snooze: day }, { snooze: ctl.snooze });
+    });
+    c.snzCancel = h("button", { type: "button", text: "Cancel" });
+    c.snzCancel.addEventListener("click", function () { c.snzOpen = false; render(); });
+    c.snz = h("div", { class: "snz", hidden: true }, h("div", { class: "row" }, c.snzDay, c.snzWeek, c.snzWake),
+      h("div", { class: "row" }, h("label", { class: "small muted", for: "d" + c.n, text: "Until" }), c.snzDate, c.snzCancel));
+    c.slimrow = h("div", { class: "slimrow" }, c.slimOpen = h("button", { type: "button", class: "open" }),
+      c.slimWake = h("button", { type: "button", class: "link small", text: "Wake" }));
+    c.slimOpen.addEventListener("click", function () { c.expanded = !c.expanded; render(); });
+    c.slimWake.addEventListener("click", function () { setControl(c, { snooze: "" }, null); });
+    c.banner = h("div", { class: "banner", hidden: true }, c.bannerText = h("span", { class: "grow" }),
+      c.undoBtn = h("button", { type: "button", class: "link small", text: "Undo" }));
+    c.undoBtn.addEventListener("click", function () {
+      var u = c.undo;
+      if (!u) return;
+      c.undo = null; lingerUntil.delete(c.it.id); setControl(c, u, null);
+    });
+    c.dismissSw = switchRow("Dismiss", "Hide it until something new comes in");
+    c.dismissSw.addEventListener("click", function () { var v = !ctlOf(c.it).dismiss; setControl(c, { dismiss: v }, v ? { dismiss: false } : null); });
+    c.closeSrc = str(c.it.source);
+    c.closeSw = switchRow("Close in " + (c.closeSrc || "the source"), "The agent closes the item there, then the card leaves");
+    c.closeSw.addEventListener("click", function () { setControl(c, { close: !ctlOf(c.it).close }, null); });
+    c.tagWrap = h("div", null, h("div", { class: "small muted", text: "Tags" }), c.tagBox = h("div", { class: "tags" }));
+    c.panel = h("div", { class: "panel", hidden: true }, c.dismissSw, c.closeSw, c.tagWrap);
+  }
+  // A switch: the whole row is the tap target; aria-checked carries the state. Text by textContent only.
+  // b.lab and b.hint are the two text spans, so a caller can change the text later.
+  function switchRow(label, hint) {
+    var k = h("span", { class: "k", "aria-hidden": "true" });
+    var lab = h("span", { text: label }), hint2 = h("span", { class: "small muted", text: hint });
+    var b = h("button", { type: "button", class: "sw", role: "switch", "aria-checked": "false" },
+      h("span", null, lab, h("br"), hint2), k);
+    b.lab = lab; b.hint = hint2;
+    return b;
+  }
+  // A control tap: save at once; a card that this moves to Snoozed, Done or Not ours stays in place for LINGER_MS, with Undo.
+  function setControl(c, patch, undo) {
+    var id = c.it.id;
+    // A tap that cannot move the card (tags, or an assign other than "other") keeps a running linger and its Undo.
+    var quiet = Object.keys(patch).every(function (k) { return k === "tags_on" || k === "tags_off" || (k === "assign" && patch.assign !== "other"); });
+    if (quiet) { saveControls(id, patch); render(); return; }
+    var before = cardState(c.it);                 // a lingering card reports the state it keeps
+    lingerUntil.delete(id);
+    saveControls(id, patch);                      // sets resp synchronously, before the write resolves
+    var after = cardState(c.it);
+    c.undo = undo || null;
+    if (undo && after !== before && after !== "active") {
+      lingerUntil.set(id, { until: clockMs() + LINGER_MS, state: before });
+      setTimeout(function () { if (!lingerOf(id)) { lingerUntil.delete(id); c.undo = null; schedule(); } }, LINGER_MS + 50);
+    }
+    render();
+  }
+  // The one write of a control: the whole response, through the item's chain, like saveResponse.
+  function saveControls(id, patch) {
+    var c = cards.get(id);
+    if (!c || c.broken || !db) return Promise.resolve();
+    var prev = resp.get(id) || null, doc = withControls(prev, id, patch, revOf(c.it), nowStamp());
+    lastDoc.set(id, doc); resp.set(id, doc);
+    inflight.set(id, (inflight.get(id) || 0) + 1); totalInflight++; renderSync();
+    return enqueue(id, function () {
+      if (resp.get(id) !== doc) return null;                   // a later tap already folded this one in
+      return db.doc("responses/" + id).set(doc).then(function () { lastSaved = savedTime(); showMsg(""); });
+    }).catch(function (e) {
+      // Put prev back only when nothing newer (a later tap, or an answer saveResponse stored) replaced this doc.
+      if (resp.get(id) === doc) { lastDoc.delete(id); if (prev) resp.set(id, prev); else resp.delete(id); }
+      showMsg("A control was not saved: " + errText(e));
+    }).then(function () { inflight.set(id, inflight.get(id) - 1); totalInflight--; schedule(); });
+  }
+  // The control parts of one card. today is ctlDay, the day render() set (no clock read here).
+  function renderControls(c, it) {
+    var on = cfg.controls, ctl = ctlOf(it), today = ctlDay, lingering = !!lingerOf(it.id);
+    var place = cardState(it), note = ctlNote(it, today);
+    c.more.hidden = !(on.dismiss || (on.close && str(it.source_key)) || (on.tags && cfg.tags.length));
+    c.more.textContent = c.panelOpen ? "Hide" : "Edit";
+    c.ctl.hidden = !(on.assign || on.snooze) && c.more.hidden;
+    c.panel.hidden = c.more.hidden || !c.panelOpen;
+    c.banner.hidden = !note; c.bannerText.textContent = note; c.undoBtn.hidden = !(lingering && c.undo);
+    c.el.classList.toggle("slim", place === "snoozed" && !c.expanded);
+    // Assign
+    var list = assignList(), aKey = JSON.stringify(list);
+    if (c.assignKey !== aKey) {
+      c.assignKey = aKey; c.assign.textContent = "";
+      c.assign.append(h("option", { value: "", text: "Assign: nobody" }));
+      list.forEach(function (x) { c.assign.append(h("option", { value: x.id, text: "Assign: " + x.label })); });
+    }
+    c.assign.hidden = !on.assign;
+    if (!isPending(it.id)) c.assign.value = ctl.assign;
+    // Snooze
+    var snoozed = ctl.snooze > today;
+    c.snzBtn.hidden = !on.snooze || place === "done" || place === "hidden";
+    c.snzBtn.textContent = snoozed ? "Snoozed to " + fmtDay(ctl.snooze) : "Snooze";
+    c.snzBtn.setAttribute("aria-expanded", c.snzOpen ? "true" : "false");
+    c.snz.hidden = c.snzBtn.hidden || !c.snzOpen;
+    c.snzDate.min = addDays(today, 1); c.snzDate.max = addDays(today, 366);
+    c.snzWake.hidden = !snoozed;
+    c.slimOpen.textContent = "Snoozed to " + fmtDay(ctl.snooze) + " · " + (it.title || it.id);
+    // Dismiss
+    c.dismissSw.hidden = !on.dismiss;
+    c.dismissSw.setAttribute("aria-checked", ctl.dismiss ? "true" : "false");
+    // Close
+    if (str(it.source) !== c.closeSrc) { c.closeSrc = str(it.source); c.closeSw.lab.textContent = "Close in " + (c.closeSrc || "the source"); }
+    c.closeSw.hidden = !on.close || !str(it.source_key);
+    c.closeSw.setAttribute("aria-checked", ctl.close ? "true" : "false");
+    c.closeSw.disabled = it.status === "closed";
+    // Done
+    c.gut.hidden = !on.done;
+    if (!isPending(it.id)) c.doneBox.checked = ctl.done;
+    // Tags
+    c.tagWrap.hidden = !on.tags || !cfg.tags.length;
+    var tKey = JSON.stringify(cfg.tags);
+    if (c.tagKey !== tKey) {
+      c.tagKey = tKey; c.tagBox.textContent = "";
+      cfg.tags.forEach(function (t) {
+        var chip = h("button", { type: "button", class: "tag chip", "aria-pressed": "false", "data-tag": t.id, text: t.label });
+        chip.addEventListener("click", function () { setControl(c, tagPatch(c.it, t.id), null); });
+        c.tagBox.append(chip);
+      });
+    }
+    var mine = tagsOf(it);
+    Array.prototype.forEach.call(c.tagBox.children, function (chip) { chip.setAttribute("aria-pressed", mine.indexOf(chip.dataset.tag) >= 0 ? "true" : "false"); });
+  }
   var STATE_TEXT = { waiting: "waiting on agent" };
 
   // Tags, links and the first ask of a card: the page checks each again and drops what does not pass. Text goes in by textContent only.
@@ -1138,8 +1474,9 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.guide.hidden = !cg;
     c.guide.title = cg ? (cg.title || cg.id) : "";
     c.ev.hidden = !it.evidence;
-    c.state.className = "tag" + (st === "unsent" || st === "changed" || st === "waiting" ? " soon" : (st === "sent" ? " good" : ""));
-    c.state.textContent = STATE_TEXT[st] || st;
+    var lab = stateLabel(it);
+    c.state.className = "tag" + (lab === "unsent" || lab === "changed" || lab === "waiting" ? " soon" : (lab === "sent" ? " good" : ""));
+    c.state.textContent = STATE_TEXT[lab] || lab;
     c.el.classList.toggle("done", st === "sent" || st === "closed");
 
     var opts = optionsOf(it);
@@ -1167,6 +1504,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       if (r && r.updated) setSave(c, (r.sent ? "Sent" : "Saved") + " " + fmt(r.updated));
       else setSave(c, "");
     }
+    renderControls(c, it);
   }
   // A card that fails to render shows one line instead, so one bad record cannot blank the board.
   function brokenCard(it) { return h("article", { class: "card", "data-item": it.id, text: "Could not render " + it.id }); }
@@ -1174,6 +1512,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function ready() { return !!db && loaded.items && loaded.responses && loaded.notes; }
   function render() {
     var now = clockMs(), today = todayOf(now); lastDay = today; lastWeek = weekStartOf(now);
+    setCtlDay(today);
     var glist = Array.from(guides.values());
     // A guide tab stays selected while the guides load, and an item tab while the config loads. An unknown tab falls back to All.
     if (isGuideTab(f.tab) ? (loaded.guides && !guideOfTab(glist, f.tab))
@@ -1190,6 +1529,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     $("board").hidden = onGuide;
     renderGroups(groups);
     renderSide(groups, onGuide);
+    renderNotOurs(onGuide ? [] : notOursList(vis));
     Array.from(cards.keys()).forEach(function (k) { if (!items.has(k)) cards.delete(k); });
 
     // empty states
@@ -1326,6 +1666,14 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
         h("span", { class: "bt" }, h("span", { class: "tag now", text: di.text }), h("span", { class: "tt", text: it.title || it.id }))));
     });
     box.append(list);
+  }
+  // Not ours: the cards the operator set to "Not ours", out of every group. One folded line at the end of the tab
+  // opens them; the Assign select of a card there brings it back.
+  function renderNotOurs(rows) {
+    var box = $("notours");
+    box.hidden = !rows.length;
+    $("nosum").textContent = rows.length + " not ours - " + (box.open ? "hide" : "show");
+    placeCards($("nolist"), rows);
   }
   // A tap on a "Blocked on you" or "Due today" entry or a guide's card link: select the tab of the card, render,
   // unfold the card's group if it is folded, and only then scroll.
@@ -1539,13 +1887,20 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function sendGroup(s) {
     var bid = "b" + idStamp() + "-" + rid();
     return db.doc("batches/" + bid).set(batchDoc(bid, nowStamp(), s)).then(function () {
-      var marks = s.r.map(function (x) {
-        return enqueue(x.itemId, function () {
-          var cur = resp.get(x.itemId);
-          if (!cur || cur.sent || cur.updated !== x.updated) return null;
-          var d = Object.assign({}, cur, { sent: true, batch: bid, updated: nowStamp() });
-          lastDoc.set(x.itemId, d); resp.set(x.itemId, d);
-          return db.doc("responses/" + x.itemId).set(d);
+      // One mark per card of the answers and the controls together.
+      var byId = {};
+      s.r.forEach(function (x) { byId[x.itemId] = { x: x, ans: true }; });
+      s.c.forEach(function (x) { (byId[x.itemId] = byId[x.itemId] || { x: x }).ctl = true; });
+      var marks = Object.keys(byId).map(function (id) {
+        var m = byId[id];
+        return enqueue(id, function () {
+          var cur = resp.get(id);
+          if (!cur || cur.updated !== m.x.updated) return null;      // changed during the send: stays unsent
+          var d = Object.assign({}, cur, { updated: nowStamp() });
+          if (m.ans) { d.sent = true; d.batch = bid; }
+          if (m.ctl && cur.controls) d.controls_sent = cur.controls;
+          lastDoc.set(id, d); resp.set(id, d);
+          return db.doc("responses/" + id).set(d);
         });
       }).concat(s.n.map(function (x) {
         return db.doc("notes/" + x.id).update({ sent: true, batch: bid }).then(function () { var nn = notes.get(x.id); if (nn) { nn.sent = true; nn.batch = bid; } });
@@ -1556,7 +1911,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function send() {
     if (sending || !ready()) return;
     sending = true; render();
-    flushAll().then(function () { var s = sendable(); if (s.r.length + s.n.length) return sendGroup(s); }).then(function () { showMsg(""); }, function (x) {
+    flushAll().then(function () { var s = sendable(); if (s.r.length + s.n.length + s.c.length) return sendGroup(s); }).then(function () { showMsg(""); }, function (x) {
       if (x && x.stage === "mark") showMsg("Batch " + x.bid + " went out, but some answers were not marked sent: " + errText(x.e) + ". They can go out again.");
       else if (x && x.stage === "batch") showMsg("Send failed, nothing went out: " + errText(x.e));
       else showMsg("Send failed: " + errText(x));
@@ -1630,6 +1985,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
   window.addEventListener("focus", refresh);
   setInterval(function () { var t = clockMs(); if (todayOf(t) !== lastDay || weekStartOf(t) !== lastWeek) schedule(); }, 60000);
+  $("notours").addEventListener("toggle", schedule);
 
   render();
   if (window.claude && window.claude.use) {

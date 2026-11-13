@@ -4,10 +4,10 @@ Read this only when you write the map of a new source (step 2 of `SKILL.md`). Ea
 value in `equals` is compared as text, case ignored, so `4` and `true` match too. Every url must be on a host of
 `link_hosts`, for example `tracker.example.com`.
 
-An issue tracker that exports `number`, `title`, `url`, `created_at`, `state` and `labels`:
+An issue tracker that exports `number`, `title`, `url`, `created_at`, `updated_at`, `state` and `labels`:
 
 ```json
-{"key": "number", "title": "title", "url": "url", "created": "created_at",
+{"key": "number", "title": "title", "url": "url", "created": "created_at", "input": "updated_at",
  "closed": {"field": "state", "equals": ["closed"]},
  "priority": [{"field": "labels.name", "equals": ["p1", "urgent"], "priority": "now"},
               {"field": "labels.name", "equals": ["p3"], "priority": "later"}],

@@ -22,6 +22,9 @@ ok("coerce: a value of the wrong type becomes the empty value of its type", () =
   assert.deepEqual(plain(b.answers), { a: { answer: "", note: "", rev: 1 } });
   assert.deepEqual(plain(P.coerce("response", null).history), []);
   assert.equal("for" in P.coerce("response", { for: "x" }), false);
+  assert.deepEqual(plain(P.coerce("batch", {}).controlIds), []);
+  assert.deepEqual(plain(P.coerce("batch", {}).controls), {});
+  assert.equal("controls" in P.coerce("response", {}), false);
 });
 ok("problems: the strict check names unknown fields, wrong types and long text", () => {
   assert.deepEqual(plain(P.problems("item", { id: "a", title: "ok", rev: 2, options: ["x"] })), []);
@@ -55,8 +58,8 @@ ok("Send takes only answers of cards that exist, are not closed and did not chan
 });
 ok("the batch carries a copy of the answers and notes", () => {
   const s = { r: [response("x", { choice: "No", note: "n", rev: 2 })], n: [P.coerce("note", { id: "n1", text: "hi", item: "x" })] };
-  assert.deepEqual(plain(P.batchDoc("b1", "t", s)), { id: "b1", created: "t", itemIds: ["x"], noteIds: ["n1"],
-    answers: { x: { answer: "No", note: "n", rev: 2 } }, notes: { n1: { text: "hi", item: "x" } }, status: "sent" });
+  assert.deepEqual(plain(P.batchDoc("b1", "t", s)), { id: "b1", created: "t", itemIds: ["x"], noteIds: ["n1"], controlIds: [],
+    answers: { x: { answer: "No", note: "n", rev: 2 } }, notes: { n1: { text: "hi", item: "x" } }, controls: {}, status: "sent" });
   // A missing list is empty. Field by field, so a field a later cluster adds does not break this.
   const empty = plain(P.batchDoc("b1", "t", {}));
   assert.deepEqual(empty.itemIds, []);

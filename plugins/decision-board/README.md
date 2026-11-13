@@ -30,6 +30,12 @@ config `tz`. The script has no network access. The operator's standing judgments
 `board/rules.md`; every new rule reaches it through a card the operator answers, and `check` posts the
 file as the Rules tab.
 
+Quick controls on a card (assign, snooze, dismiss, close in the source, done, tags) are off until
+the config turns them on. A tap acts on the page at once; the change goes out in the next batch
+with the answers, `read` prints one `control` line per changed control with the step to take, and
+`ack` applies the ones that only move a card. Only a `close` control or an assign to the agent
+lets the agent write to a source, and only in that one item.
+
 ## Layout
 
 The agent needs only `skills/` while it runs a board:
@@ -71,8 +77,8 @@ The tests need only Node 18 or later, no packages. Each exits with 1 when a chec
   the reference sanitizer, and the list of places that write HTML against a small DOM stub.
   `cuts-test.js` checks that removed features stay removed. `due-test.js` covers the due dates,
   the week start and the Due today strip, `groups-test.js` the groups and the sort.
-  `tests/time-test.js` covers the time stamps, the zone and DST. They take another page file as
-  their first argument.
+  `controls-test.js` covers the quick controls. `tests/time-test.js` covers the time stamps, the
+  zone and DST. They take another page file as their first argument.
 - `tests/board-test.mjs` runs every command of the script against the fixture state and dump in
   `tests/fixtures/` and applies the printed writes to a stand-in database (`tests/fakedb.mjs`),
   which refuses a write pinned to the wrong version as the real one does.

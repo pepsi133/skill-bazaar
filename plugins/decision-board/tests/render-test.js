@@ -32,6 +32,8 @@ class El {
   // "tag.class" selectors only, enough for the page's closest("details.grp").
   closest(sel) { const [tag, cls] = sel.split("."); for (let e = this; e && e.nodeType === 1; e = e.parentNode) if (e.localName === tag && (!cls || e.classList.contains(cls))) return e; return null; }
   get isConnected() { return holds(document.body, this); }
+  // The data-* attributes, read only.
+  get dataset() { const o = {}; for (const [k, v] of this.attrs) if (k.startsWith("data-")) o[k.slice(5)] = v; return o; }
   querySelectorAll(tag) { const out = [], walk = (n) => n.children.forEach((c) => { if (c.localName === tag) out.push(c); walk(c); }); walk(this); return out; }
 }
 // A tiny HTML parser for the sanitizer cases: tags, quoted attributes, text. Enough for the inputs below, nothing more.
@@ -143,6 +145,11 @@ ok("CSS: one [hidden] rule hides every element, whatever its display", () => {
   assert.equal(src.split("[hidden] { display: none !important; }").length - 1, 1);
   assert.ok(!/\.donebox\[hidden\]|\.guide\[hidden\]|\.links\[hidden\]/.test(src));
 });
+ok("CSS: the slim row of a snoozed card may shrink, so its title ends in an ellipsis instead of widening the page", () => {
+  const src = fs.readFileSync(pageFile, "utf8"), rule = /^\.card\.slim > \.slimrow \{([^}]*)\}/m.exec(src);
+  assert.ok(rule, "the .card.slim > .slimrow rule");
+  assert.match(rule[1], /(^|;)\s*min-width: 0;/);
+});
 ok("draft: the box shows the field as text, and Copy passes the stored field to the clipboard byte for byte", () => {
   const s = "Hi Sam,\r\n\n  indented\tTab  \n```\nnot a fence\n```\n<b>x</b> — ✓  ", c = {};
   P.buildDraft(c);
@@ -214,7 +221,8 @@ const Q = load({ document, DOMParser, navigator: { clipboard: { writeText: () =>
   cards: new Map(), cardDocs: new Map(), meta: null, sending: false, dueKey: null, lastDay: "", lastWeek: 0,
   $: (id) => qids[id] || (qids[id] = new El("div")), fmt: () => "", ready: () => false, saveFilter: () => {},
   renderGuide: () => {}, renderTabs: () => {}, renderArchived: () => {}, renderBlocked: () => {}, renderSide: () => {}, renderNotes: () => {}, renderSync: () => {},
-  renderGroups: (g) => { shown.groups = g; }, bringIntoView: (el) => { shown.view.push(el); } },
+  renderGroups: (g) => { shown.groups = g; }, placeCards: () => {}, bringIntoView: (el) => { shown.view.push(el); },
+  lingerUntil: new Map(), LINGER_MS: 4000 },
   cut("  function h(tag, attrs)", "  function fmt(s)") + cut("  function set(s)", "  // ---- cards. Every DOM id") +
   cut("  function setSave(c, t)", "  function updateCard") + cut("  function updateCard(c, it)", "  // A card that fails to render") +
   cut("  function render() {", "  // Give focus back to el") + cut('  // "Due today": a link per card', "  // Scroll an element to just below"));
@@ -233,6 +241,7 @@ ok("the due strip and the card due tag use the day of the config tz, not of UTC"
   assert.equal(qids.due.hidden, false);
   assert.ok(qids.due.textContent.includes("Due today"), qids.due.textContent);
   const c = cardObj();
+  Q.buildControls(c);
   Q.updateCard(c, it);
   assert.deepEqual([c.due.textContent, c.due.hidden, c.due.getAttribute("class")], ["Due today", false, "tag now"]);
   htmlWrites.length = 0;
@@ -259,4 +268,36 @@ ok("goToCard unfolds the folded group of the card, then scrolls to it", () => {
   assert.deepEqual(shown.view, [el]);
   fold.remove();
   Q.items.clear(); Q.cards.clear();
+});
+// The card controls with this sandbox's stub elements. Not covered here: the look (CSS, the fold fade, 44 px
+// targets), the phone pickers of the select and date input, the 4 s linger timer (setTimeout is a stub), and the
+// writes of saveControls (this sandbox has no database: a tap changes no response).
+ok("card controls: a control the config turns off is hidden; the close switch needs a source_key", () => {
+  const ON = { assign: true, snooze: true, dismiss: true, close: true, done: true, tags: true };
+  const built = (it) => { const c = cardObj(); c.it = it; c.panelOpen = false; c.snzOpen = false; c.expanded = false; c.undo = null; Q.buildControls(c); Q.updateCard(c, it); return c; };
+  Q.applyConfig({ tz: "UTC" }); Q.setCtlDay("2026-11-13");
+  let c = built(Q.coerce("item", { id: "k1", title: "K", source: "tracker", source_key: "7" }));
+  assert.deepEqual([c.assign.hidden, c.gut.hidden, c.closeSw.hidden, c.dismissSw.hidden, c.snzBtn.hidden, c.ctl.hidden, c.more.hidden], [true, true, true, true, true, true, true]);
+  Q.applyConfig({ tz: "UTC", controls: ON });
+  c = built(Q.coerce("item", { id: "k2", title: "K" }));
+  assert.deepEqual([c.assign.hidden, c.gut.hidden, c.closeSw.hidden, c.dismissSw.hidden, c.ctl.hidden], [false, false, true, false, false]);
+  c = built(Q.coerce("item", { id: "k3", title: "K", source: "tracker", source_key: "7" }));
+  assert.equal(c.closeSw.hidden, false);
+  assert.equal(c.closeSw.lab.textContent, "Close in tracker");
+  Q.applyConfig({ tz: "UTC" });
+});
+ok("card controls: a new snooze folds an expanded card again", () => {
+  Q.applyConfig({ tz: "UTC", controls: { snooze: true } }); Q.setCtlDay("2026-11-13");
+  Q.items.clear();
+  const it = Q.coerce("item", { id: "z1", title: "Z" });
+  Q.items.set("z1", it);
+  const c = cardObj(); c.it = it; c.undo = null; Q.buildControls(c);
+  for (const tap of [() => c.snzDay.listeners.click(), () => c.snzWeek.listeners.click(),
+    () => { c.snzDate.value = "2026-11-20"; Q.clockMs = () => Date.UTC(2026, 10, 13, 12); c.snzDate.listeners.change(); }]) {
+    c.expanded = true;
+    tap();
+    assert.equal(c.expanded, false);
+  }
+  Q.items.clear(); Q.cards.clear();
+  Q.applyConfig({ tz: "UTC" });
 });
