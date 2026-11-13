@@ -46,6 +46,17 @@ Alternatives:
 - Several agents on one board: one document per agent, `status/<agent>`, in place of
   `meta/status`. Decide this before the first build, because it changes the path.
 
+## Additions (2026-11-13)
+
+- A result line per card: `ack --result <id> "text"` stores one sentence on the card, and
+  the page shows it under the card, for example "Merged and applied 14:10". It answers "did
+  the agent act on my answer?" without a terminal.
+- An agent-changed mark: a dot on cards that the agent added or changed since the operator
+  last looked. The page keeps the seen `rev` per viewer in localStorage.
+- The strip also shows the wake mode and the time of the last watcher tick (see
+  `decision-board-wake-modes`).
+- One agent per board (see `decision-board-single-agent`), so `meta/status` is the path.
+
 ## Open questions
 
 - Whether the watcher agent can write a heartbeat into the same document, so that the
