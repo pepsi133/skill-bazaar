@@ -1,6 +1,6 @@
 {
   "name": "decision-board",
-  "description": "Build and run a decision board, a private claude.ai artifact with a database, where agents post questions, actions and reference pages and the operator answers from a phone or a browser. One unchanged page, set up by a config document in the database.",
+  "description": "Build and run a decision board, a private claude.ai artifact with a database, where an agent posts questions, actions and reference pages and the operator answers from a phone or a browser. One unchanged page, set up by a config document in the database.",
   "version": "0.9.0",
   "author": {
     "name": "pepsi133",

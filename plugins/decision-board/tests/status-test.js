@@ -56,6 +56,22 @@ ok("statusView: no document, a task, idle with waiting, stale after stale_minute
   assert.equal(P.statusView(st({ updated: at(30) }), NOW, f1).stale, false);
   assert.deepEqual(plain(P.statusView(st({ next: ["a", "b", "c", "d"] }), NOW, f1).next), ["a", "b", "c"]);
 });
+ok("statusView: an empty now (a watcher window before any status) is the idle status: head, waiting tail, never stale", () => {
+  P.applyConfig({ tz: "UTC" });
+  const watch = { started: at(1), until: at(-60) };
+  const v = P.statusView(st({ now: "", updated: at(0.5), watch }), NOW, f1);
+  assert.deepEqual([v.has, v.idle, v.head, v.age, v.stale, v.when], [true, true, "Idle", "just now", false, "T(" + at(0.5) + ")"]);
+  assert.equal(P.statusView(st({ now: "   " }), NOW, f1).head, "Idle", "blank text is empty");
+  for (const now of ["IDLE ", " idle", "Idle", "iDlE\t"]) {
+    const x = P.statusView(st({ now, updated: at(600) }), NOW, f1);
+    assert.deepEqual([x.idle, x.head, x.stale], [true, "Idle", false], JSON.stringify(now));
+  }
+  const old = P.statusView(st({ now: "", waiting: "the key", next: ["A"], updated: at(600) }), NOW, f1);
+  const word = P.statusView(st({ now: "idle", waiting: "the key", next: ["A"], updated: at(600) }), NOW, f1);
+  assert.deepEqual([old.head, old.stale, old.age, old.waiting, plain(old.next)], ["Idle, waiting for: the key", false, "10 h ago", "", ["A"]]);
+  assert.deepEqual(plain(old), plain(word), "the same strip as now: idle");
+  assert.equal(P.statusView(st({ now: "Build" }), NOW, f1).head, "Now: Build");
+});
 ok("statusView: an unreadable updated is no status; a stamp 10 minutes ahead is stale", () => {
   P.applyConfig({ tz: "UTC" });
   const bad = P.statusView(st({ updated: "soon" }), NOW, f1);
@@ -191,5 +207,5 @@ ok("the page wakes only from a click", () => {
   const firstStmt = (t) => t.slice(t.indexOf("{") + 1).trimStart().split(";")[0];
   assert.ok(firstStmt(sendFn).includes("wakeAnchor()"), firstStmt(sendFn));
   assert.ok(firstStmt(click).includes("wakeAnchor()"), firstStmt(click));
-  assert.ok(sendFn.includes("if (went) wakeAgent(anchorP).then(setWakeOutcome)"));
+  assert.ok(sendFn.includes("if (went) wakeAgent(anchorP).then(sentOutcome)"));
 });

@@ -17,6 +17,8 @@ class El {
   removeAttribute(n) { this.attrs.delete(n.toLowerCase()); }
   set className(v) { this.setAttribute("class", v); }
   get firstChild() { return this.childNodes[0] || null; }
+  setCustomValidity(m) { this.validationMessage = String(m); }
+  get nextSibling() { const p = this.parentNode; return p ? p.childNodes[p.childNodes.indexOf(this) + 1] || null : null; }
   get children() { return this.childNodes.filter((c) => c.nodeType === 1); }
   appendChild(c) { if (c.parentNode) c.remove(); c.parentNode = this; this.childNodes.push(c); return c; }
   append(...k) { k.forEach((c) => this.appendChild(typeof c === "string" ? new Text(c) : c)); }
@@ -149,6 +151,21 @@ ok("CSS: one [hidden] rule hides every element, whatever its display", () => {
 ok("CSS: the children of the agent strip may shrink, so a long summary ends in an ellipsis inside the box", () => {
   const src = fs.readFileSync(pageFile, "utf8");
   assert.ok(src.includes(".agentnow summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\n.agentnow > * { min-width: 0; }"));
+});
+ok("CSS: the Assign select never grows past its row, so a long person label is cut instead of widening the page", () => {
+  const src = fs.readFileSync(pageFile, "utf8"), rule = /^\.ctl select \{([^}]*)\}/m.exec(src);
+  assert.ok(rule, "the .ctl select rule");
+  assert.match(rule[1], /(^|;)\s*max-width: 100%;/);
+  assert.match(rule[1], /(^|;)\s*min-width: 0;/);
+  assert.match(rule[1], /(^|;)\s*text-overflow: ellipsis;/);
+  const row = /^\.ctl \{([^}]*)\}/m.exec(src);
+  assert.ok(row, "the .ctl rule");
+  assert.match(row[1], /(^|;)\s*min-width: 0;/, "the row may shrink in the card grid, so the select's max-width has a bound");
+});
+ok("CSS: a refused snooze date shows: the invalid date field has the red border of the now token", () => {
+  const src = fs.readFileSync(pageFile, "utf8");
+  assert.ok(src.includes(".snz input:invalid { border-color: var(--now); }"));
+  assert.ok(src.includes(".tag.now { background: var(--now-bg); color: var(--now); }"), "--now is the red of the now priority tag");
 });
 ok("CSS: the slim row of a snoozed card may shrink, so its title ends in an ellipsis instead of widening the page", () => {
   const src = fs.readFileSync(pageFile, "utf8"), rule = /^\.card\.slim > \.slimrow \{([^}]*)\}/m.exec(src);
@@ -307,6 +324,95 @@ ok("card controls: a new snooze folds an expanded card again", () => {
   Q.items.clear(); Q.cards.clear();
   Q.applyConfig({ tz: "UTC" });
 });
+ok("card controls: a lingering Undo stands directly after the control that made the change; the banner keeps only the text", () => {
+  const ON = { assign: true, snooze: true, dismiss: true, close: true, done: true, tags: true };
+  Q.applyConfig({ tz: "UTC", controls: ON }); Q.setCtlDay("2026-11-13");
+  const it = Q.coerce("item", { id: "u1", title: "U", source: "tracker", source_key: "7" });
+  const c = cardObj(); c.it = it; c.panelOpen = true; c.snzOpen = false; c.expanded = false; c.undo = null; Q.buildControls(c);
+  Q.updateCard(c, it);
+  assert.equal(c.undoBtn.hidden, true, "no linger: no Undo");
+  assert.deepEqual([c.undoBtn.textContent, c.undoBtn.getAttribute("class")], ["Undo", "undo"]);
+  assert.ok(!c.banner.querySelectorAll("button").length, "the banner holds no button");
+  const was = Q.lingerOf;
+  Q.lingerOf = () => "active";
+  const next = (el) => el.parentNode.childNodes[el.parentNode.childNodes.indexOf(el) + 1];
+  for (const [at, anchor, row] of [["done", c.gut, c.chead], ["assign", c.assign, c.ctl], ["snooze", c.snzBtn, c.ctl], ["dismiss", c.dismissSw, c.dismissRow], ["close", c.closeSw, c.closeRow]]) {
+    c.undo = { [at]: false }; c.undoAt = at;
+    Q.updateCard(c, it);
+    assert.equal(c.undoBtn.hidden, false, at);
+    assert.equal(c.undoBtn.parentNode, row, at);
+    assert.equal(next(anchor), c.undoBtn, "directly after the control: " + at);
+  }
+  // The edit panel closed during a Dismiss linger: the Undo stands in the banner beside the text; opened again, back.
+  c.undo = { dismiss: false }; c.undoAt = "dismiss";
+  c.panelOpen = false; Q.updateCard(c, it);
+  assert.deepEqual([c.panel.hidden, c.undoBtn.parentNode === c.banner, c.undoBtn.hidden], [true, true, false]);
+  assert.equal(next(c.bannerText), c.undoBtn, "beside the state text");
+  c.panelOpen = true; Q.updateCard(c, it);
+  assert.deepEqual([c.panel.hidden, c.undoBtn.parentNode === c.dismissRow, next(c.dismissSw) === c.undoBtn], [false, true, true]);
+  assert.deepEqual(Q.undoAt({ done: true }), "done");
+  assert.deepEqual([Q.undoAt({ assign: "other" }), Q.undoAt({ snooze: "" }), Q.undoAt({ dismiss: true }), Q.undoAt({ tags_on: [] })], ["assign", "snooze", "dismiss", ""]);
+  Q.lingerOf = was;
+  Q.applyConfig({ tz: "UTC" });
+});
+ok("card controls: keyboard focus around Undo: to the restored control, to the Undo after a snooze, to the control when the linger ends", () => {
+  const ON = { assign: true, snooze: true, dismiss: true, close: true, done: true, tags: true };
+  Q.applyConfig({ tz: "UTC", controls: ON }); Q.setCtlDay("2026-11-13");
+  const it = Q.coerce("item", { id: "f1", title: "F" });
+  const c = cardObj(); c.it = it; c.panelOpen = true; c.snzOpen = false; c.expanded = false; c.undo = null; Q.buildControls(c);
+  const was = [Q.lingerOf, Q.renderGroups];
+  Q.lingerOf = () => "active";
+  Q.renderGroups = () => Q.updateCard(c, c.it);           // render() reaches this card
+  Q.updateCard(c, it);
+  const undoBy = (key, at, ctl) => {
+    c.undo = { [at]: at === "assign" ? "" : false }; c.undoAt = at; Q.updateCard(c, it);
+    document.activeElement = c.undoBtn; Q.keyNav = key;
+    c.undoBtn.listeners.click();
+    return document.activeElement === ctl;
+  };
+  for (const [at, ctl] of [["done", c.doneBox], ["assign", c.assign], ["snooze", c.snzBtn], ["dismiss", c.dismissSw]]) {
+    assert.equal(undoBy(true, at, ctl), true, "keyboard Undo focuses the control: " + at);
+    assert.equal(undoBy(false, at, ctl), false, "a pointer Undo leaves focus alone: " + at);
+  }
+  // Undo pressed in the state line (the edit panel hidden): focus falls back to the Edit/Hide toggle.
+  c.panelOpen = false;
+  assert.equal(undoBy(true, "dismiss", c.more), true, "keyboard Undo in the banner focuses Edit");
+  assert.equal(c.panel.hidden, true);
+  c.panelOpen = true;
+  for (const key of [true, false]) {
+    document.activeElement = document.body; Q.keyNav = key; c.undo = null;
+    c.snzDay.listeners.click();
+    assert.equal(document.activeElement === c.undoBtn, key, "after a snooze choice, by keyboard " + key);
+  }
+  Q.lingerOf = () => ""; Q.schedule = () => {};
+  for (const had of [true, false]) {
+    c.undo = { dismiss: false }; c.undoAt = "dismiss";
+    document.activeElement = had ? c.undoBtn : document.body;
+    Q.lingerEnd(c, "f1");
+    assert.equal(document.activeElement === c.dismissSw, had, "linger end with the Undo focused: " + had);
+    assert.equal(c.undo, null);
+  }
+  [Q.lingerOf, Q.renderGroups] = was; delete Q.schedule; Q.keyNav = false; document.activeElement = document.body;
+  Q.applyConfig({ tz: "UTC" });
+});
+ok("card controls: a date typed by keyboard snoozes only when complete and in range; out of range it stays, marked invalid", () => {
+  Q.applyConfig({ tz: "UTC", controls: { snooze: true } }); Q.setCtlDay("2026-11-13");
+  const it = Q.coerce("item", { id: "t1", title: "T" });
+  const c = cardObj(); c.it = it; c.undo = null; Q.buildControls(c);
+  const calls = [], was = [Q.setControl, Q.clockMs];
+  Q.setControl = (cc, patch) => calls.push(patch);
+  Q.clockMs = () => Date.UTC(2026, 10, 13, 12);
+  const type = (v) => { c.snzOpen = true; c.snzDate.value = v; c.snzDate.listeners.change(); return [c.snzDate.value, c.snzDate.validationMessage !== "", calls.length, c.snzOpen]; };
+  // Typing 11/20/2026 passes the years 0002, 0020 and 0202 before 2026.
+  // realDate reads a year under 100 as no date (Date.UTC maps it to 19xx): left alone; 0202 is a date out of range.
+  for (const [y, bad] of [["0002", false], ["0020", false], ["0202", true]]) assert.deepEqual(type(y + "-11-20"), [y + "-11-20", bad, 0, true], y);
+  assert.deepEqual(type(""), ["", false, 0, true], "an incomplete value does nothing");
+  for (const d of ["2026-11-13", "2026-11-01", "2027-11-15"]) assert.deepEqual(type(d), [d, true, 0, true], "refused: " + d);
+  assert.deepEqual(type("2026-11-20"), ["2026-11-20", false, 1, false], "a complete day in range snoozes once");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{ snooze: "2026-11-20" }]);
+  [Q.setControl, Q.clockMs] = was;
+  Q.applyConfig({ tz: "UTC" });
+});
 ok("a card shows its result line by textContent, hidden without a result", () => {
   Q.applyConfig({ tz: "UTC" }); Q.setCtlDay("2026-11-13");
   const was = Q.fmt; Q.fmt = (s) => (s ? "T(" + s + ")" : "");
@@ -347,7 +453,7 @@ function wakeBox(o = {}) {
     collection: (c) => ({ get: () => Promise.resolve(colSnap(c)), onSnapshot: (fn) => { fn(colSnap(c)); return () => {}; } }),
   };
   const comments = o.comments === undefined ? stubComments() : o.comments;
-  const win = o.load ? { addEventListener() {}, claude: { use: (n) => Promise.resolve(n === "db" ? db : comments) } } : {};
+  const win = o.load ? { addEventListener() {}, claude: { use: (n) => (n === "db" ? Promise.resolve(db) : o.commentsP || Promise.resolve(comments)) } } : {};
   const W = load({ document, DOMParser, navigator: { clipboard: { writeText: () => Promise.resolve() } }, window: win,
     setTimeout: (f, ms) => { later.push({ f, ms, cleared: false }); return later.length; }, clearTimeout: (i) => { if (later[i - 1]) later[i - 1].cleared = true; },
     setInterval: () => 0, requestAnimationFrame: () => 0,
@@ -432,7 +538,7 @@ aok("wake: each outcome shows its notice and the Wake button only where a tap ca
     [{}, { wake: { mode: "poll" } }, "Sent. The watcher picks it up within 5 min.", true],
     [{}, { wake: { mode: "off" } }, "Sent. Tell the agent to read the board.", true],
     [null, {}, "Sent. This page cannot post comments: ask the agent to republish it. The poll every 15 min picks it up.", true, true],
-    [null, {}, "Sent. No agent session takes comments here; the poll every 15 min picks it up.", true, false],
+    [null, {}, "Sent. The wake is not ready yet: tap Wake in a moment.", false, false],
   ];
   for (const [co, conf, text, hidden, off] of cases) {
     const x = wakeBox({ comments: co ? stubComments(co) : null, commentsOff: off });
@@ -449,6 +555,57 @@ aok("wake: each outcome shows its notice and the Wake button only where a tap ca
   answered(x);
   x.W.setWakeOutcome("sent"); x.W.setWakeOutcome("gesture");
   assert.equal(x.later.filter((l) => l.ms === 30000)[0].cleared, true, "a new outcome clears the old timer");
+});
+aok("wake: a tap before the comments capability resolved says Not ready yet and keeps the Wake button; once it resolved absent the old texts apply", async () => {
+  const tap = (x) => x.W.wakeAgent(x.W.wakeAnchor()).then(x.W.setWakeOutcome);   // what the #wake click does
+  for (const mode of ["both", "comment"]) {
+    const x = wakeBox({ comments: null, commentsOff: false });
+    answered(x, { wake: { mode } });
+    await tap(x); await settle();
+    x.W.render();
+    assert.deepEqual([x.W.wakeOutcome, x.els.wakestate.textContent, x.els.wake.hidden], ["not_ready", "Not ready yet. Try again in a moment.", false], mode);
+    assert.equal(x.later.filter((l) => l.ms === 30000).length, 0, "the notice stays until the next press");
+    x.W.commentsOff = true;                          // the capability resolved: absent
+    await tap(x); await settle();
+    x.W.render();
+    assert.equal(x.W.wakeOutcome, "no_capability");
+    assert.equal(x.els.wakestate.textContent, mode === "both"
+      ? "Sent. This page cannot post comments: ask the agent to republish it. The poll every 15 min picks it up."
+      : "Sent. This page cannot post comments: ask the agent to republish it, and to read the board.");
+    assert.equal(x.els.wake.hidden, true);
+  }
+});
+aok("wake: a Send before the comments capability resolved says it was sent; 30 s after the start it counts as absent until it resolves; a late capability is adopted", async () => {
+  const card = { id: "a", title: "A", options: ["Yes", "No"], status: "open", rev: 1, updated: "2026-01-01T00:00:00+00:00" };
+  let resolve;
+  const commentsP = new Promise((r) => { resolve = r; });
+  const x = wakeBox({ load: true, commentsP, metaDocs: { "meta/config": { tz: "UTC" } },
+    cols: { cards: [{ id: "main", data: { cards: [card] } }], responses: [{ id: "a", data: { choice: "Yes", note: "", rev: 1, sent: false, updated: NOWS() } }] } });
+  await settle();
+  const bound = x.later.filter((l) => l.ms === 30000 && !l.cleared);
+  assert.equal(bound.length, 1, "one 30 s bound set at the start");
+  x.W.send(); await settle();
+  x.W.render();
+  assert.ok(x.writes.some(([p]) => p.startsWith("batches/")), "the batch went out");
+  assert.deepEqual([x.W.wakeOutcome, x.els.wakestate.textContent, x.els.wake.hidden], ["not_ready_sent", "Sent. The wake is not ready yet: tap Wake in a moment.", false]);
+  bound[0].f();                                         // 30 s after the start, still unresolved
+  x.W.render();
+  assert.deepEqual([x.W.commentsOff, x.W.wakeOutcome, x.els.wakestate.textContent, x.els.wake.hidden],
+    [true, "no_capability", "Sent. This page cannot post comments: ask the agent to republish it. The poll every 15 min picks it up.", true]);
+  const late = stubComments();
+  resolve(late); await settle();                       // resolves at 31 s: adopted
+  assert.equal(x.W.comments, late, "a late capability is adopted");
+  assert.equal(late.sent.length, 0, "adopting it wakes nobody");
+  x.W.resp.set("a", Object.assign(x.W.coerce("response", { choice: "No", note: "", rev: 1, sent: false, updated: NOWS() }), { itemId: "a" }));
+  x.W.send(); await settle();
+  x.W.render();
+  assert.equal(late.sent.length, 1, "the next Send wakes once");
+  assert.deepEqual([x.W.wakeOutcome, x.els.wakestate.textContent, x.els.wake.hidden], ["sent", "Sent, and the agent was woken by a comment.", true]);
+  // A capability that resolves to null stays absent.
+  const y = wakeBox({ load: true, commentsP: Promise.resolve(null), metaDocs: { "meta/config": { tz: "UTC" } } });
+  await settle();
+  assert.deepEqual([y.W.comments, y.W.commentsOff], [null, true]);
+  assert.equal(await y.W.wakeAgent(y.W.wakeAnchor()), "no_capability");
 });
 aok("load: the page starts, reads the board and wakes nobody and sends nothing", async () => {
   const card = { id: "a", title: "A", options: ["Yes", "No"], status: "open", rev: 1, updated: "2026-01-01T00:00:00+00:00" };

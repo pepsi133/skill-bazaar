@@ -26,7 +26,7 @@ ok("Done holds the cards with a sent answer and the closed cards; a changed or u
   P.resp.clear();
 });
 ok("the empty text: no cards, all answered with the Done count, or an empty tab", () => {
-  assert.equal(P.emptyText(0, 0, 0), "No cards yet. Agents add cards to this board, and they appear here without a reload.");
+  assert.equal(P.emptyText(0, 0, 0), "No cards yet. The agent adds cards to this board, and they appear here without a reload.");
   assert.equal(P.emptyText(5, 0, 3), "All answered. 3 in Done.");
   assert.equal(P.emptyText(5, 0, 0), "No cards in this tab.");
   assert.equal(P.emptyText(5, 2, 3), "");

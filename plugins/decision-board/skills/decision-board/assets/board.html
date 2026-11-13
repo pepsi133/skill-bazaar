@@ -192,10 +192,12 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 .chead h2 { flex: 1; min-width: 0; }
 .gut { flex: none; display: grid; place-items: center; width: 44px; height: 44px; margin: -10px 0 -10px -10px; cursor: pointer; }
 .gut input { width: 22px; height: 22px; margin: 0; accent-color: var(--good); }
-.ctl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ctl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
 .ctl select, .ctl button, .snz button, .snz input { min-height: 40px; }
+.ctl select { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .snz, .panel { display: grid; gap: 6px; padding: 8px; background: var(--surface-2); border-radius: 6px; }
 .snz .row { display: flex; flex-wrap: wrap; gap: 6px; }
+.snz input:invalid { border-color: var(--now); }
 .sw { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 4px 0; background: none; border: 0; text-align: left; }
 .sw .k { flex: none; position: relative; width: 44px; height: 26px; border-radius: 13px; background: var(--line); }
 .sw .k::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); }
@@ -205,6 +207,11 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 .chip[aria-pressed] { min-height: 36px; cursor: pointer; border: 1px solid var(--line); background: var(--surface); }
 .chip[aria-pressed="true"] { border-color: var(--accent); background: var(--surface-2); font-weight: 600; }
 .banner { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 6px 8px; border-radius: 6px; background: var(--surface-2); font-size: 13px; }
+/* Undo: a full button beside the control that made the change; in the Assign and Snooze row it wraps under it. */
+button.undo { flex: none; min-height: 44px; min-width: 88px; padding: 6px 16px; font-weight: 600; border-color: var(--accent); color: var(--accent); }
+.chead button.undo { margin: -2px 0; }
+.swrow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.swrow > .sw { flex: 1 1 auto; min-width: 0; width: auto; }
 .slimrow { display: none; }
 .card.slim > * { display: none; }
 .card.slim > .slimrow { display: flex; gap: 8px; align-items: center; min-height: 44px; min-width: 0; max-width: 100%; }
@@ -818,16 +825,27 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // The wall clock of ms in the config tz, as minutes since 1970-01-01 00:00 of that clock (calendar arithmetic:
   // a DST change moves no week boundary).
   function wallMin(ms) { var p = zoneParts(ms, cfg.tz); return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute) / 60000; }
-  // The wall-clock minute (as wallMin) at which the week of ms started: the last cfg.week_start at or before ms.
-  // Day 0 of the count, 1970-01-01, was a Thursday (day of week 4, Sunday 0).
-  function weekStartOf(ms) {
-    var w = wallMin(ms), day = Math.floor(w / 1440), s = (day - (day + 4 - cfg.week_start.day + 7) % 7) * 1440 + cfg.week_start.min;
+  // The offset of the config tz at ms, in minutes.
+  function offMin(ms) { return wallMin(ms) - Math.floor(ms / 60000); }
+  // The wall-clock minute (as wallMin) at which the week of the wall-clock minute w started: the last cfg.week_start
+  // at or before w. Day 0 of the count, 1970-01-01, was a Thursday (day of week 4, Sunday 0).
+  function wallWeekStart(w) {
+    var day = Math.floor(w / 1440), s = (day - (day + 4 - cfg.week_start.day + 7) % 7) * 1440 + cfg.week_start.min;
     return s > w ? s - 10080 : s;
+  }
+  // The week start of ms, never earlier than at any instant before ms. When the clocks went back in the last 3 hours,
+  // the wall clock repeats an hour: the week start is then also taken at the last minute before the change (found by
+  // halving), so a week that turned in the first pass of that hour stays turned in the second.
+  function weekStartOf(ms) {
+    var s = wallWeekStart(wallMin(ms)), lo = ms - 180 * 60000, hi = ms, off = offMin(ms);
+    if (offMin(lo) <= off) return s;
+    while (hi - lo > 60000) { var mid = lo + Math.max(1, Math.floor((hi - lo) / 120000)) * 60000; if (offMin(mid) > off) lo = mid; else hi = mid; }
+    return Math.max(s, wallWeekStart(wallMin(lo)));
   }
   // The bucket of a due date that a group can match: overdue, today, this_week (from tomorrow to the end of the
   // current week), next_week (the week after), later, or none (no real due date). A due day counts at its start
   // (00:00), so a card due on the start day of a week that starts at 12:00 belongs to the week that ends that noon.
-  // The bucket names are DUE_BUCKETS, defined at the top of "// ---- board config" (item 3 needs them at load time).
+  // The bucket names are DUE_BUCKETS, defined at the top of "// ---- board config" (normConfig needs them when the page loads).
   function dueBucket(due, ms) {
     if (!realDate(due)) return "none";
     var d = dayDiff(todayOf(ms), due);
@@ -1028,9 +1046,10 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     return Math.floor(m / 1440) + " d ago";
   }
   // The strip of a coerced status (or null). fmtTime: a one-argument formatter (the page passes fmt).
+  // An empty now (a watcher window written before any status) is the idle status in every respect the strip shows.
   function statusView(st, nowMs, fmtTime) {
     var t = st ? stampMs(st.updated) : -Infinity, has = t !== -Infinity;
-    var idle = has && st.now.toLowerCase() === "idle";
+    var n = has ? str(st.now) : "", idle = has && (n.toLowerCase() === "idle" || !n);
     var head = !has ? "No status from the agent yet" : idle ? "Idle" + (st.waiting ? ", waiting for: " + st.waiting : "") : "Now: " + st.now;
     var age = has ? ageText(st.updated, nowMs) : "";
     var stale = has && !idle && (nowMs - t > cfg.status.stale_minutes * 60000 || t - nowMs > 5 * 60000);
@@ -1079,6 +1098,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     if (outcome === "no_capability") return both
       ? "Sent. This page cannot post comments: ask the agent to republish it. The poll every " + durText(plan.poll_seconds) + " picks it up."
       : "Sent. This page cannot post comments: ask the agent to republish it, and to read the board.";
+    if (outcome === "not_ready") return "Not ready yet. Try again in a moment.";
+    if (outcome === "not_ready_sent") return "Sent. The wake is not ready yet: tap Wake in a moment.";
     if (outcome === "sent") return "Sent, and the agent was woken by a comment.";
     if (outcome === "sent_unsaved") return "Sent, and the agent was woken. The thread was not saved, so the next wake starts a new one.";
     if (outcome === "mark_sent") return "Sent, but some answers were not marked sent. The agent was woken.";
@@ -1114,7 +1135,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function isActive(it) { return cardState(it) === "active"; }
   // The text where the cards of a tab would be: "" when the tab shows a card.
   function emptyText(total, active, done) {
-    if (!total) return "No cards yet. Agents add cards to this board, and they appear here without a reload.";
+    if (!total) return "No cards yet. The agent adds cards to this board, and they appear here without a reload.";
     if (active) return "";
     return done ? "All answered. " + done + " in Done." : "No cards in this tab.";
   }
@@ -1406,6 +1427,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       var today = todayOf(clockMs()), ctl = ctlOf(c.it);
       c.snzOpen = false; c.expanded = false;          // a new snooze folds the card again
       setControl(c, { snooze: snoozeDay(today, pick) }, { snooze: ctl.snooze });
+      undoFocus(c);
     }
     c.snzDay = h("button", { type: "button", text: "+1 day" });
     c.snzDay.addEventListener("click", function () { snoozeTo("day"); });
@@ -1415,10 +1437,15 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.snzWake.addEventListener("click", function () { setControl(c, { snooze: "" }, null); });
     c.snzDate = h("input", { type: "date", id: "d" + c.n });
     c.snzDate.addEventListener("change", function () {
+      // Typing by keyboard passes through partial and out-of-range values: only a complete date in range snoozes;
+      // an out-of-range one stays in the field, marked invalid; an incomplete one (value "") does nothing.
       var today = todayOf(clockMs()), ctl = ctlOf(c.it), day = c.snzDate.value;
-      if (!snoozeOk(day, today)) { c.snzDate.value = ""; return; }
+      if (!realDate(day)) { c.snzDate.setCustomValidity(""); return; }
+      if (!snoozeOk(day, today)) { c.snzDate.setCustomValidity("Pick a day after today, at most a year ahead."); return; }
+      c.snzDate.setCustomValidity("");
       c.snzOpen = false; c.expanded = false;
       setControl(c, { snooze: day }, { snooze: ctl.snooze });
+      undoFocus(c);
     });
     c.snzCancel = h("button", { type: "button", text: "Cancel" });
     c.snzCancel.addEventListener("click", function () { c.snzOpen = false; render(); });
@@ -1428,12 +1455,15 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       c.slimWake = h("button", { type: "button", class: "link small", text: "Wake" }));
     c.slimOpen.addEventListener("click", function () { c.expanded = !c.expanded; render(); });
     c.slimWake.addEventListener("click", function () { setControl(c, { snooze: "" }, null); });
-    c.banner = h("div", { class: "banner", hidden: true }, c.bannerText = h("span", { class: "grow" }),
-      c.undoBtn = h("button", { type: "button", class: "link small", text: "Undo" }));
+    c.banner = h("div", { class: "banner", hidden: true }, c.bannerText = h("span", { class: "grow" }));
+    // Undo sits beside the control that made the change (placeUndo); the banner keeps the state text.
+    c.undoBtn = h("button", { type: "button", class: "undo", text: "Undo", hidden: true });
     c.undoBtn.addEventListener("click", function () {
-      var u = c.undo;
+      var u = c.undo, at = c.undoAt, key = byKey();
       if (!u) return;
       c.undo = null; lingerUntil.delete(c.it.id); setControl(c, u, null);
+      // By keyboard: focus goes to the control the Undo restored, or to the Edit/Hide toggle when that control is hidden.
+      if (key && !ctlFocus(c, at) && isShown(c.more)) { try { c.more.focus({ preventScroll: true }); } catch (e) {} }
     });
     c.dismissSw = switchRow("Dismiss", "Hide it until something new comes in");
     c.dismissSw.addEventListener("click", function () { var v = !ctlOf(c.it).dismiss; setControl(c, { dismiss: v }, v ? { dismiss: false } : null); });
@@ -1441,7 +1471,60 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.closeSw = switchRow("Close in " + (c.closeSrc || "the source"), "The agent closes the item there, then the card leaves");
     c.closeSw.addEventListener("click", function () { setControl(c, { close: !ctlOf(c.it).close }, null); });
     c.tagWrap = h("div", null, h("div", { class: "small muted", text: "Tags" }), c.tagBox = h("div", { class: "tags" }));
-    c.panel = h("div", { class: "panel", hidden: true }, c.dismissSw, c.closeSw, c.tagWrap);
+    // Each switch sits in a row of its own, so an Undo can stand beside it.
+    c.dismissRow = h("div", { class: "swrow" }, c.dismissSw);
+    c.closeRow = h("div", { class: "swrow" }, c.closeSw);
+    c.panel = h("div", { class: "panel", hidden: true }, c.dismissRow, c.closeRow, c.tagWrap);
+  }
+  // The control a patch came from: the key Undo is placed by.
+  var UNDO_AT = ["done", "assign", "snooze", "dismiss", "close"];
+  function undoAt(patch) { return UNDO_AT.filter(function (k) { return own(patch, k); })[0] || ""; }
+  // Put the Undo of a card directly after the control that made the lingering change: the Done box in the title row,
+  // the Assign select, the Snooze button, or the Dismiss or Close switch. The DOM moves only when the place changes.
+  // A card has one Undo, for its latest change; two cards can each show their own. When the control sits in a hidden
+  // part of the card (the edit panel was closed during the linger), the Undo stands in the banner line beside the
+  // state text, and moves back beside the control when that part shows again. In the row of Assign and Snooze an
+  // Undo that wrapped to the next line is moved in under its control (again on a resize: the wiring calls placeUndo).
+  function undoAnchor(c) { return { done: c.gut, assign: c.assign, snooze: c.snzBtn, dismiss: c.dismissSw, close: c.closeSw }[c.undoAt] || null; }
+  function placeUndo(c) {
+    var u = c.undoBtn, at = undoAnchor(c), e;
+    if (u.hidden || !at || !at.parentNode) return;
+    for (e = at; e && e !== c.el; e = e.parentNode) if (e.hidden) break;
+    if (e && e !== c.el) { if (u.parentNode !== c.banner) c.banner.append(u); at = null; }
+    else if (at.nextSibling !== u) at.parentNode.insertBefore(u, at.nextSibling);
+    if (!u.style || !u.getBoundingClientRect) return;
+    u.style.marginLeft = "";
+    if (!at || at.parentNode !== c.ctl) return;
+    var a = at.getBoundingClientRect(), b = u.getBoundingClientRect(), r = c.ctl.getBoundingClientRect();
+    if (b.top >= a.bottom - 1 && a.left > r.left) u.style.marginLeft = Math.max(0, Math.min(a.left - r.left, r.width - b.width)) + "px";
+  }
+  // Keyboard focus around Undo. keyNav: the last input was a key, not a pointer (the wiring sets it), so mouse and
+  // touch keep the browser's own focus.
+  var keyNav = false;
+  function byKey() { return keyNav; }
+  // Shown: laid out (offsetParent), or in the test stub not inside a hidden element.
+  function isShown(el) {
+    if (el.offsetParent !== undefined) return !!el.offsetParent;
+    for (var e = el; e; e = e.parentNode) if (e.hidden) return false;
+    return true;
+  }
+  // Focus the control of an Undo key (the Done box, the Assign select, the Snooze button, a switch) when it shows;
+  // true when it did.
+  function ctlFocus(c, at) {
+    var el = { done: c.doneBox, assign: c.assign, snooze: c.snzBtn, dismiss: c.dismissSw, close: c.closeSw }[at];
+    if (!el || !isShown(el)) return false;
+    try { el.focus({ preventScroll: true }); } catch (e) {}
+    return true;
+  }
+  // After a snooze choice made by keyboard, the Undo takes the focus that the closed chooser lost.
+  function undoFocus(c) { if (byKey() && !c.undoBtn.hidden) { try { c.undoBtn.focus({ preventScroll: true }); } catch (e) {} } }
+  // The linger of card c ended. An Undo that had focus hands it to its control, when that still shows.
+  // In practice the card usually leaves its place (to Done, Not ours or a slim row), so focus mostly drops to the body.
+  function lingerEnd(c, id) {
+    if (lingerOf(id)) return;
+    var had = document.activeElement === c.undoBtn, at = c.undoAt;
+    lingerUntil.delete(id); c.undo = null;
+    if (had) { render(); ctlFocus(c, at); } else schedule();
   }
   // A switch: the whole row is the tap target; aria-checked carries the state. Text by textContent only.
   // b.lab and b.hint are the two text spans, so a caller can change the text later.
@@ -1463,10 +1546,10 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     lingerUntil.delete(id);
     saveControls(id, patch);                      // sets resp synchronously, before the write resolves
     var after = cardState(c.it);
-    c.undo = undo || null;
+    c.undo = undo || null; c.undoAt = undoAt(patch);
     if (undo && after !== before && after !== "active") {
       lingerUntil.set(id, { until: clockMs() + LINGER_MS, state: before });
-      setTimeout(function () { if (!lingerOf(id)) { lingerUntil.delete(id); c.undo = null; schedule(); } }, LINGER_MS + 50);
+      setTimeout(function () { lingerEnd(c, id); }, LINGER_MS + 50);
     }
     render();
   }
@@ -1496,6 +1579,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.ctl.hidden = !(on.assign || on.snooze) && c.more.hidden;
     c.panel.hidden = c.more.hidden || !c.panelOpen;
     c.banner.hidden = !note; c.bannerText.textContent = note; c.undoBtn.hidden = !(lingering && c.undo);
+    c.dismissRow.hidden = !on.dismiss; c.closeRow.hidden = !on.close || !str(it.source_key);
     c.el.classList.toggle("slim", place === "snoozed" && !c.expanded);
     // Assign
     var list = assignList(), aKey = JSON.stringify(list);
@@ -1539,6 +1623,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     }
     var mine = tagsOf(it);
     Array.prototype.forEach.call(c.tagBox.children, function (chip) { chip.setAttribute("aria-pressed", mine.indexOf(chip.dataset.tag) >= 0 ? "true" : "false"); });
+    placeUndo(c);
   }
   var STATE_TEXT = { waiting: "waiting on agent" };
 
@@ -1674,7 +1759,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     $("refreshed").textContent = refreshedText(cardDocs.get(SCHEMA.cardsDoc), fmt);
     $("zone").textContent = zoneNote(cfg.tz);
     $("settings").textContent = cfg.settings; $("settings").hidden = !cfg.settings;
-    $("wake").hidden = !(wakeOutcome === "gesture" || wakeOutcome === "consent_required" || wakeOutcome === "rate_limited");
+    $("wake").hidden = !(wakeOutcome === "gesture" || wakeOutcome === "consent_required" || wakeOutcome === "rate_limited" || wakeOutcome === "not_ready" || wakeOutcome === "not_ready_sent");
     $("wakestate").textContent = wakeOutcome ? wakeNotice(cfg.wake, wakeOutcome) : "";
     $("ttl").textContent = boardTitle(meta);
     document.title = boardTitle(meta);
@@ -2058,11 +2143,13 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       var marks = Object.keys(byId).map(function (id) {
         var m = byId[id];
         return enqueue(id, function () {
-          var cur = resp.get(id);
-          if (!cur || cur.updated !== m.x.updated) return null;      // changed during the send: stays unsent
+          var cur = resp.get(id), same = !!cur && cur.updated === m.x.updated;
+          // An answer changed during the send stays unsent. The controls that went out are recorded as sent also when
+          // the response changed meanwhile, so the next batch carries only what changed since.
+          if (!cur || (!same && !(m.ctl && m.x.controls))) return null;
           var d = Object.assign({}, cur, { updated: nowStamp() });
-          if (m.ans) { d.sent = true; d.batch = bid; }
-          if (m.ctl && cur.controls) d.controls_sent = cur.controls;
+          if (m.ans && same) { d.sent = true; d.batch = bid; }
+          if (m.ctl && m.x.controls) d.controls_sent = m.x.controls;
           lastDoc.set(id, d); resp.set(id, d);
           return db.doc("responses/" + id).set(d);
         });
@@ -2080,7 +2167,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // The wake comment; called only from a click handler (Send or Wake), with the promise of wakeAnchor. Resolves to an outcome of wakeNotice.
   function wakeAgent(anchorP) {
     if (!cfg.wake.comment) return Promise.resolve("none");
-    if (!comments) return Promise.resolve(commentsOff ? "no_capability" : "unavailable");
+    // No comments object yet: "not_ready" while the capability has not resolved, "no_capability" once it resolved absent.
+    if (!comments) return Promise.resolve(commentsOff ? "no_capability" : "not_ready");
     if (typeof comments.sendToClaude !== "function") return Promise.resolve("unavailable");
     return comments.canSendToClaude().then(function (v) {
       if (v !== "available") return v;
@@ -2098,17 +2186,27 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // A plain notice clears after 30 s; a notice that shows the Wake button stays until the next press.
   function setWakeOutcome(o) {
     wakeOutcome = o; clearTimeout(wakeTimer);
-    if (o !== "gesture" && o !== "consent_required" && o !== "rate_limited") wakeTimer = setTimeout(function () { wakeOutcome = ""; schedule(); }, 30000);
+    if (o !== "gesture" && o !== "consent_required" && o !== "rate_limited" && o !== "not_ready" && o !== "not_ready_sent") wakeTimer = setTimeout(function () { wakeOutcome = ""; schedule(); }, 30000);
     schedule();
+  }
+  // The outcome of the wake after a Send that went out: a wake that is not ready yet says the batch did go out.
+  function sentOutcome(o) { setWakeOutcome(o === "not_ready" ? "not_ready_sent" : o); }
+  // While the comments capability has not resolved 30 s after the page started, it counts as absent (commentsLate);
+  // a later resolve to a usable object replaces that (see the wiring).
+  var COMMENTS_WAIT_MS = 30000;
+  function commentsLate() {
+    if (comments || commentsOff) return;
+    commentsOff = true;
+    if (wakeOutcome === "not_ready" || wakeOutcome === "not_ready_sent") setWakeOutcome("no_capability");
   }
   function send() {
     var anchorP = wakeAnchor(), went = false;
     if (sending || !ready()) return;
     sending = true; render();
-    flushAll().then(function () { var s = sendable(); if (s.r.length + s.n.length + s.c.length) { went = true; return sendGroup(s); } }).then(function () { showMsg(""); if (went) wakeAgent(anchorP).then(setWakeOutcome); }, function (x) {
+    flushAll().then(function () { var s = sendable(); if (s.r.length + s.n.length + s.c.length) { went = true; return sendGroup(s); } }).then(function () { showMsg(""); if (went) wakeAgent(anchorP).then(sentOutcome); }, function (x) {
       if (x && x.stage === "mark") {
         showMsg("Batch " + x.bid + " went out, but some answers were not marked sent: " + errText(x.e) + ". They can go out again.");
-        wakeAgent(anchorP).then(function (o) { setWakeOutcome(o === "sent" || o === "sent_unsaved" ? "mark_sent" : o); });
+        wakeAgent(anchorP).then(function (o) { sentOutcome(o === "sent" || o === "sent_unsaved" ? "mark_sent" : o); });
       } else if (x && x.stage === "batch") showMsg("Send failed, nothing went out: " + errText(x.e));
       else showMsg("Send failed: " + errText(x));
     }).then(function () { sending = false; schedule(); });
@@ -2182,6 +2280,11 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     var pre = b ? b.parentNode.querySelector("pre") : null;
     if (!pre) return; copyText(pre.textContent, pre, b);
   });
+  // The last input kind, for the focus rules of Undo (byKey).
+  document.addEventListener("keydown", function () { keyNav = true; }, true);
+  document.addEventListener("pointerdown", function () { keyNav = false; }, true);
+  // A resize or rotation moves a wrapped Undo: place every shown Undo again.
+  window.addEventListener("resize", function () { cards.forEach(function (c) { if (c.undoBtn && !c.undoBtn.hidden) placeUndo(c); }); });
   document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
   window.addEventListener("focus", refresh);
   setInterval(function () { var t = clockMs(); if (todayOf(t) !== lastDay || weekStartOf(t) !== lastWeek) schedule(); }, 60000);
@@ -2191,6 +2294,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   render();
   if (window.claude && window.claude.use) {
     window.claude.use("db").then(start, function () { start(null); });
+    setTimeout(commentsLate, COMMENTS_WAIT_MS);
+    // A capability that resolves after the 30 s bound is still adopted: the next Send or Wake wakes as normal.
     window.claude.use("comments").then(function (c) { comments = c || null; commentsOff = !c; }, function () { commentsOff = true; });
   } else { start(null); }
 })();
