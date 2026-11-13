@@ -20,13 +20,14 @@ board's Rules tab after each change; never post it with `guide`.
 Write the cards as a JSON list to `board/rules-cards.json`, run `node S sync board/rules-cards.json` (no
 `--source`) and pass the array. Each card: `id` `rule-<topic>` (lower case, words joined by `-`), `source`
 `rules`, `kind` `decision`, `title` `Add this rule?`, `options` `["Add it", "Add it with my change, see note",
-"Leave it out"]`, `first_asked` `{"date": "<today, YYYY-MM-DD>", "who": "operator"}`, and in `summary` the
-section name and the exact rule text in a fenced block. A rule card needs no link.
+"Leave it out"]`, `first_asked` `{"date": "<today, YYYY-MM-DD>", "who": "operator"}`, the section name in
+`summary`, and the exact rule text in `draft` with `draft_label` `Rule for board/rules.md`. A rule card needs no
+link.
 
 ## A `[rule]` line
 
-- `Add it`: add the rule text of the card's `summary` to its `## <topic>` section of `board/rules.md`; make the
-  section when it is missing.
+- `Add it`: add the card's `draft` (the rule text) to the `## <topic>` section of `board/rules.md` that its
+  `summary` names; make the section when it is missing.
 - `Add it with my change, see note`: the same, with the note's text as the rule text.
 - `Leave it out`: change nothing in `board/rules.md`.
 

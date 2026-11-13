@@ -33,3 +33,10 @@ ok("config priorities: order, labels, colour classes; the kinds stay fixed", () 
   P.applyConfig(null);
 });
 ok("an empty board lists nothing", () => { P.items.clear(); assert.equal(show(), ""); });
+ok("Blocked on you is one folded line with the count; a tap opens the list", () => {
+  const src = require("node:fs").readFileSync(require("./_page.js").pageFile, "utf8");
+  assert.ok(src.includes('h("details", { class: "bfold" }, h("summary", null, "Blocked on you ", h("span", { class: "n", text: String(rows.length) })), list)'));
+  assert.ok(src.includes("fold.open = open;"));
+  assert.ok(src.includes('"Nothing is blocked on you."'));
+  assert.ok(src.includes('<section id="blocked" class="blocked" aria-label="Blocked on you"></section>'));
+});

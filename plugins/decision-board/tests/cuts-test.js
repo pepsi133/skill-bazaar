@@ -72,3 +72,6 @@ ok("page times come only from the time section and the clock helpers", () => {
   const refresh = fs.readFileSync(path.join(__dirname, "..", "skills", "board-refresh", "scripts", "refresh.mjs"), "utf8");
   assert.ok(!refresh.includes("toISOString(") && !/\.get(Full)?(Year|Month|Date|Day|Hours|Minutes|Seconds|Milliseconds|TimezoneOffset)\(/.test(refresh), "refresh.mjs");
 });
+ok("the old Done box is gone: no #cards, #done, #donelist or #donesum", () => {
+  assert.ok(!/id="cards"|id="done"|id="donelist"|id="donesum"|\$\("done"\)|\$\("cards"\)/.test(src));
+});

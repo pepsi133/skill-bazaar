@@ -6,7 +6,8 @@ answers on a phone or in a browser and presses Send. The agent reads the answers
 the batch handled.
 
 One unchanged page serves many uses. A config, kept in `board/config.json` and optional layers
-around it, merged by `check` and written to the database, sets the title, the tabs, the priorities and the tags.
+around it, merged by `check` and written to the database, sets the title, the tabs, the groups and
+their order, the priorities and the tags. Cards due today show in a strip at the top.
 
 ## Start a board
 
@@ -65,11 +66,13 @@ The tests need only Node 18 or later, no packages. Each exits with 1 when a chec
 
 - `tests/*-test.js` run the part of the page between "pure: start" and "pure: end" in a Node
   sandbox, through `tests/_page.js`: the schema checks, the config, tabs and guides, card states,
-  the cards document, the Done section, what Send takes and the batch it
+  the cards document, the groups and the sort order, what Send takes and the batch it
   writes, and the text formatter. `render-test.js` runs the links, tags and age line of a card,
   the reference sanitizer, and the list of places that write HTML against a small DOM stub.
-  `cuts-test.js` checks that removed features stay removed. `tests/time-test.js` covers the time
-  stamps, the zone and DST. They take another page file as their first argument.
+  `cuts-test.js` checks that removed features stay removed. `due-test.js` covers the due dates,
+  the week start and the Due today strip, `groups-test.js` the groups and the sort.
+  `tests/time-test.js` covers the time stamps, the zone and DST. They take another page file as
+  their first argument.
 - `tests/board-test.mjs` runs every command of the script against the fixture state and dump in
   `tests/fixtures/` and applies the printed writes to a stand-in database (`tests/fakedb.mjs`),
   which refuses a write pinned to the wrong version as the real one does.

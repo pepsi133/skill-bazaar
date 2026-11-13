@@ -16,6 +16,7 @@ description: Refresh the cards of a decision board from outside sources, such as
    default (`gh issue list` returns 30 rows and states no total) needs its own limit flag, or a short
    fetch closes cards. Rows stay as fetched: every change goes through the map or an override.
 2. **Write the map** (next section), with the tag and priority ids of the `config ids:` line that `node S check` prints.
+   For a new source, read `references/maps.md` first.
 3. **Map.** Run
    `node R map board/rows/tracker.json --map board/maps/tracker.json --source tracker --out board/tracker.json --config board/config.merged.json`
    (written by `check` of the decision-board skill).
@@ -30,9 +31,9 @@ description: Refresh the cards of a decision board from outside sources, such as
    For what a map cannot decide, write `board/overrides/tracker.json`:
    `{"<card id>": {"priority": "now", "tags": [...], "summary": "...", "drop": true}}`, keyed by the
    id from the `--out` file or the row's raw key. An override may set `priority`, `tags`, `summary`,
-   `title`, `kind`, `options`, `recommendation`, `blocks`, `evidence`, `status` (`"closed"` only)
-   and `drop` (`true` leaves the card out). It wins for the fields it names; its `tags` replace the
-   map's. Map again with `--overrides <file>`.
+   `title`, `kind`, `options`, `recommendation`, `blocks`, `evidence`, `due`, `draft`, `draft_label`,
+   `status` (`"closed"` only) and `drop` (`true` leaves the card out). It wins for the fields it names; its
+   `tags` replace the map's. Map again with `--overrides <file>`.
 6. **Sync** with `node S sync board/tracker.json --source tracker` (the `--source` given
    to `map`), as the decision-board skill says. If sync refuses to close cards, check the fetch first;
    add `--allow-close` only when those closes are real. A card closed on the page reopens while its
@@ -51,10 +52,15 @@ a row field. A dotted name reaches into an object (`author.login`) and over a li
 ```
 
 `key`, `title`, `url` and `created` are required. Optional: `who`, `kind` (default `action`; a
-`decision` needs `options` from an override, else the row is skipped), `closed`, `tags`, and `rows`
-(the field that holds the list when the export wraps it). A rule matches when the field, or an
+`decision` needs `options` from an override, else the row is skipped), `closed`, `tags`,
+`priority` (rules like `tags`, each with `"priority": <config priority id>`; the first that matches sets it),
+`due` (a row field, read like `created`; a value that cannot be read leaves the card without a due date and
+prints `note: <key>: due not read`), `summary` (a row field, cut to 300 characters), `draft` (a row field,
+kept byte for byte), and `rows` (the field that holds the list when the export wraps it). A rule matches when the field, or an
 element of it, equals a value, case ignored. `created` takes a date, an ISO timestamp, or epoch
 seconds or milliseconds. The url must be `https:` on a host of `link_hosts`.
+A chat source (Teams, Slack) has no due date: leave out `due` and the groups place its cards by priority;
+never infer a date, and set `due` in an override only when the message text states one.
 
 The card id is `<source>-<key>`, stable across runs (a key outside the id characters gets a short
 hash). The link label is `<source> <key>`.

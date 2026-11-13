@@ -7,6 +7,7 @@ const { pageFile, cut, load, ok } = require("./_page.js");
 // ---- a DOM stub: elements, text, attributes, and a record of every HTML write
 const htmlWrites = [];
 class Text { constructor(t) { this.nodeType = 3; this.data = t; this.parentNode = null; } get textContent() { return this.data; } remove() { El.prototype.remove.call(this); } }
+const holds = (a, b) => { for (; b; b = b.parentNode) if (b === a) return true; return false; };
 class El {
   constructor(tag) { this.localName = tag; this.nodeType = 1; this.childNodes = []; this.attrs = new Map(); this.parentNode = null; }
   get attributes() { return Array.from(this.attrs, ([name, value]) => ({ name, value })); }
@@ -19,12 +20,18 @@ class El {
   get children() { return this.childNodes.filter((c) => c.nodeType === 1); }
   appendChild(c) { if (c.parentNode) c.remove(); c.parentNode = this; this.childNodes.push(c); return c; }
   append(...k) { k.forEach((c) => this.appendChild(typeof c === "string" ? new Text(c) : c)); }
-  insertBefore(c, ref) { if (c.parentNode) c.remove(); c.parentNode = this; this.childNodes.splice(this.childNodes.indexOf(ref), 0, c); return c; }
-  remove() { const p = this.parentNode; if (p) { p.childNodes.splice(p.childNodes.indexOf(this), 1); this.parentNode = null; } }
+  insertBefore(c, ref) { if (c.parentNode) c.remove(); c.parentNode = this; const i = ref ? this.childNodes.indexOf(ref) : -1; if (i < 0) this.childNodes.push(c); else this.childNodes.splice(i, 0, c); return c; }
+  remove() { const p = this.parentNode; if (p) { if (holds(this, document.activeElement)) document.activeElement = document.body; p.childNodes.splice(p.childNodes.indexOf(this), 1); this.parentNode = null; } }
   get textContent() { return this.childNodes.map((c) => c.textContent).join(""); }
   set textContent(v) { this.childNodes.forEach((c) => (c.parentNode = null)); this.childNodes = []; if (v !== "") this.appendChild(new Text(String(v))); }
   set innerHTML(v) { htmlWrites.push(v); }
-  addEventListener() {}
+  addEventListener(type, fn) { (this.listeners = this.listeners || {})[type] = fn; }
+  focus() { document.activeElement = this; }
+  get classList() { const el = this, has = () => (el.getAttribute("class") || "").split(" ").filter(Boolean);
+    return { contains: (c) => has().includes(c), toggle: (c, on) => { const l = has().filter((x) => x !== c); if (on === undefined ? !has().includes(c) : on) l.push(c); el.setAttribute("class", l.join(" ")); } }; }
+  // "tag.class" selectors only, enough for the page's closest("details.grp").
+  closest(sel) { const [tag, cls] = sel.split("."); for (let e = this; e && e.nodeType === 1; e = e.parentNode) if (e.localName === tag && (!cls || e.classList.contains(cls))) return e; return null; }
+  get isConnected() { return holds(document.body, this); }
   querySelectorAll(tag) { const out = [], walk = (n) => n.children.forEach((c) => { if (c.localName === tag) out.push(c); walk(c); }); walk(this); return out; }
 }
 // A tiny HTML parser for the sanitizer cases: tags, quoted attributes, text. Enough for the inputs below, nothing more.
@@ -47,10 +54,19 @@ function parse(html) {
   }
   return { body, createElement: (t) => new El(t) };
 }
-const document = { createElement: (t) => new El(t), createDocumentFragment: () => new El("#fragment"), adoptNode: (n) => n };
+const document = { createElement: (t) => new El(t), createDocumentFragment: () => new El("#fragment"), adoptNode: (n) => n,
+  body: new El("body"), activeElement: null, contains(n) { return holds(this.body, n); },
+  createTextNode: (t) => new Text(t), querySelector: () => null, documentElement: { style: { setProperty() {} } } };
+document.activeElement = document.body;
 const DOMParser = class { parseFromString(s) { return parse(s); } };
-const P = load({ document, DOMParser },
-  cut("  function h(tag, attrs)", "  function fmt(s)") + cut("  function set(s)", "  // ---- cards. Every DOM id") + cut("  function renderMeta", "  function updateCard"));
+const ids = {};
+const copied = [];
+const P = load({ document, DOMParser,
+  navigator: { clipboard: { writeText: (s) => { copied.push(s); return Promise.resolve(); } } },
+  setTimeout: () => 0, window: {}, cards: new Map(),
+  buildCard: (it) => { const ta = new El("textarea"), el = new El("article"); el.appendChild(ta); return { el, ta }; },
+  updateCard: () => {}, brokenCard: () => new El("article"), $: (id) => ids[id] },
+  cut("  function h(tag, attrs)", "  function fmt(s)") + cut("  function set(s)", "  // ---- cards. Every DOM id") + cut("  function renderMeta", "  function updateCard") + cut("  // Give focus back to el when a DOM move took it away", "  var blockedKey = null;"));
 
 const find = (n, tag) => n.querySelectorAll(tag);
 const card = () => ({ chips: new El("div"), links: new El("div"), asked: new El("div") });
@@ -121,4 +137,126 @@ ok("the footer names where the settings live", () => {
   assert.equal(Q.cfg.settings, "");
   Q.applyConfig({ tz: "UTC" });
   assert.equal(Q.cfg.settings, "");
+});
+ok("CSS: one [hidden] rule hides every element, whatever its display", () => {
+  const src = fs.readFileSync(pageFile, "utf8");
+  assert.equal(src.split("[hidden] { display: none !important; }").length - 1, 1);
+  assert.ok(!/\.donebox\[hidden\]|\.guide\[hidden\]|\.links\[hidden\]/.test(src));
+});
+ok("draft: the box shows the field as text, and Copy passes the stored field to the clipboard byte for byte", () => {
+  const s = "Hi Sam,\r\n\n  indented\tTab  \n```\nnot a fence\n```\n<b>x</b> — ✓  ", c = {};
+  P.buildDraft(c);
+  assert.equal(c.draft.hidden, true, "hidden before any render");
+  c.it = P.coerce("item", { id: "a", draft: s, draft_label: "Reply <i>here</i>" });
+  P.renderDraft(c, c.it);
+  assert.equal(c.draft.hidden, false);
+  assert.equal(c.dpre.textContent, s);
+  assert.equal(c.dlabel.textContent, "Reply <i>here</i>");
+  c.dcopy.listeners.click();
+  assert.deepEqual(copied, [s]);
+  assert.equal(copied[0].length, s.length);
+  assert.deepEqual(htmlWrites, []);
+  P.renderDraft(c, P.coerce("item", { id: "a" }));
+  assert.equal(c.draft.hidden, true);
+  assert.equal(c.dpre.textContent, "");
+});
+ok("groups: a card that moves to a later group while its text box has focus keeps the focus", () => {
+  ids.groups = new El("div"); document.body.appendChild(ids.groups);
+  const x = P.coerce("item", { id: "x" }), G = (a, b) => [{ id: "ga", label: "A", fold: false, cards: a }, { id: "gb", label: "B", fold: false, cards: b }];
+  P.renderGroups(G([x], []));
+  const ta = P.cards.get("x").ta; ta.focus();
+  assert.equal(document.activeElement, ta);
+  P.renderGroups(G([], [x]));
+  assert.equal(document.activeElement, ta);
+  assert.equal(P.cards.get("x").el.parentNode, P.groupEls.get("gb").list);
+  assert.equal(P.groupEls.get("ga").el.hidden, true);
+  P.renderGroups(G([x], []));
+  assert.equal(document.activeElement, ta);
+  assert.deepEqual(htmlWrites, []);
+});
+ok("groups: one focus snapshot for every group list, and one restore at the end", () => {
+  const listA = new El("div"), listB = new El("div"), x = P.coerce("item", { id: "y" });
+  document.body.appendChild(listA); document.body.appendChild(listB);
+  P.placeCards(listA, [x]);
+  const ta = P.cards.get("y").ta; ta.focus();
+  P.placeCards(listA, [], ta);
+  assert.equal(document.activeElement, document.body, "the move out of listA drops focus");
+  P.placeCards(listB, [x], ta);
+  assert.equal(document.activeElement, ta, "placeCards restores the focus it was given");
+  // renderGroups passes its one snapshot to every placeCards call and restores it once more at the end.
+  const real = P.placeCards, seen = [];
+  P.placeCards = (cont, list, focused) => { seen.push(focused); real(cont, list, focused); document.activeElement = document.body; };
+  try {
+    const G = (a, b) => [{ id: "ga", label: "A", fold: false, cards: a }, { id: "gb", label: "B", fold: false, cards: b }];
+    P.renderGroups(G([x], []));
+    ta.focus();
+    seen.length = 0;
+    P.renderGroups(G([], [x]));
+    assert.equal(seen.length, 2);
+    assert.ok(seen.every((f) => f === ta), "every group list gets the snapshot taken before the first");
+    assert.equal(document.activeElement, ta, "the end of renderGroups restores the focus");
+  } finally { P.placeCards = real; }
+  listA.remove(); listB.remove();
+});
+ok("the side list shows only with two or more groups that hold a card, and never on a guide tab", () => {
+  ids.side = new El("nav"); ids.board = new El("div");
+  const g = (id, n) => ({ id, label: id, fold: false, cards: Array.from({ length: n }, (_, i) => ({ id: id + i })) });
+  P.renderSide([g("a", 2), g("b", 0)], false);
+  assert.deepEqual([ids.side.hidden, ids.board.classList.contains("has-side")], [true, false]);
+  P.renderSide([g("a", 2), g("b", 1)], false);
+  assert.deepEqual([ids.side.hidden, ids.board.classList.contains("has-side"), ids.side.children.length], [false, true, 2]);
+  P.renderSide([g("a", 2), g("b", 1)], true);
+  assert.equal(ids.side.hidden, true);
+});
+// A second sandbox for render, updateCard, renderDue and goToCard: the other DOM functions of render are stubs.
+const qids = {}, shown = { groups: null, view: [] };
+const Q = load({ document, DOMParser, navigator: { clipboard: { writeText: () => Promise.resolve() } }, setTimeout: () => 0, window: {},
+  cards: new Map(), cardDocs: new Map(), meta: null, sending: false, dueKey: null, lastDay: "", lastWeek: 0,
+  $: (id) => qids[id] || (qids[id] = new El("div")), fmt: () => "", ready: () => false, saveFilter: () => {},
+  renderGuide: () => {}, renderTabs: () => {}, renderArchived: () => {}, renderBlocked: () => {}, renderSide: () => {}, renderNotes: () => {}, renderSync: () => {},
+  renderGroups: (g) => { shown.groups = g; }, bringIntoView: (el) => { shown.view.push(el); } },
+  cut("  function h(tag, attrs)", "  function fmt(s)") + cut("  function set(s)", "  // ---- cards. Every DOM id") +
+  cut("  function setSave(c, t)", "  function updateCard") + cut("  function updateCard(c, it)", "  // A card that fails to render") +
+  cut("  function render() {", "  // Give focus back to el") + cut('  // "Due today": a link per card', "  // Scroll an element to just below"));
+// A card object whose every DOM part is a stub element.
+const cardObj = () => new Proxy({}, { get: (o, k) => (k in o || typeof k !== "string" ? o[k] : (o[k] = new El("div"))) });
+
+ok("the due strip and the card due tag use the day of the config tz, not of UTC", () => {
+  Q.applyConfig({ tz: "Europe/Warsaw" });
+  Q.items.clear();
+  const it = Q.coerce("item", { id: "a", title: "Renew", due: "2026-11-14", priority: "soon" });
+  Q.items.set("a", it);
+  Q.clockMs = () => Date.UTC(2026, 10, 13, 23, 1); // 00:01 on 11-14 in Warsaw, still 11-13 in UTC
+  Q.render();
+  assert.equal(Q.lastDay, "2026-11-14");
+  assert.equal(qids.settings.hidden, true, "#settings is hidden while the config has no settings line");
+  assert.equal(qids.due.hidden, false);
+  assert.ok(qids.due.textContent.includes("Due today"), qids.due.textContent);
+  const c = cardObj();
+  Q.updateCard(c, it);
+  assert.deepEqual([c.due.textContent, c.due.hidden, c.due.getAttribute("class")], ["Due today", false, "tag now"]);
+  htmlWrites.length = 0;
+  Q.applyConfig({ tz: "UTC" });
+});
+ok("the due strip hides when no card is due", () => {
+  Q.applyConfig({ tz: "UTC" });
+  Q.renderDue([Q.coerce("item", { id: "a", due: "2026-11-13" })], "2026-11-13");
+  assert.equal(qids.due.hidden, false);
+  Q.renderDue([], "2026-11-13");
+  assert.equal(qids.due.hidden, true);
+  assert.equal(qids.due.textContent, "");
+});
+ok("goToCard unfolds the folded group of the card, then scrolls to it", () => {
+  Q.applyConfig({ tz: "UTC" });
+  Q.items.clear();
+  Q.items.set("d", Q.coerce("item", { id: "d", status: "closed" }));
+  const el = new El("article"), fold = new El("details");
+  fold.className = "grp"; fold.appendChild(el); document.body.appendChild(fold);
+  Q.cards.set("d", { el });
+  shown.view.length = 0;
+  Q.goToCard("d");
+  assert.equal(fold.open, true);
+  assert.deepEqual(shown.view, [el]);
+  fold.remove();
+  Q.items.clear(); Q.cards.clear();
 });
