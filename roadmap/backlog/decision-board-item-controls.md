@@ -17,7 +17,7 @@ card for good or to ask the agent to close the source item.
 Controls on top of the card kind. Config `controls` turns each one on. Every change goes
 into the same batch as the answers.
 
-- `assign`: a select. Default list `me`, `agent`, `other`; config `people` adds names.
+- `assign`: a select. Default list `me`, `agent`, `other`. Config `people` adds names.
   `other` means "not ours": the card leaves the board and the agent stops tracking it.
 - `snooze`: +1 day, +1 week, or a date. The card does not vanish: it stays in place for a
   short time, then folds into a slim snoozed row with its wake date. The interaction must

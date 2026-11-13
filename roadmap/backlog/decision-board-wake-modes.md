@@ -10,7 +10,8 @@ created: 2026-11-13
 
 The agent learns about new answers only from a background watcher that polls every 120 s
 until a poll limit. Each tick is an agent turn with two database calls and one script call.
-An idle board still costs tokens, and the interval and the limit are fixed in the brief.
+An idle board still costs tokens. The 120 s interval is fixed in `SKILL.md`, and the poll
+limit has no config key.
 
 A comment wake costs nothing while idle, but it has failed in practice. One cause was prose
 only: the agent judged a comment by its text and its time stamp and did not read the
