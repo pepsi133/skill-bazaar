@@ -165,6 +165,8 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 4
 textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; }
 .foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; min-height: 18px; }
 .page-foot { margin-top: 24px; padding: 12px 0; }
+.page-foot span { display: block; }
+.page-foot span[hidden] { display: none; }
 .empty { padding: 28px 8px; text-align: center; color: var(--muted); }
 .msg { padding: 8px 10px; border-radius: 6px; background: var(--now-bg); color: var(--now); }
 .notes { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
@@ -210,7 +212,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     <div id="nlist" class="nlist"></div>
   </section>
   <section id="archived" class="notes" hidden aria-label="Archived guides"></section>
-  <footer id="foot" class="page-foot"><span id="zone" class="small muted"></span></footer>
+  <footer id="foot" class="page-foot"><span id="zone" class="small muted"></span><span id="settings" class="small muted" hidden></span></footer>
 </main>
 
 <script>
@@ -429,7 +431,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     domains: [],
     link_hosts: [],
     tags: [],
-    tz: "Europe/Warsaw"
+    tz: "Europe/Warsaw",
+    settings: ""
   };
   // A config list: at most SCHEMA.max.list entries. A list of {id, label}: drop entries without a text id and later duplicates.
   function cfgList(a) { return Array.isArray(a) ? a.slice(0, SCHEMA.max.list) : []; }
@@ -474,6 +477,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     out.tags = idList(g("tags")).map(function (x) { return { id: x.id, label: x.label || x.id }; });
     // The time zone of every stamp and of every time shown. A bad name or a fixed offset keeps the default.
     out.tz = normTz(g("tz")) || DEFAULTS.tz;
+    // The footer line that check writes: where the settings live.
+    out.settings = str(g("settings")).slice(0, 200);
     return out;
   }
   // A host entry has two labels or more. An entry of digits and dots is a full IPv4 address. A
@@ -984,6 +989,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
       : (loaded.batches ? "Nothing sent yet" : "");
     $("refreshed").textContent = refreshedText(cardDocs.get(SCHEMA.cardsDoc), fmt);
     $("zone").textContent = zoneNote(cfg.tz);
+    $("settings").textContent = cfg.settings; $("settings").hidden = !cfg.settings;
     $("ttl").textContent = boardTitle(meta);
     document.title = boardTitle(meta);
     $("newnote").placeholder = "A message to " + cfg.agent + " that is not tied to an item. It goes out with the next batch.";

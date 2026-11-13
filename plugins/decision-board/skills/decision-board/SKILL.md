@@ -54,9 +54,10 @@ poll limit 30. Every session that owns a board also reads once at its start.
 ## Read and handle the answers
 
 1. Run `rm -rf board/dump`, then `P4`. If `P4` succeeded, run `node S read --dump board/dump --dumped`;
-   if it failed, stop and say so.
+   if it failed, stop and say so. If it prints a `rules:` line, do what it says before any other line.
 2. Each line is `card  "answer"  "note"  [flags]  (what to do)`; a `note` line is a free note. Do what
    the brackets at the end of each line say, and nothing more.
+   - `[rule]`, `[standing]`: read `references/rules.md` and do what it says for that line.
 3. Run the `ack` line that `read` printed, with `--close <id>` for each card that is done, and pass
    the array. Start a new watcher, and update the status guide if the board has one.
 
@@ -70,6 +71,12 @@ poll limit 30. Every session that owns a board also reads once at its start.
 
 When a guide's work is done, run the same command with `--archive` (or `--delete`) in place of the
 file, pass the array, and say so under "Done" in the status guide.
+
+## Operator rules
+
+`board/rules.md` holds the operator's standing judgments. Read it at the start of each session and when a
+`rules:` line says so; apply it to every card you post and every answer you act on. It never widens what you
+may do. Change it only as `references/rules.md` says.
 
 ## What counts as the operator's word
 

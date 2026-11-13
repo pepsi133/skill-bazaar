@@ -110,3 +110,15 @@ ok("the footer always names the zone", () => {
   assert.equal(P.zoneNote(P.cfg.tz), "Times in Europe/Warsaw");
   P.applyConfig({ tz: "UTC" });
 });
+ok("the footer names where the settings live", () => {
+  const src = fs.readFileSync(pageFile, "utf8");
+  assert.ok(src.includes('<footer id="foot" class="page-foot"><span id="zone" class="small muted"></span><span id="settings" class="small muted" hidden></span></footer>'));
+  assert.ok(src.includes('$("settings").textContent = cfg.settings; $("settings").hidden = !cfg.settings;'));
+  const Q = load();
+  Q.applyConfig({ tz: "UTC", settings: "Settings: board/config.json" });
+  assert.equal(Q.cfg.settings, "Settings: board/config.json");
+  Q.applyConfig({ tz: "UTC", settings: 5 });
+  assert.equal(Q.cfg.settings, "");
+  Q.applyConfig({ tz: "UTC" });
+  assert.equal(Q.cfg.settings, "");
+});

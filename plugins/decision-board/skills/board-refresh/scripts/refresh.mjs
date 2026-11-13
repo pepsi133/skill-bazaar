@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const SELF = path.relative(process.cwd(), fileURLToPath(import.meta.url)) || "refresh.mjs";
 const DEFAULT_TZ = "Europe/Warsaw"; // the same as DEFAULTS.tz in board.html; refresh-test checks that they agree
 const USAGE = `Usage: node ${SELF} <command> ...
-  map <rows.json> --map <map.json> --source <name> --out <cards.json> [--overrides <file>] [--config <board/config.json>]
+  map <rows.json> --map <map.json> --source <name> --out <cards.json> [--overrides <file>] [--config <board/config.merged.json>]
       [--details <file>] [--min-rows <n>] [--allow-skipped]
       turn the rows of one source into a full card file for \`board.mjs sync <cards.json> --source <name>\`.
       The details go to <out>.details.json unless --details names another file.
