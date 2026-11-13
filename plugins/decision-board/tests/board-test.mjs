@@ -683,6 +683,15 @@ ok("waiting: the ids of the batches that wait, against the fake database", () =>
   apply(b, dumped(b, "ack", BB));
   assert.deepEqual(wait(b).lines, ["none"]);
   assert.deepEqual(sh("waiting", "--dump", path.join(b.dir, "watch-dump")).lines, ["none"], "a missing dump folder is empty");
+  const f = path.join(b.dir, "a-file");
+  fs.writeFileSync(f, "{}");
+  for (const r of [sh("waiting", "--dump", f), cmd(b, "read", "--dump", f, "--dumped"), cmd(b, "ack", BB, "--dump", f)])
+    assert.deepEqual([r.code, r.lines], [1, [`--dump ${f}: not a folder. Give the dump folder`]], "one line, no stack trace");
+});
+ok("ack of a batch that is neither in the dump nor pending says it may be handled or not dumped", () => {
+  const b = fresh();
+  assert.deepEqual(cmd(b, "ack", "b-gone", "--dump", path.join(b.dir, "none")).lines, ["ack: no batch b-gone in the dump: already handled or not dumped"]);
+  assert.deepEqual(cmd(b, "ack", "b\ngone", "--dump", path.join(b.dir, "none")).lines, ['ack: "b\\ngone" is not a batch id'], "refused, the argument quoted");
 });
 ok("guide: the version comes from the state, else from the dump; only changed sections get a new time; --item names the card", () => {
   const b = fresh(), md = path.join(tmp, "status.md");
@@ -959,6 +968,11 @@ ok("check: tz is checked; the first line names the zone", () => {
   const r = cmd(b, "check");
   assert.equal(r.code, 1);
   assert.ok(r.lines.includes("problem: config tz: \"Mars/Base\" is not a time zone name such as \"Europe/Warsaw\" or \"UTC\""), r.text);
+  for (const [v, shownAs] of [[5, "5"], [true, "true"], [["UTC"], '["UTC"]']]) {
+    cfgOf(b, (x) => { x.tz = v; });
+    const t = cmd(b, "check");
+    assert.ok(t.lines.includes(`problem: config tz: ${shownAs} is not a time zone name such as "Europe/Warsaw" or "UTC"`), "a value that is not text, as JSON: " + t.text);
+  }
   cfgOf(b, (x) => { x.tz = "Europe/Warsaw"; });
   assert.match(cmd(b, "check").lines[0], /; times in Europe\/Warsaw$/);
   cfgOf(b, (x) => { delete x.tz; });
@@ -1471,9 +1485,17 @@ ok("a lost ack: read and ack name push for the pending write; push completes it,
   const before = fs.readFileSync(b.state, "utf8"), again = dumped(b, "ack", "b-lost");
   assert.deepEqual(again.lines, [HINT, "no writes"]);
   assert.equal(fs.readFileSync(b.state, "utf8"), before, "no state byte changes");
-  const pushed = cmd(b, "push", "batches/b-lost");
-  assert.deepEqual(writesOf(pushed.lines), writesOf(first.lines), "push prints the write again");
+  const pin = state(b).pending.cards.if_version, pushed = cmd(b, "push", "batches/b-lost"), pw = writesOf(pushed.lines);
+  assert.equal(pw.length, 1, pushed.text);
+  assert.deepEqual(pw[0][0], writesOf(first.lines)[0][0], "push prints the batch update again as it was printed");
+  assert.deepEqual([pw[0][1].collection, pw[0][1].if_version, JSON.parse(fs.readFileSync(pw[0][1].file_path, "utf8")).cards], ["cards", pin, state(b).cards],
+    "and a cards write built now from the state, pinned as the last cards write was");
+  assert.equal(state(b).pending["batches/b-lost"].cards, true, "the pending ack keeps its flag");
+  assert.equal(JSON.stringify(state(b).pending["batches/b-lost"]).includes('"cards","doc_id"'), false, "and no cards write");
+  // The ack's array never landed and nobody else wrote: the board is still at the ack's own cards pin, so the push lands.
+  assert.equal(doc(b, "cards", "main").version, pin);
   apply(b, pushed);
+  assert.deepEqual([doc(b, "batches", "b-lost").data.status, doc(b, "cards", "main").data.cards.find((c) => c.id === "tracker-7").status], ["handled", "closed"]);
   const done = ok2(b, "read");
   assert.deepEqual(done.lines, ["decisions.md: the answers of b-lost", "no batches waiting"]);
   assert.deepEqual(ok2(b, "read").lines, ["no batches waiting"], "logged once");
@@ -1683,6 +1705,18 @@ ok("ack --result: a second ack of a handled batch still stores the result", () =
   const ws = apply(b, r);
   assert.deepEqual(ws.map((w) => [w.op, w.collection, w.doc_id]), [["set", "cards", "main"]]);
   assert.equal(card(b, "disk-size").result, "done");
+  // --close on a handled batch is not applied, and says which close to run; the results are still stored.
+  const st = " --state " + JSON.stringify(b.state), c = dumped(b, "ack", BB, "--close", "disk-size", "--result", "disk-size", "done again");
+  assert.deepEqual(c.lines.slice(0, 3), [`ack ${BB}: already handled, 1 results stored`, '  result disk-size: "done again"',
+    `ack ${BB}: --close disk-size not applied. Run: node ${SELF} close disk-size${st}`], c.text);
+  assert.deepEqual([card(b, "disk-size").status, card(b, "disk-size").result], ["open", "done again"]);
+  assert.deepEqual(dumped(b, "ack", BB, "--close", "disk-size").lines, [`ack ${BB}: already handled`, `ack ${BB}: --close disk-size not applied. Run: node ${SELF} close disk-size${st}`, "no writes"]);
+  const before = fs.readFileSync(b.state, "utf8"), nope = dumped(b, "ack", BB, "--close", "nope", "--result", "disk-size", "x");
+  assert.deepEqual([nope.code, nope.lines], [1, [`ack: no card nope in ${b.state}`]], "a --close of a card that does not exist is refused as on the normal path");
+  assert.equal(fs.readFileSync(b.state, "utf8"), before, "nothing stored");
+  // A batch id or a --close id that is not a plain id never reaches a command line: refused, quoted as display text.
+  assert.deepEqual(dumped(b, "ack", "b y", "--close", "disk-size").lines, ['ack: "b y" is not a batch id']);
+  assert.deepEqual(dumped(b, "ack", BB, "--close", "$(x)").lines, ['ack --close: "$(x)" is not a card id']);
 });
 ok("the status guide line shows only when the config turns it on", () => {
   let b = fresh();
