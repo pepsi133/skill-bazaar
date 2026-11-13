@@ -55,7 +55,7 @@ ok("no toISOString and no UTC stamp writer", () => {
   for (const [name, s] of [["page", src], ["board.mjs", script], ["refresh.mjs", refresh]]) assert.ok(!s.includes("toISOString("), name);
   assert.ok(!/date -u/.test(fs.readFileSync(path.join(skill, "assets", "wait.sh"), "utf8")), "wait.sh");
 });
-// A later cluster adds no Date use outside the time section and the clock helpers; it calls them instead.
+// New page code adds no Date use outside the time section and the clock helpers; it calls them instead.
 ok("page times come only from the time section and the clock helpers", () => {
   const helpers = [/^  function clockMs\(\) \{ return Date\.now\(\); \}$/m,
     /^  function nowStamp\(\) \{ return stampIn\(clockMs\(\), cfg\.tz, true\); \}$/m,

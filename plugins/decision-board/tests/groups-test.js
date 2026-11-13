@@ -26,7 +26,7 @@ ok("no groups in the config: the six default groups, in order", () => {
   }
   assert.ok("groups" in P.DEFAULTS && "sort" in P.DEFAULTS && "week_start" in P.DEFAULTS);
 });
-ok("the hooks that C2 builds on: cardState and the tail groups", () => {
+ok("cardState takes one card and gives active or done; groupCards takes a list and a time and ends with the tail groups _other and _done", () => {
   assert.equal(typeof P.cardState, "function");
   assert.equal(P.cardState.length, 1);
   assert.equal(P.isActive.length, 1);

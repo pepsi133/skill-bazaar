@@ -230,4 +230,31 @@ P.applyConfig({ tz: "UTC" });
     assert.deepEqual(plain(S.batchDoc("b2", "t", S.sendable()).controlIds), []);
   });
   S.applyConfig({ tz: "UTC" });
+  // A slow Send: the batch write is held, the operator changes a tag meanwhile, then the write lands.
+  const w2 = [];
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const T = load({ lastDoc: new Map(), idStamp: () => "20261113T120000+0000", rid: () => "abcd", nowStamp: () => "2026-11-13T12:00:00.000+00:00",
+    enqueue: (k, fn) => Promise.resolve().then(fn),
+    db: { doc: (p) => ({ set: (d) => { w2.push([p, JSON.parse(JSON.stringify(d))]); return p.startsWith("batches/") ? held : Promise.resolve(); }, update: () => Promise.resolve() }) } },
+    cut("  function sendGroup(s)", "  function send()"));
+  T.applyConfig(CONF()); T.setCtlDay("2026-11-13");
+  T.items.set("a", T.coerce("item", { id: "a", title: "Q a", options: ["Yes", "No"], status: "open" }));
+  T.resp.set("a", T.withControls(null, "a", { assign: "jane" }, 1, "2026-11-13T11:00:00.000+00:00"));
+  const going = T.sendGroup(T.sendable());
+  T.resp.set("a", T.withControls(T.resp.get("a"), "a", { tags_on: ["cost"] }, 1, "2026-11-13T11:59:00.000+00:00"));
+  release();
+  await going;
+  ok("a control changed during a slow Send is not sent twice: the next batch carries the tag change and not the assign", () => {
+    const first = w2.find(([p]) => p.startsWith("batches/"))[1];
+    assert.equal(first.controls.a.assign, "jane");
+    assert.equal("tags_on" in first.controls.a, false);
+    const r = T.resp.get("a");
+    assert.deepEqual([r.controls_sent.assign, plain(r.controls_sent.tags_on), plain(r.controls.tags_on)], ["jane", [], ["cost"]]);
+    const next = plain(T.batchDoc("b2", "t", T.sendable()));
+    assert.deepEqual(next.controlIds, ["a"]);
+    assert.deepEqual(next.controls.a.tags_on, ["cost"]);
+    assert.equal("assign" in next.controls.a, false, JSON.stringify(next.controls.a));
+  });
+  T.applyConfig({ tz: "UTC" });
 })().catch((e) => { console.error(e); process.exit(1); });

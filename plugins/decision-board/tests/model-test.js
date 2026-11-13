@@ -60,7 +60,7 @@ ok("the batch carries a copy of the answers and notes", () => {
   const s = { r: [response("x", { choice: "No", note: "n", rev: 2 })], n: [P.coerce("note", { id: "n1", text: "hi", item: "x" })] };
   assert.deepEqual(plain(P.batchDoc("b1", "t", s)), { id: "b1", created: "t", itemIds: ["x"], noteIds: ["n1"], controlIds: [],
     answers: { x: { answer: "No", note: "n", rev: 2 } }, notes: { n1: { text: "hi", item: "x" } }, controls: {}, status: "sent" });
-  // A missing list is empty. Field by field, so a field a later cluster adds does not break this.
+  // A missing list is empty. Field by field, so a field added to the schema later does not break this.
   const empty = plain(P.batchDoc("b1", "t", {}));
   assert.deepEqual(empty.itemIds, []);
   assert.deepEqual(empty.noteIds, []);
