@@ -15,9 +15,10 @@ description: Refresh the cards of a decision board from outside sources, such as
    states its total, compare it with your count and pass it as `--min-rows`. A CLI that pages by
    default (`gh issue list` returns 30 rows and states no total) needs its own limit flag, or a short
    fetch closes cards. Rows stay as fetched: every change goes through the map or an override.
-2. **Write the map** (next section), with the tag and priority ids of `board/config.json`.
+2. **Write the map** (next section), with the tag and priority ids of the `config ids:` line that `node S check` prints.
 3. **Map.** Run
-   `node R map board/rows/tracker.json --map board/maps/tracker.json --source tracker --out board/tracker.json --config board/config.json`.
+   `node R map board/rows/tracker.json --map board/maps/tracker.json --source tracker --out board/tracker.json --config board/config.merged.json`
+   (written by `check` of the decision-board skill).
    It prints one line: rows, cards, dropped, skipped, unused overrides, matches per rule. Skip reasons are in
    `board/tracker.json.details.json`. A skipped row, no rows, or fewer than `--min-rows` stops it
    without a card file. Pass `--allow-skipped` only once you know each skipped row.
@@ -25,7 +26,8 @@ description: Refresh the cards of a decision board from outside sources, such as
    Each line is a key (a ticket key such as `OPS-7`, or a link URL) that cards of several files
    share. The script never merges: record each decision as an override, for example `{"drop": true}`
    on the copy.
-5. **Judge.** For what a map cannot decide, write `board/overrides/tracker.json`:
+5. **Judge.** Apply the operator's rules in `board/rules.md`, which you read at the start of the session.
+   For what a map cannot decide, write `board/overrides/tracker.json`:
    `{"<card id>": {"priority": "now", "tags": [...], "summary": "...", "drop": true}}`, keyed by the
    id from the `--out` file or the row's raw key. An override may set `priority`, `tags`, `summary`,
    `title`, `kind`, `options`, `recommendation`, `blocks`, `evidence`, `status` (`"closed"` only)

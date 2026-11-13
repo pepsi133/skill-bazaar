@@ -13,10 +13,22 @@ owner. A viewer reads the board and writes nothing.
 
 ## The config
 
-`board/config.json` is the one source of the board config: `check` writes it to `meta/config`, and
-`sync` checks cards against it. Every field but `link_hosts` is optional, and a missing or invalid
-field keeps its default. Lists keep their first 50 entries. The page reads `meta/config` live, so a
-change shows without a republish.
+`check` merges four layers, later ones win: the defaults in the table below; the user file
+`~/.config/decision-board/config.json` (`$XDG_CONFIG_HOME/decision-board/config.json` when that is set;
+`BOARD_USER_CONFIG` names another file, `""` turns it off); `board/config.json`; `board/config.local.json`.
+Keep private values that hold for every board on the machine (the time zone, hosts, tags, checks, names of
+people) in the user file, outside every repository. Each layer is optional, but one must exist.
+
+- An object merges key by key; a text or a list replaces. `"+tags": [...]` appends to the earlier list,
+  and an appended entry with the `id` of an earlier one replaces it in place. `null` removes a key. A key
+  that starts with `_` is a comment.
+- `check` prints the layer of each key and the tag and priority ids. It writes the merged keys to `meta/config`
+  (script-only keys stay off; `settings`, the footer line that names the layer files, is added) and the full
+  merged config with its defaults to `board/config.merged.json` (`checks` stay off), which
+  `refresh.mjs map --config` reads. That file is a derived copy: never edit or commit it. `sync` merges the layers
+  itself. Every field is optional; a missing or invalid field keeps its default.
+  Lists keep their first 50 entries. The page reads `meta/config` live: a change shows without a republish.
+  The page has no settings controls: change a setting in a layer file, then run `check`.
 
 | Field | Value | Default |
 |---|---|---|
@@ -25,9 +37,11 @@ change shows without a republish.
 | `agent` | The name on the Send button and in the note box | `Claude` |
 | `tabs` | A list of `{id, label, match, rest}` | the All tab only |
 | `priorities` | A list of `{id, label}` in sort order. The first three get the red, amber and grey tag | `now`, `soon`, `later` |
-| `link_hosts` | Required before the first card. The hosts card `links` may point to by `https:` | none |
+| `link_hosts` | The hosts card `links` may point to by `https:`. A card needs no link | none |
 | `tags` | A list of `{id, label}` that cards name in `tags` | none |
 | `domains` | Hosts a reference guide may load from by `https:`, for example `["docs.example.com"]`. Only the operator adds a host | none |
+| `checks` | Script only, never on the page: regex checks that `sync` runs on each open card, below | none |
+| `standing` | Script only: the words that make `read` flag a note `[standing]`; add words of your language with `"+standing"` | `always`, `never`, `from now on` |
 
 Host rules, for `link_hosts` and `domains`: a host has at least one dot and matches itself and its
 subdomains, on any port. An entry of digits and dots must be a full IPv4 address and matches only
@@ -39,6 +53,15 @@ of sources (matched after trim and lower case), and `tags`, a list of tag ids (m
 `rest: true` takes every card no other tab takes. A card belongs to one tab besides All: the first
 tab whose `match.source` lists its `source`, else the first whose `match.tags` lists one of its tags,
 else the first `rest` tab, else All only.
+
+### Checks
+
+Each check is `{id, field, match | forbid, except, flags, when, message}`: `field` is a card field
+(`links.url` and `first_asked.who` reach inside); `match` needs one value of the field to match; `forbid`
+refuses every occurrence it finds, except one where `except` matches starting at the same character; `flags`
+takes `i m s u`; `when` limits the check to `{"source": [...], "tags": [...]}`. At most 50 checks. Closed cards
+pass. `sync` refuses a card that fails and prints `<card>: check <id>: <message>`. Examples:
+`assets/config.example.json`, under `_examples`.
 
 ```json
 {"title": "Lab network", "tz": "Europe/Warsaw", "agent": "Coordinator", "link_hosts": ["wiki.example.com"], "tags": [{"id": "cost", "label": "Costs money"}],
@@ -57,6 +80,6 @@ else the first `rest` tab, else All only.
 | `responses` | the card id | the page | the draft answer, with the earlier sent answers in `history` |
 | `notes` | `n<compact stamp>-<4 chars>` | the page | a free note |
 | `batches` | `b<compact stamp>-<4 chars>` | the page creates it with `status: "sent"`; the agent's `ack` sets `status: "handled"` and `handled_at` | a copy of each answer and note |
-| `meta` | `config` | the agent: `check` | the config. (`meta/board` is still read for the title fallback; nothing writes it.) |
+| `meta` | `config` | the agent: `check` | the merged config of the layers, without script-only keys, with `settings`. (`meta/board` is still read for the title fallback; nothing writes it.) |
 
 A batch has `status` "sent" until `ack` sets "handled" and `handled_at`.

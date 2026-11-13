@@ -212,7 +212,7 @@
           <ul>
             <li><span class="term">Kinds.</span> Three, fixed. A <code>decision</code> has 2 to 8 options. An <code>action</code> asks you to do something outside the board. An <code>info</code> card only asks you to acknowledge.</li>
             <li><span class="term">Revision.</span> When the agent changes the question or the options, the card's <code>rev</code> goes up and the card shows "changed". An answer to an older <code>rev</code> does not count.</li>
-            <li><span class="term">Web links.</span> Every card carries 1 to 10 <code>links</code> to the work it is about. A link must be <code>https:</code> and point at a host on the config list <code>link_hosts</code>, which you set before the first card. The page checks each link again and drops one that does not pass.</li>
+            <li><span class="term">Web links.</span> A card carries up to 10 <code>links</code> to the work it is about. A link must be <code>https:</code> and point at a host on the config list <code>link_hosts</code>. The page checks each link again and drops one that does not pass.</li>
             <li><span class="term">Tags.</span> A card can name <code>tags</code> from the config list; the page shows each as a chip.</li>
             <li><span class="term">First asked.</span> An open card that is not <code>info</code> says when the question was first put to you, and by whom: "First asked 01-15 (infra-agent), 3 days", counted in calendar days of the board's time zone.</li>
             <li><span class="term">Source.</span> A card's <code>source</code> chooses its tab. <code>sync --source</code> closes the cards of a source that its new file no longer holds.</li>
@@ -237,7 +237,7 @@
           <tr><td><code>responses</code></td><td>Your draft answer per card, with its history</td><td class="who-you">the page, as you</td></tr>
           <tr><td><code>notes</code></td><td>Your free notes</td><td class="who-you">the page, as you</td></tr>
           <tr><td><code>batches</code></td><td>What you sent, with a copy of each answer. Status <code>sent</code>, until the agent's <code>ack</code> sets <code>handled</code></td><td class="who-you">the page, as you; the agent's ack</td></tr>
-          <tr><td><code>meta</code></td><td><code>config</code>: link hosts (required before the first card), title, time zone, tabs, priorities, tags, agent name, the hosts a reference guide may load from. The agent keeps it in <code>board/config.json</code> and writes it with <code>check</code></td><td class="who-you">you</td></tr>
+          <tr><td><code>meta</code></td><td><code>config</code>: link hosts, title, time zone, tabs, priorities, tags, agent name, the hosts a reference guide may load from. The agent keeps it in <code>board/config.json</code>, you may keep private values in a user file outside any repository, and <code>check</code> merges the layers and writes the result; the page footer names the files</td><td class="who-you">you</td></tr>
         </tbody>
       </table></div>
       <p class="muted" style="font-size:14px">Every time the script and the page write carries the offset of the config <code>tz</code>, such as <code>2026-11-13T13:31:08+01:00</code>, and every compare goes through the instant, so a daylight saving change cannot reorder two times.</p>

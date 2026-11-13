@@ -1,0 +1,17 @@
+{
+ "_about": "An example board config. Keys that start with _ are comments. Copy what you need into board/config.json or the user file; to use the checks, rename _examples.checks to checks at the top level.",
+ "title": "Lab network",
+ "link_hosts": ["wiki.example.com", "tracker.example.com"],
+ "tags": [{"id": "cost", "label": "Costs money"}, {"id": "ops", "label": "Operations"}],
+ "tabs": [{"id": "tracker", "label": "Tracker", "match": {"source": ["tracker"]}}, {"id": "other", "label": "Other", "rest": true}],
+ "_examples": {
+  "checks": [
+   {"id": "tracker-link", "field": "links.url", "match": "^https://tracker\\.example\\.com/", "when": {"source": ["tracker"]},
+    "message": "A tracker card links its ticket on tracker.example.com"},
+   {"id": "no-secrets", "field": "summary", "forbid": "\\bpassword\\s*[:=]", "except": "password: <redacted>", "flags": "i",
+    "message": "No secret on a card: write password: <redacted>"},
+   {"id": "mail-tag", "field": "tags", "match": ".", "when": {"source": ["mail"]},
+    "message": "A mail card carries at least one tag"}
+  ]
+ }
+}

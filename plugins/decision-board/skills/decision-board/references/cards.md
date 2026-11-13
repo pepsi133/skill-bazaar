@@ -17,7 +17,7 @@ unknown field.
 | `source` | A short word for where the card came from; it chooses the tab. `sync --source <s>` sets it on every card of the file |
 | `blocks` | What waits for the card, for example `the nightly backup`. The card then shows in "Blocked on you" |
 | `status` | `open` (default) or `closed` |
-| `links` | Required. 1 to 10 `{"label", "url"}`. A url must parse, use `https:`, carry no user name or password, and have a host of the config `link_hosts` or a subdomain of one. A card with no natural URL links the report it came from or the repository page of the work |
+| `links` | Optional. Up to 10 `{"label", "url"}`; `sync` prints `note: <id>: no link` for an open card without one. A url must parse, use `https:`, carry no user name or password, and have a host of the config `link_hosts` or a subdomain of one. Give the link of the item when it has one |
 | `tags` | Tag ids from the config `tags`, each once, matched exactly |
 | `first_asked` | `{"date": "YYYY-MM-DD", "who": "<id>"}`: when the question was first put to the operator, and by whom. Required on every open card whose kind is not `info`. A real date in the config `tz`, no later than tomorrow. `who` is optional: at most 40 of the id characters. A card posted again keeps the stored value |
 

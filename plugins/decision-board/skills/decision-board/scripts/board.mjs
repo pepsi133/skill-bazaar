@@ -5,6 +5,7 @@
 // Fields, kinds and limits come from the "pure" part of assets/board.html, so page and script cannot drift.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
@@ -12,7 +13,7 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SELF = path.relative(process.cwd(), fileURLToPath(import.meta.url)) || "board.mjs";
 const USAGE = `Usage: node ${SELF} <command> ... [--state <file>]
-  check                                     check board/config.json and the state; print the meta/config write when it changed
+  check                                     merge the config layers, check them and the state; print the meta/config write when it changed
   sync <file> [--source <s>] [<file> [--source <s>]]... [--allow-close]   add and change cards; a --source closes that source's cards its file no longer holds
   close <id>...                             close cards
   read --dump <dir> [--all] --dumped        the batches that wait (dump: batches with status "sent"); --dumped: the dump calls succeeded; --all also prints handled ones
@@ -22,7 +23,8 @@ const USAGE = `Usage: node ${SELF} <command> ... [--state <file>]
   purge (--ids <id>... | --closed-before <YYYY-MM-DD>) --dump <dir>
   adopt [cards | guides/<id> | meta/config | batches/<id> | purge/<stamp>] --dump <dir> --dumped   after a refused write: merge the board copy, print the write again
   push [cards | guides/<id> | meta/config | batches/<id> | purge/<stamp>]   print the last write of a document again
---state defaults to board/state.json; config.json, out/, purged/ and decisions.md sit beside it. <dir> holds the ArtifactData
+--state defaults to board/state.json; config.json, config.local.json, config.merged.json, rules.md, out/, purged/ and decisions.md sit beside it.
+The user config is $BOARD_USER_CONFIG, else $XDG_CONFIG_HOME/decision-board/config.json, else ~/.config/decision-board/config.json. <dir> holds the ArtifactData
 dumps: <dir>/<collection>/<doc id>.json; a missing folder is an empty collection. Every time written or printed is
 ISO 8601 with the offset of the config tz. Under every printed array, an "if refused" and an "if the reply is lost"
 line name the next command.`;
@@ -156,6 +158,134 @@ function olderModel(s) {
   if (writes(pend.cards || []).some((w) => w.collection === "cards" && w.doc_id !== S.cardsDoc)) return true;
   return Object.values(pend).some((v) => writes(v).some((w) => w.collection === "acks"));
 }
+
+// ---- config layers: the defaults, the user file, board/config.json and board/config.local.json, later ones win.
+// A page key is a key of DEFAULTS in the page; a script-only key is a key of SCRIPT_DEFAULTS. check writes the
+// keys of WRITTEN_KEYS itself; config.merged.json leaves out the keys of MERGED_OMIT.
+const WRITTEN_KEYS = ["settings"];
+const SCRIPT_DEFAULTS = { checks: [], standing: ["always", "never", "from now on"] };
+export const SCRIPT_KEYS = Object.keys(SCRIPT_DEFAULTS);
+const MERGED_OMIT = ["checks"];
+export const CONFIG_KEYS = Object.keys(P.DEFAULTS).filter((k) => !WRITTEN_KEYS.includes(k)).concat(SCRIPT_KEYS);
+// The defaults as plain objects of this realm (P.DEFAULTS comes from a vm context, where isPlain is false).
+export const pageDefaults = () => plain(Object.assign({}, P.DEFAULTS, SCRIPT_DEFAULTS));
+// The user file, outside any repository: BOARD_USER_CONFIG ("" turns the layer off), else XDG, else ~/.config.
+function userConfigPath() {
+  const v = process.env.BOARD_USER_CONFIG, x = process.env.XDG_CONFIG_HOME;
+  if (v !== undefined) return v === "" ? "" : path.resolve(v);
+  if (x && path.isAbsolute(x)) return path.join(x, "decision-board", "config.json");
+  return path.join(os.homedir(), ".config", "decision-board", "config.json");
+}
+function tilde(file) { const h = os.homedir() + path.sep; return file.startsWith(h) ? "~/" + file.slice(h.length) : file; }
+function rel(file) { return path.relative(process.cwd(), file) || file; }
+const ownVal = (o, k) => (Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);
+// The problem of key k of the layer object over, given the earlier value of its base key: a text, true to skip the
+// key without a problem (the "+key" half of a pair, reported under "key"), or "" when it merges.
+function keyProblem(over, k, earlier, name, p) {
+  const plus = k.startsWith("+"), base = plus ? k.slice(1) : k, has = (x) => Object.prototype.hasOwnProperty.call(over, x);
+  if (UNSAFE.has(base)) return `${name}: field ${q(p)} is not allowed`;
+  if (!plus) return has("+" + base) ? `${name}: "+${p}" and "${p}" in one file` : "";
+  if (has(base)) return true;
+  if (!Array.isArray(over[k])) return `${name}: "+${p}": not a list`;
+  if (earlier !== undefined && !Array.isArray(earlier)) return `${name}: "+${p}": the earlier value is not a list`;
+  return "";
+}
+// A value as the merge keeps it: a fresh copy, with the _ keys of its objects dropped.
+function cleanValue(v, name, p, problems) {
+  if (Array.isArray(v)) return v.map((x, i) => cleanValue(x, name, `${p}[${i}]`, problems));
+  if (isPlain(v)) return mergeInto({}, v, name, p, problems);
+  return v;
+}
+// "+key": the entries appended to the earlier list. An object with the string id of an entry replaces that entry in
+// place; a text, number or boolean already in the list is skipped.
+function appendList(earlier, add, name, p, problems) {
+  const list = (earlier || []).slice();
+  add.forEach((x, i) => {
+    const v = cleanValue(x, name, `+${p}[${i}]`, problems);
+    if (isPlain(v) && typeof v.id === "string") {
+      const j = list.findIndex((y) => isPlain(y) && y.id === v.id);
+      if (j >= 0) { list[j] = v; return; }
+    }
+    if (["string", "number", "boolean"].includes(typeof v) && list.includes(v)) return;
+    list.push(v);
+  });
+  return list;
+}
+// One layer object over the merged object so far, recursively: a plain object merges key by key, null removes the
+// key, "+key" appends, anything else replaces. Returns a new object; at is the dotted path of over.
+function mergeInto(base, over, name, at, problems) {
+  const out = Object.assign({}, isPlain(base) ? base : {});
+  for (const k of Object.keys(over)) {
+    const plus = k.startsWith("+"), key = plus ? k.slice(1) : k, p = at ? at + "." + key : key;
+    // An unsafe key is a problem before it could pass for a comment (__proto__ starts with _).
+    if (!UNSAFE.has(key) && (k.startsWith("_") || key.startsWith("_"))) continue;
+    const bad = keyProblem(over, k, ownVal(out, key), name, p), v = over[k];
+    if (bad) { if (bad !== true) problems.push(bad); continue; }
+    if (plus) out[key] = appendList(ownVal(out, key), v, name, p, problems);
+    else if (v === null) delete out[key];
+    else if (isPlain(v)) out[key] = mergeInto(isPlain(ownVal(out, key)) ? out[key] : {}, v, name, p, problems);
+    else out[key] = cleanValue(v, name, p, problems);
+  }
+  return out;
+}
+// layers: [{name, data}] in merge order (data null is skipped); defaults: the base of a "+key" with no earlier value.
+// src: the layers of each top-level key ("+name" for an append, "default" for a default list appended to).
+export function mergeLayers(layers, defaults) {
+  let config = {};
+  const src = {}, problems = [];
+  for (const { name, data } of layers) {
+    if (!data) continue;
+    const keys = Object.keys(data).filter((k) => !k.startsWith("_") && !k.replace(/^\+/, "").startsWith("_"))
+      .map((k) => ({ k, plus: k.startsWith("+"), key: k.replace(/^\+/, "") }));
+    for (const { k, plus, key } of keys) {
+      if (plus && ownVal(config, key) === undefined && Array.isArray(ownVal(defaults, key)) && !keyProblem(data, k, undefined, name, key)) {
+        config[key] = plain(defaults[key]);
+        src[key] = ["default"];
+      }
+    }
+    const before = config;
+    config = mergeInto(config, data, name, "", problems);
+    for (const { k, plus, key } of keys) {
+      if (keyProblem(data, k, ownVal(before, key), name, key)) continue;
+      if (plus) src[key] = (ownVal(src, key) || []).concat("+" + name);
+      else if (data[k] === null) delete src[key];
+      else if (isPlain(data[k]) && isPlain(ownVal(before, key))) src[key] = (ownVal(src, key) || []).concat(name);
+      else src[key] = [name];
+    }
+  }
+  return { config, src, problems };
+}
+// The footer line of the page: the layer files that exist, the user file first.
+function settingsText(files) {
+  return "Settings: " + files.filter((f) => f.exists).map((f) => (f.name === "user" ? tilde(f.file) : rel(f.file))).join(", ");
+}
+// The three layer files of a board folder, merged over the defaults. page: the keys for meta/config; merged: the
+// full config for config.merged.json; unknown: the unknown-field problems of each file, top level only.
+function loadConfig(dir) {
+  const u = userConfigPath(), files = [["user", u], ["board", path.join(dir, "config.json")], ["local", path.join(dir, "config.local.json")]]
+    .map(([name, file]) => ({ name, file, exists: !!file && fs.existsSync(file) }));
+  const layers = files.filter((f) => f.exists).map((f) => {
+    const data = readJson(f.file);
+    if (!isPlain(data)) fail(`${f.file}: not a JSON object`);
+    return { name: f.name, data };
+  });
+  const unknown = [];
+  for (const { name, data } of layers) {
+    for (const k of Object.keys(data)) {
+      const base = k.startsWith("+") ? k.slice(1) : k;
+      // A comment (_x or +_x) is no field; an unsafe key is reported by the merge alone.
+      if (base.startsWith("_") || UNSAFE.has(base)) continue;
+      if (!CONFIG_KEYS.includes(base)) unknown.push(`config ${name}: unknown field ${q(base)}`);
+    }
+  }
+  const { config, src, problems } = mergeLayers(layers, pageDefaults());
+  const page = Object.assign({}, config), merged = Object.assign(pageDefaults(), config);
+  SCRIPT_KEYS.concat(WRITTEN_KEYS).forEach((k) => delete page[k]);
+  page.settings = settingsText(files);
+  WRITTEN_KEYS.concat(MERGED_OMIT).forEach((k) => delete merged[k]);
+  return { files, any: layers.length > 0, config, src, problems, page, merged, unknown };
+}
+
 class Run {
   // o.create: the command may make the state (check).
   constructor(a, o = {}) {
@@ -171,12 +301,18 @@ class Run {
     this.st = saved ? plain(saved) : { cards: [], next: {} };
     for (const k of ["pending", "unlogged"]) this.st[k] = isPlain(this.st[k]) ? this.st[k] : {};
     this.configFile = path.join(this.dir, "config.json");
-    this.config = readJson(this.configFile);
+    this.load = loadConfig(this.dir);
+    this.config = this.load.any ? this.load.config : null;
     P.applyConfig(isPlain(this.config) ? this.config : null);
     this.writes = [];
   }
-  needConfig() {
-    if (!isPlain(this.config)) fail(`no config ${this.configFile}. Write it first (references/data-model.md), then run \`node ${SELF} check\``);
+  // At least one layer file, and no merge problem (check reports those itself: fromCheck).
+  needConfig(fromCheck) {
+    if (!this.load.any) {
+      const u = this.load.files[0].file;
+      fail(`no config: write ${rel(this.configFile)}${u ? " or the user file " + tilde(u) : ""} (references/data-model.md), then run \`node ${SELF} check\``);
+    }
+    if (!fromCheck && this.load.problems.length) fail(this.load.problems.map((p) => "config " + p).concat(`fix the config, then run \`node ${SELF} check\``));
   }
   card(id) { return this.st.cards.find((c) => c.id === id); }
   needCards(ids, cmd) {
@@ -322,10 +458,8 @@ function cardProblems(c, name, ids, qk) {
   }
   return out.map((p) => name + ": " + p);
 }
-// Every card carries 1 to max.links links, each valid by the rules of the page (P.linkProblem).
+// A card carries up to max.links links, each valid by the rules of the page (P.linkProblem). Links are optional.
 function linkProblems(links) {
-  const hint = P.cfg.link_hosts.length ? "" : ". Set link_hosts in config.json first";
-  if (links === undefined || (Array.isArray(links) && !links.length)) return [`links: missing. Every card needs 1 to ${S.max.links} links {"label", "url"}${hint}`];
   if (!Array.isArray(links)) return [];
   const out = links.length > S.max.links ? ["links: more than " + S.max.links] : [];
   links.forEach((l, i) => {
@@ -341,6 +475,86 @@ function tagProblems(tags) {
   const known = P.cfg.tags.map((t) => t.id), bad = tags.filter((t) => typeof t === "string" && !known.includes(t));
   const out = bad.length ? [`tags: ${bad.map((t) => JSON.stringify(t)).join(", ")} not in the config tags${known.length ? " (" + known.join(", ") + ")" : ". Set tags in config.json first"}`] : [];
   if (new Set(tags).size !== tags.length) out.push("tags: repeated");
+  return out;
+}
+
+// ---- checks: the config list checks, regex checks that sync runs on every open card. The operator's values live
+// only in the config; the field list comes from SCHEMA.item.
+const CHECK_KEYS = ["id", "field", "match", "forbid", "except", "flags", "when", "message"];
+export function checkFields() {
+  const text = (t) => ["s", "t", "S"].includes(t), item = S.item, keys = Object.keys(item);
+  const top = keys.filter((k) => (text(item[k]) || ["l", "L"].includes(item[k])) && !MANAGED.includes(k));
+  const subs = keys.filter((k) => /^[ao]:/.test(item[k])).flatMap((k) => {
+    const kind = S[item[k].slice(2)];
+    return Object.keys(kind).filter((x) => text(kind[x])).map((x) => k + "." + x);
+  });
+  return top.concat(subs);
+}
+// The texts of a card field: a text, the texts of a list, or with a dot the sub field of each object of a list or of one object.
+function fieldValues(c, field) {
+  const [k, sub] = field.split("."), v = ownVal(c, k), str = (x) => typeof x === "string";
+  if (!sub) return str(v) ? [v] : Array.isArray(v) ? v.filter(str) : [];
+  if (Array.isArray(v)) return v.filter(isPlain).map((x) => ownVal(x, sub)).filter(str);
+  return isPlain(v) && str(ownVal(v, sub)) ? [v[sub]] : [];
+}
+// The first 50 checks, validated and compiled. re: the match regex, or for forbid the scan regex with g; exceptAt:
+// the except regex with y. Both are stateful: checkHits sets lastIndex before every use.
+export function compileChecks(list) {
+  if (!Array.isArray(list)) return { checks: [], problems: ["config checks: not a list"] };
+  const problems = [], checks = [], fields = checkFields(), ids = new Set();
+  if (list.length > S.max.list) { problems.push(`config checks: ${S.max.list} of ${list.length} entries kept`); list = list.slice(0, S.max.list); }
+  list.forEach((e, i) => {
+    const at = `config checks[${i}]`, bad = [];
+    if (!isPlain(e)) { problems.push(at + ": not an object"); return; }
+    Object.keys(e).filter((k) => !CHECK_KEYS.includes(k)).forEach((k) => bad.push(`${at}: unknown field ${q(k)}`));
+    if (e.id !== undefined && (typeof e.id !== "string" || !/^[a-z0-9-]{1,40}$/.test(e.id))) bad.push(`${at}.id: 1 to 40 of a-z 0-9 -`);
+    else if (e.id !== undefined) { if (ids.has(e.id)) bad.push(`config checks: id ${q(e.id)} twice`); ids.add(e.id); }
+    if (!fields.includes(e.field)) bad.push(`${at}.field: one of ${fields.join(", ")}`);
+    const forbid = e.forbid !== undefined;
+    if (forbid === (e.match !== undefined)) bad.push(`${at}: give one of match or forbid`);
+    if (e.except !== undefined && !forbid) bad.push(`${at}.except: goes with forbid only; widen match instead`);
+    const flagsOk = e.flags === undefined || (typeof e.flags === "string" && /^[imsu]*$/.test(e.flags) && new Set(e.flags).size === e.flags.length);
+    if (!flagsOk) bad.push(`${at}.flags: distinct letters of i, m, s, u`);
+    const flags = flagsOk && e.flags ? e.flags : "";
+    for (const k of ["match", "forbid", "except"]) {
+      if (e[k] === undefined) continue;
+      if (typeof e[k] !== "string") { bad.push(`${at}.${k}: not a regex: not a text`); continue; }
+      if (e[k].length > 300) { bad.push(`${at}.${k}: longer than 300 characters`); continue; }
+      try { new RegExp(e[k], flags); } catch (err) { bad.push(`${at}.${k}: not a regex: ${err.message}`); }
+    }
+    const list2 = (x) => Array.isArray(x) && x.length > 0 && x.every((y) => typeof y === "string");
+    if (e.when !== undefined && !(isPlain(e.when) && Object.keys(e.when).every((k) => (k === "source" || k === "tags") && list2(e.when[k]))))
+      bad.push(`${at}.when: an object with source and tags lists of texts`);
+    if (e.message === undefined) bad.push(`${at}.message: missing`);
+    else if (typeof e.message !== "string" || !e.message.trim() || e.message.length > 300) bad.push(`${at}.message: 1 to 300 characters`);
+    if (bad.length) { problems.push(...bad); return; }
+    checks.push({ ref: e.id || String(i + 1), field: e.field, re: new RegExp(forbid ? e.forbid : e.match, forbid ? flags + "g" : flags), forbid,
+      exceptAt: e.except !== undefined ? new RegExp(e.except, flags + "y") : null, when: e.when || null, message: e.message });
+  });
+  return { checks, problems };
+}
+// The checks that card c fails, as "check <ref>: <message>", in list order. A closed card passes every check.
+export function checkHits(c, checks) {
+  if (!isPlain(c) || c.status === "closed") return [];
+  const out = [];
+  for (const k of checks) {
+    if (k.when) {
+      if (k.when.source && !k.when.source.map(lower).includes(lower(c.source))) continue;
+      if (k.when.tags && !(Array.isArray(c.tags) && c.tags.some((t) => k.when.tags.includes(t)))) continue;
+    }
+    const vals = fieldValues(c, k.field);
+    const hit = (v) => {
+      k.re.lastIndex = 0;
+      for (const m of v.matchAll(k.re)) {
+        if (!k.exceptAt) return true;
+        k.exceptAt.lastIndex = m.index;
+        if (!k.exceptAt.test(v)) return true;
+      }
+      return false;
+    };
+    const fails = k.forbid ? vals.some(hit) : !vals.some((v) => { k.re.lastIndex = 0; return k.re.test(v); });
+    if (fails) out.push(`check ${k.ref}: ${k.message}`);
+  }
   return out;
 }
 // sync: card files in order, each with the --source that follows it.
@@ -372,6 +586,11 @@ function cmdSync(a, log) {
     });
   }
   cards.forEach(({ c }, i) => { errs.push(...cardProblems(c, c && typeof c.id === "string" && c.id ? c.id : "#" + (i + 1), ids)); if (c && typeof c.id === "string") ids.add(c.id); });
+  const ck = compileChecks(r.config.checks === undefined ? [] : r.config.checks);
+  if (ck.problems.length) fail(ck.problems.concat("fix the config, then run `node " + SELF + " check`"));
+  let hit = false;
+  cards.forEach(({ c }, i) => { if (!P.isObj(c)) return; const h = checkHits(c, ck.checks); if (h.length) hit = true; errs.push(...h.map((x) => (typeof c.id === "string" && c.id ? c.id : "#" + (i + 1)) + ": " + x)); });
+  if (hit) errs.push("a check line is a rule of the operator's config: change the card, never the check");
   // A source may lose at most half of its open cards in one run, unless --allow-close.
   for (const s of new Set(files.map((f) => f.source).filter(Boolean))) {
     const open = r.st.cards.filter((c) => lower(c.source) === s && c.status !== "closed"), gone = open.filter((c) => !ids.has(c.id));
@@ -379,6 +598,7 @@ function cmdSync(a, log) {
   }
   if (errs.length) fail(errs);
   const t = now(), n = { new: 0, rev: 0, changed: 0, same: 0 }, closed = [], reopened = [], held = new Set(r.st.held || []);
+  const noLink = [];
   const defPri = P.cfg.priorities[Math.min(1, P.cfg.priorities.length - 1)].id;
   for (const { c, f } of cards) {
     const ex = r.card(c.id), old = ex ? plain(P.coerce("item", ex)) : null, doc = { id: c.id };
@@ -390,6 +610,7 @@ function cmdSync(a, log) {
     // closed card stays closed. Either way until its content changes.
     if (content) held.delete(c.id);
     doc.status = c.status || (old && !content && (!f.source || held.has(c.id)) ? old.status : "open") || "open";
+    if (doc.status === "open" && !(Array.isArray(doc.links) && doc.links.length)) noLink.push(c.id);
     const strip = (x) => { const y = plain(P.coerce("item", x)); MANAGED.forEach((k) => delete y[k]); return JSON.stringify(y); };
     if (old && strip(doc) === strip(ex)) { n.same++; continue; }
     if (old && old.status === "closed" && doc.status === "open") reopened.push(c.id);
@@ -407,6 +628,7 @@ function cmdSync(a, log) {
   if (size > MAX_DOC) fail(`sync: the cards document would be ${size} characters, over ${MAX_DOC}. Nothing changed. Close and purge old cards first`);
   log(`sync: ${n.new} new, ${n.rev} changed (rev up), ${n.changed} changed (same rev), ${n.same} unchanged, ${closed.length} closed${closed.length ? " (" + closed.join(", ") + ")" : ""}` +
     (reopened.length ? `, ${reopened.length} reopened (${reopened.join(", ")})` : ""));
+  noLink.forEach((id) => log(`note: ${qid(id)}: no link`));
   if (n.new + n.rev + n.changed + closed.length) { r.st.refreshed = t; r.putCards(); }
   r.st.held = Array.from(held);
   r.finish(log);
@@ -441,12 +663,15 @@ function lineHint(flags, a) {
   if (flags.includes("[stale-rev]") || flags.includes("[missing]")) return "(skip)";
   if (flags.includes("[other-rev]")) return `(skip; after the ack: rm -rf ${dir}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${dir} --dumped${st})`;
   if (flags.includes("[question]")) return "(answer the note in the card text and post the card again)";
+  if (flags.includes("[rule]") || flags.includes("[standing]")) return "(read references/rules.md and do what it says for this line)";
   return "(act on it)";
 }
 function cmdRead(a, log) {
   const dir = one(a, "dump");
   if (!a.dumped) fail(`read: no --dumped. Run rm -rf ${dir}, then P4; once P4 succeeded, run node ${SELF} read --dump ${dir} --dumped`);
   const dump = readDump(dir), r = new Run(a), list = a.all ? batchesOf(dump) : waiting(dump);
+  { const rl = rulesLine(rulesState(r), "read", a); if (rl) log(rl); }
+  const stand = standingRe(r.config ? r.config.standing : undefined);
   r.logHandled(dump, log);
   if (!list.length) log(a.all ? "no batches in the dump" : "no batches waiting");
   for (const b of list) {
@@ -461,10 +686,12 @@ function cmdRead(a, log) {
         else if (x.rev !== c.rev) flags.push("[other-rev]");
         if (x.note && !x.answer && P.optionsOf(c).length) flags.push("[question]");
       }
+      if (!flags.length && it && lower(it.source) === "rules") flags.push("[rule]"); else if (!flags.length && x && stand.test(x.note || "")) flags.push("[standing]");
       log(`  ${qid(key)}  ${q(x ? x.answer : "")}  ${q(x ? x.note : "")}${flags.length ? "  " + flags.join(" ") : ""}${sent ? "  " + lineHint(flags, a) : ""}`);
     }
     for (const id of b.noteIds) {
       const nb = b.notes[id] || { text: "", item: "" }, nflags = [];
+      if (stand.test(nb.text)) nflags.push("[standing]");
       log(`  note ${qid(id)}${nb.item ? "  item " + q(nb.item) : ""}  ${q(nb.text)}${nflags.length ? "  " + nflags.join(" ") : ""}${sent ? "  " + lineHint(nflags, a) : ""}`);
     }
     if (sent) log(`  when handled: node ${SELF} ack ${qid(b.id)} --dump ${one(a, "dump")}${a.state ? " --state " + q(one(a, "state")) : ""}`);
@@ -518,11 +745,26 @@ function parseGuide(text) {
   end();
   return { title, secs };
 }
+// The guide document of a Markdown text: a section keeps its updated time while its title and body stay the same.
+function guideDoc(id, kind, text, old, item, t) {
+  const g = parseGuide(text), prev = new Map((old ? old.sections : []).map((s) => [s.id, s]));
+  const sections = g.secs.map((s) => {
+    const p = prev.get(s.id);
+    return Object.assign(s, { updated: p && p.title === s.title && p.body === s.body ? p.updated : t });
+  });
+  const doc = { id, kind, title: g.title || (old && old.title) || id, sections, status: old ? old.status || "active" : "active",
+    created: (old && old.created) || t, updated: t };
+  if (item) doc.item = item;
+  const errs = P.problems("guide", doc);
+  if (JSON.stringify(doc).length > S.max.g) errs.push("the guide is longer than " + S.max.g + " characters");
+  return { doc, errs };
+}
 // The guide document: the --id itself.
 function guideId(id) { if (!S.idRe.test(id)) fail("guide: --id <id> with 1 to 100 of A-Z a-z 0-9 _ - . ~ : @ +"); return id; }
 // The dump gives the old content (the status that the page sets, the section times); the version comes from the state.
 function cmdGuide(a, log) {
   const dump = readDump(one(a, "dump")), r = new Run(a), id = guideId(one(a, "id")), ex = dump.col("guides").get(id), t = now();
+  if (id.toLowerCase() === RULES_ID) fail(`guide: the guide rules is posted by check from board/rules.md. Run node ${SELF} check`);
   const old = ex ? plain(P.coerce("guide", ex.data)) : null, dumped = ex ? pin("guides", id, ex) : undefined;
   if (a.delete || a.archive) {
     if (!ex) fail("guide: no guide " + id + " in the dump");
@@ -538,22 +780,57 @@ function cmdGuide(a, log) {
   const item = a.item ? one(a, "item") : (old ? old.item : "");
   let text;
   try { text = fs.readFileSync(file, "utf8"); } catch (e) { fail("guide: cannot read " + file); }
-  const g = parseGuide(text), prev = new Map((old ? old.sections : []).map((s) => [s.id, s]));
-  const sections = g.secs.map((s) => {
-    const p = prev.get(s.id);
-    return Object.assign(s, { updated: p && p.title === s.title && p.body === s.body ? p.updated : t });
-  });
-  const doc = { id, kind, title: g.title || (old && old.title) || id, sections, status: old ? old.status || "active" : "active",
-    created: (old && old.created) || t, updated: t };
-  if (item) doc.item = item;
-  const errs = P.problems("guide", doc);
-  if (JSON.stringify(doc).length > S.max.g) errs.push("the guide is longer than " + S.max.g + " characters");
+  const { doc, errs } = guideDoc(id, kind, text, old, item, t);
   if (errs.length) fail(errs.map((e) => "guide " + id + ": " + e));
   const norm = (x) => { const y = plain(P.coerce("guide", x)); y.updated = ""; y.body = ""; return JSON.stringify(y); };
   if (old && norm(doc) === norm(ex.data)) { log(`guide ${id}: unchanged`); return r.finish(log); }
   r.pinned("set", "guides", id, doc, dumped);
-  log(`guide ${id}: ${sections.filter((s) => s.updated === t).length} of ${sections.length} sections changed`);
+  log(`guide ${id}: ${doc.sections.filter((s) => s.updated === t).length} of ${doc.sections.length} sections changed`);
   r.finish(log);
+}
+
+// ---- the operator's rules: <state dir>/rules.md. check posts it as the guide "rules" whenever its hash changed;
+// read only says that it changed. The agent never posts it with guide.
+const RULES_ID = "rules";
+function rulesFile(r) { return path.join(r.dir, "rules.md"); }
+// What check does with rules.md: changed = its hash differs from the state's rules_md; write = changed and it has a
+// section, or it lost every section after a post (then the guide is deleted).
+function rulesState(r) {
+  const file = rulesFile(r);
+  if (!fs.existsSync(file)) return { file, exists: false, changed: false, write: false };
+  const buf = fs.readFileSync(file), text = buf.toString("utf8"), hash = createHash("sha256").update(buf).digest("hex").slice(0, 12);
+  const g = parseGuide(text), posted = r.st.next["guides/" + RULES_ID] !== undefined, changed = hash !== r.st.rules_md;
+  return { file, exists: true, text, hash, g, posted, changed, write: changed && (g.secs.length > 0 || posted) };
+}
+// The one rules line of check or read, or "". a: the parsed arguments, for the --state of the printed command.
+function rulesLine(rs, cmd, a) {
+  if (cmd === "check" && !rs.exists) return `rules: no ${rel(rs.file)}. Read references/rules.md, "Start the rules", and follow it`;
+  if (!rs.write) return "";
+  if (cmd === "check") return `rules: ${rel(rs.file)} changed. Read it; check posts it as the guide rules in the array below`;
+  return `rules: ${rel(rs.file)} changed. Run node ${SELF} check${a.state ? " --state " + q(one(a, "state")) : ""} and pass its array`;
+}
+// check: the guide document of rules.md with its problems. old is the last guide write that check printed, so a
+// section keeps its updated time while its title and body stay the same.
+function rulesDoc(r, rs, t) {
+  const pw = r.st.pending["guides/" + RULES_ID];
+  const old = pw && pw.op === "set" && pw.file_path && fs.existsSync(pw.file_path) ? plain(P.coerce("guide", JSON.parse(fs.readFileSync(pw.file_path, "utf8")))) : null;
+  if (old) old.status = "active";
+  const { doc, errs } = guideDoc(RULES_ID, "text", rs.text, old, "", t);
+  return { doc, errs: errs.map((e) => `rules: ${rel(rs.file)}: ${e}`) };
+}
+// check, on success: the guide write (set, or delete when every section is gone), then the new hash.
+function queueRules(r, rs, rd) {
+  if (!rs.changed) return;
+  if (rd) r.pinned("set", "guides", RULES_ID, rd.doc);
+  else if (rs.write) r.pinned("delete", "guides", RULES_ID, null);
+  r.st.rules_md = rs.hash;
+}
+// read: the words of the config list standing as one regex, case ignored, whole words only; the default list
+// when the config value is not valid (check reports it).
+function standingOk(v) { return Array.isArray(v) && v.length >= 1 && v.length <= 50 && v.every((x) => typeof x === "string" && x.trim().length >= 1 && x.trim().length <= 40); }
+function standingRe(v) {
+  const list = (standingOk(v) ? v : SCRIPT_DEFAULTS.standing).map((x) => x.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"));
+  return new RegExp("(?<![\\p{L}\\p{N}])(" + list.join("|") + ")(?![\\p{L}\\p{N}])", "iu");
 }
 
 // ---- purge: copy every row to disk, then take the cards off the board and delete their responses, and
@@ -699,10 +976,38 @@ function cmdPush(a, log) {
   printWrites([].concat(w).map((out) => ({ out, size: 0, group: key })), log, r.ctx());
 }
 
-// ---- check: config.json and the state, locally. Prints the meta/config write when config.json changed.
-const CONFIG_KEYS = ["title", "agent", "tabs", "priorities", "domains", "link_hosts", "tags", "tz"];
+// ---- check: the config layers and the state, locally. Prints the meta/config write when the merged page keys changed.
+// The first folder from the folder of file up to the root that holds a .git entry, else "".
+function inGitTree(file) {
+  for (let d = path.dirname(path.resolve(file)); ; d = path.dirname(d)) {
+    if (fs.existsSync(path.join(d, ".git"))) return d;
+    if (path.dirname(d) === d) return "";
+  }
+}
+// A config value in one short text.
+function valueText(v) {
+  if (typeof v === "string") return v.length > 60 ? JSON.stringify(v.slice(0, 57)) + "..." : JSON.stringify(v);
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (Array.isArray(v)) return v.length === 1 ? "1 entry" : v.length + " entries";
+  if (isPlain(v)) return "{" + Object.keys(v).join(", ") + "}";
+  return String(v);
+}
+// The layer files, the layer of each set key, the keys left at their defaults, and the ids that sync accepts.
+function configLines(load) {
+  const out = [], [u, b, l] = load.files, nFiles = load.files.filter((f) => f.exists).length;
+  const set = CONFIG_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(load.src, k));
+  out.push(`config layers: user ${!u.file ? "off" : u.exists ? tilde(u.file) : "none"}, board ${b.exists ? rel(b.file) : "none"}, local ${l.exists ? rel(l.file) : "none"}`);
+  if (nFiles === 1 && set.length) out.push(`config ${load.files.find((f) => f.exists).name}: ${set.join(", ")}`);
+  if (nFiles >= 2) for (const k of set) out.push(`config ${k}: ${load.src[k].join(", ")}  ${valueText(load.config[k])}${SCRIPT_KEYS.includes(k) ? "  (script only)" : ""}`);
+  const unset = CONFIG_KEYS.filter((k) => !SCRIPT_KEYS.includes(k) && !set.includes(k));
+  if (unset.length) out.push(`config default: ${unset.join(", ")}`);
+  out.push(`config ids: tags ${P.cfg.tags.map((t) => t.id).join(", ") || "none"}; priorities ${P.cfg.priorities.map((p) => p.id).join(", ")}`);
+  return out;
+}
 function cmdCheck(a, log) {
   const r = new Run(a, { create: true }), errs = [];
+  const t = now();
+  const rs = rulesState(r);
   // Two state files in one folder would share the out files and drop cards.
   for (const f of (fs.existsSync(r.dir) ? fs.readdirSync(r.dir) : []).filter((x) => x.endsWith(".json")).map((x) => path.join(r.dir, x))) {
     let o;
@@ -710,16 +1015,21 @@ function cmdCheck(a, log) {
     if (f !== r.file && isPlain(o) && Array.isArray(o.cards) && isPlain(o.next))
       fail(`check: ${f} is already a state file in this folder. One state file per board folder: use it, or another folder`);
   }
-  r.needConfig();
+  r.needConfig(true);
   const raw = r.config, c = P.cfg;
+  errs.push(...r.load.problems.map((p) => "config " + p));
   for (const k of ["tabs", "priorities", "domains", "link_hosts", "tags"]) {
     if (raw[k] === undefined) continue;
     const got = c[k] === P.DEFAULTS[k] && Array.isArray(raw[k]) && raw[k].length ? 0 : c[k].length;
     if (!Array.isArray(raw[k]) || got < raw[k].length) errs.push(`config ${k}: ${got} of ${Array.isArray(raw[k]) ? raw[k].length : "a non-list"} entries kept`);
   }
-  Object.keys(raw).filter((k) => !CONFIG_KEYS.includes(k)).forEach((k) => errs.push("config: unknown field " + q(k)));
-  if (!c.link_hosts.length) errs.push("config link_hosts: none. Every card needs a link to one of them");
+  errs.push(...r.load.unknown);
   if (raw.tz !== undefined && !P.tzOk(raw.tz)) errs.push(`config tz: ${q(raw.tz)} is not a time zone name such as "Europe/Warsaw" or "UTC"`);
+  const ck = compileChecks(raw.checks === undefined ? [] : raw.checks);
+  errs.push(...ck.problems);
+  if (r.config.standing !== undefined && !standingOk(r.config.standing)) errs.push("config standing: a list of 1 to 50 texts, each 1 to 40 characters");
+  const rd = rs.write && rs.g.secs.length ? rulesDoc(r, rs, t) : null;
+  if (rd) errs.push(...rd.errs);
   const ids = new Set(), count = {};
   r.st.cards.forEach((x, i) => {
     const name = "card " + (P.isObj(x) && typeof x.id === "string" ? qid(x.id) : "#" + (i + 1));
@@ -732,12 +1042,23 @@ function cmdCheck(a, log) {
     count[st] = (count[st] || 0) + 1;
   });
   log(`state ${path.relative(process.cwd(), r.file) || r.file}: cards ${r.st.cards.length} (${Object.entries(count).map(([k, v]) => k + " " + v).join(", ") || "none"}); times in ${P.cfg.tz}`);
+  configLines(r.load).forEach((l) => log(l));
+  const uf = r.load.files[0], ut = uf.exists ? inGitTree(uf.file) : "";
+  if (ut) log(`note: the user config ${tilde(uf.file)} is inside the git work tree ${ut}: keep it out of every repository`);
+  if (!P.cfg.link_hosts.length) log("note: config link_hosts: none, so sync refuses every card link. A card needs no link");
+  const rl = rulesLine(rs, "check", a);
+  if (rl) log(rl);
+  // A state card that breaks a check is a note: a new check must not block the config write that brings it.
+  r.st.cards.forEach((x) => { if (P.isObj(x) && typeof x.id === "string") checkHits(x, ck.checks).forEach((h) => log(`note: card ${qid(x.id)}: ${h}`)); });
   errs.forEach((e) => log("problem: " + e));
   if (errs.length) throw new Stop(errs.length + " problems");
+  const mf = path.join(r.dir, "config.merged.json"), body = JSON.stringify(r.load.merged, null, 1) + "\n";
+  if (!fs.existsSync(mf) || fs.readFileSync(mf, "utf8") !== body) { fs.mkdirSync(r.dir, { recursive: true }); fs.writeFileSync(mf, body); }
   const w = r.st.pending["meta/config"];
   const last = w && fs.existsSync(w.file_path) ? { data: JSON.parse(fs.readFileSync(w.file_path, "utf8")) } : null;
-  if (!holds(last, { op: "set", file_path: r.configFile })) r.pinned("set", "meta", "config", raw);
-  log(`config: ${r.writes.length ? "changed, write it" : "unchanged"}`);
+  if (!(last && stable(last.data) === stable(r.load.page))) r.pinned("set", "meta", "config", r.load.page);
+  log(`config: ${r.writes.some((x) => x.key === "meta/config") ? "changed, write it" : "unchanged"}`);
+  queueRules(r, rs, rd);
   r.finish(log);
 }
 

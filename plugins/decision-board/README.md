@@ -5,15 +5,17 @@ question with options, or an action) and guides (steps, status, reference pages)
 answers on a phone or in a browser and presses Send. The agent reads the answers, acts, and marks
 the batch handled.
 
-One unchanged page serves many uses. A config, kept in `board/config.json` and written to the
-database, sets the title, the tabs, the priorities and the tags.
+One unchanged page serves many uses. A config, kept in `board/config.json` and optional layers
+around it, merged by `check` and written to the database, sets the title, the tabs, the priorities and the tags.
 
 ## Start a board
 
 1. Install the skill: `claude plugin install decision-board@skill-bazaar`.
 2. Ask the agent to build a decision board. It follows `skills/decision-board/SKILL.md`: it
    publishes `skills/decision-board/assets/board.html` as a private artifact with access rules, and writes the config:
-   the hosts that card links may point to, and the tabs if you want more than All.
+   the hosts that card links may point to, and the tabs if you want more than All. Private settings that
+   hold for all your boards on one machine (time zone, hosts, tags) live in a user file outside any
+   repository, `~/.config/decision-board/config.json` (see `references/data-model.md`).
 3. Open the artifact link in a signed-in claude.ai session, on any device.
 
 ## How the agent works with it
@@ -23,7 +25,9 @@ The agent never reads or types card JSON in the conversation. Its cards live in 
 prints one write: the whole card list as one document, `cards/main`, pinned to the version that
 the state keeps. Answers come back as batches. A watcher queries only the batches whose status is
 `sent`, and `read` prints one short line per answer. Every time is written with the offset of the
-config `tz`. The script has no network access.
+config `tz`. The script has no network access. The operator's standing judgments live in
+`board/rules.md`; every new rule reaches it through a card the operator answers, and `check` posts the
+file as the Rules tab.
 
 ## Layout
 
@@ -35,6 +39,7 @@ The agent needs only `skills/` while it runs a board:
 - `skills/decision-board/scripts/board.mjs`: `check`, `sync`, `close`, `read`, `waiting`, `ack`,
   `guide`, `purge`, `adopt`, `push`.
 - `skills/decision-board/assets/wait.sh`: the pause of a watcher between two polls.
+- `skills/decision-board/assets/config.example.json`: an example config with example checks.
 - `skills/decision-board/references/`: cards, guides, the data model and access rules, the watch
   brief, building a board and changing the page, and the clean up.
 - `docs/how-it-works.html`: how the parts fit together.

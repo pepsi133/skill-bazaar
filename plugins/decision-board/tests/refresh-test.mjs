@@ -22,6 +22,7 @@ const put = (name, v) => { const f = path.join(tmp, ++k + "-" + name); fs.writeF
 const read = (f) => JSON.parse(fs.readFileSync(f, "utf8"));
 function sh(fn, ...argv) { const lines = []; const code = fn(argv, (l) => lines.push(...String(l).split("\n"))); return { code, lines, text: lines.join("\n") }; }
 process.env.BOARD_NOW = "2026-02-01T12:00:00Z";
+process.env.BOARD_USER_CONFIG = "";
 const URL1 = "https://tracker.example.com/infra/-/issues/";
 
 // A sample export of an issue tracker, as a CLI would save it.
@@ -234,6 +235,19 @@ ok("refresh's default zone is the page's", () => {
   const m = /const DEFAULT_TZ = "([^"]+)"/.exec(fs.readFileSync(REFRESH, "utf8"));
   assert.ok(m, "DEFAULT_TZ in refresh.mjs");
   assert.equal(m[1], P.DEFAULTS.tz);
+});
+ok("map --config takes the config.merged.json that check writes, with link_hosts from the user layer", () => {
+  const dir = fs.mkdtempSync(path.join(tmp, "board-")), state = path.join(dir, "state.json"), u = put("user.json", { link_hosts: ["example.com"] });
+  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ tags: CONFIG.tags, tz: "UTC" }));
+  try {
+    process.env.BOARD_USER_CONFIG = u;
+    const c = sh(board, "check", "--state", state);
+    assert.equal(c.code, 0, c.text);
+  } finally { process.env.BOARD_USER_CONFIG = ""; }
+  const want = map(GOOD, MAP, "--config", put("c-ref.json", CONFIG));
+  const r = map(GOOD, MAP, "--config", path.join(dir, "config.merged.json"));
+  assert.equal(r.code, 0, r.text);
+  assert.equal(r.cards.length, want.cards.length);
 });
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`${n} tests passed`);

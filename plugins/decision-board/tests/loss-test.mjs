@@ -44,6 +44,7 @@ const yn = (id, x) => Object.assign({}, NEED, { id, title: id + "?" }, x);
 const sync = (b, list, ...more) => { const f = path.join(tmp, "c" + Math.random().toString(36).slice(2) + ".json"); fs.writeFileSync(f, JSON.stringify(list)); return cmd(b, "sync", f, ...more); };
 const ACKED = "b20260103T000000+0000-bbbb";
 process.env.BOARD_NOW = "2026-02-01T12:00:00Z";
+process.env.BOARD_USER_CONFIG = "";
 
 ok("out files are named by a hash of their content, so a later write never changes the file an earlier array points at", () => {
   const b = fresh();

@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { run, readDump, COMMANDS, FLAGS } from "../skills/decision-board/scripts/board.mjs";
+import { run, readDump, COMMANDS, FLAGS, CONFIG_KEYS, SCRIPT_KEYS, mergeLayers, pageDefaults, compileChecks, checkHits, checkFields } from "../skills/decision-board/scripts/board.mjs";
 import { applyBatch, dump, readDb, writesOf } from "./fakedb.mjs";
 import { createRequire } from "node:module";
 
@@ -45,12 +45,19 @@ const setState = (b, f) => { const st = state(b); f(st); fs.writeFileSync(b.stat
 const card = (b, id) => state(b).cards.find((c) => c.id === id);
 const plain2 = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]));
 const cfgOf = (b, f) => { const p = path.join(b.board, "config.json"), c = JSON.parse(fs.readFileSync(p, "utf8")); f(c); fs.writeFileSync(p, JSON.stringify(c)); };
+// The config keys that layer objects set (a "+key" sets key), in CONFIG_KEYS order, and the expected config default: line.
+const setKeys = (...objs) => CONFIG_KEYS.filter((k) => objs.some((o) => o && (Object.hasOwn(o, k) || Object.hasOwn(o, "+" + k))));
+const defaultLine = (...objs) => "config default: " + CONFIG_KEYS.filter((k) => !SCRIPT_KEYS.includes(k) && !setKeys(...objs).includes(k)).join(", ");
+const boardCfg = (b) => JSON.parse(fs.readFileSync(path.join(b.board, "config.json"), "utf8"));
+// A path as check prints the user file: a leading home folder as ~/.
+const tildeOf = (f) => (f.startsWith(os.homedir() + path.sep) ? "~/" + f.slice(os.homedir().length + 1) : f);
 const putDoc = (b, c, id, data, version = 1) => { fs.mkdirSync(path.join(b.db, c), { recursive: true }); fs.writeFileSync(path.join(b.db, c, id.replace(/:/g, "%3A") + ".json"), JSON.stringify({ version, data })); };
 const batch = (id, created, answers, x) => Object.assign({ id, created, itemIds: Object.keys(answers), noteIds: [], answers, notes: {}, status: "sent" }, x || {});
 const BB = "b20260103T000000+0000-bbbb";
 // The page pure part, for its defaults (a test never names the default zone).
 const P = createRequire(import.meta.url)("./_page.js").load();
 process.env.BOARD_NOW = "2026-02-01T12:00:00Z";
+process.env.BOARD_USER_CONFIG = "";
 // The fields that every open card needs: a valid link (the fixture config lists example.com), the first ask, and
 // for a decision card two options.
 const NEED = { links: [{ label: "Notes", url: "https://wiki.example.com/notes" }], first_asked: { date: "2026-01-15", who: "infra-agent" }, options: ["Yes", "No"] };
@@ -232,14 +239,19 @@ ok("check: local only; it prints the meta/config write from config.json when it 
   const b = fresh();
   const r = cmd(b, "check");
   assert.equal(r.code, 0, r.text);
-  assert.deepEqual(r.lines.slice(0, 2), [`state ${path.relative(process.cwd(), b.state)}: cards 2 (open 1, closed 1); times in UTC`, "config: changed, write it"]);
+  assert.equal(r.lines[0], `state ${path.relative(process.cwd(), b.state)}: cards 2 (open 1, closed 1); times in UTC`);
+  assert.ok(r.lines.includes(`config layers: user off, board ${path.relative(process.cwd(), path.join(b.board, "config.json"))}, local none`), r.text);
+  assert.ok(r.lines.includes("config board: " + setKeys(boardCfg(b)).join(", ")), r.text);
+  assert.ok(r.lines.includes(defaultLine(boardCfg(b))), r.text);
+  assert.ok(r.lines.some((l) => /^config ids: tags .+; priorities .+$/.test(l)), r.text);
+  assert.equal(r.lines.filter((l) => l.startsWith("config:")).join("|"), "config: changed, write it");
   const ws = writesOf(r.lines).flat();
   assert.deepEqual(ws.map((w) => [w.op, w.collection, w.doc_id, w.if_version]), [["set", "meta", "config", undefined]]);
-  assert.deepEqual(cmd(b, "check").lines.slice(1), ["config: unchanged", "no writes"]);
+  { const l = cmd(b, "check").lines; assert.deepEqual(l.filter((x) => x.startsWith("config:") || x === "no writes"), ["config: unchanged", "no writes"]); }
   cfgOf(b, (x) => { x.title = "New title"; });
   assert.deepEqual(writesOf(cmd(b, "check").lines).flat().map((w) => w.if_version), [1]);
   fs.rmSync(path.join(b.board, "config.json"));
-  assert.match(cmd(b, "check").text, /^no config .*config\.json\. Write it first/);
+  assert.match(cmd(b, "check").text, /^no config: write .*config\.json \(references\/data-model\.md\), then run/);
 });
 ok("check: problems in config.json and in the state's cards; labels and kinds are unknown config fields", () => {
   const b = fresh();
@@ -248,9 +260,306 @@ ok("check: problems in config.json and in the state's cards; labels and kinds ar
   const r = cmd(b, "check");
   assert.equal(r.code, 1);
   assert.deepEqual(r.lines.filter((l) => l.startsWith("problem:")), ["problem: config tabs: 1 of 2 entries kept", "problem: config link_hosts: 1 of 3 entries kept",
-    "problem: config tags: 1 of 2 entries kept", "problem: config: unknown field \"kinds\"", "problem: config: unknown field \"labels\"",
+    "problem: config tags: 1 of 2 entries kept", "problem: config board: unknown field \"kinds\"", "problem: config board: unknown field \"labels\"",
     "problem: card bad: \"title\": not text", "problem: card bad: title: missing", "problem: card bad: kind: not one of decision, action, info",
     "problem: card bad: status: not one of open, closed", "problem: card bad: \"rev\": not a whole number"]);
+});
+ok("config layers: a list replaces, \"+key\" appends, an id replaces in place, null removes, _ keys are comments", () => {
+  const defaults = { priorities: [{ id: "now" }, { id: "soon" }, { id: "later" }], title: "Decision board" };
+  const user = { tags: [{ id: "a", label: "A" }, { id: "b" }], domains: ["x.example.com"], obj: { a: 1, b: 2 }, _c: 1 };
+  const board = { "+tags": [{ id: "a", label: "A2" }, { id: "c" }], domains: ["y.example.com"], "+priorities": [{ id: "someday" }], obj: { b: 3, _d: 1 }, title: null };
+  const m = mergeLayers([{ name: "user", data: user }, { name: "board", data: board }], defaults);
+  assert.deepEqual(m.problems, []);
+  assert.deepEqual(m.config.tags, [{ id: "a", label: "A2" }, { id: "b" }, { id: "c" }]);
+  assert.deepEqual(m.config.domains, ["y.example.com"]);
+  assert.deepEqual(m.config.priorities.map((p) => p.id), ["now", "soon", "later", "someday"]);
+  assert.deepEqual(m.config.obj, { a: 1, b: 3 });
+  assert.ok(!("_c" in m.config) && !("title" in m.config));
+  assert.deepEqual([m.src.tags, m.src.priorities, m.src.domains], [["user", "+board"], ["default", "+board"], ["board"]]);
+  assert.deepEqual(user.tags, [{ id: "a", label: "A" }, { id: "b" }], "no input is changed");
+  assert.deepEqual(mergeLayers([{ name: "board", data: { "+tags": [], tags: [] } }], {}).problems, ['board: "+tags" and "tags" in one file']);
+  assert.deepEqual(mergeLayers([{ name: "local", data: { "+title": "x" } }], {}).problems, ['local: "+title": not a list']);
+  assert.deepEqual(mergeLayers([{ name: "user", data: { title: "t" } }, { name: "board", data: { "+title": ["x"] } }], {}).problems, ['board: "+title": the earlier value is not a list']);
+  const real = mergeLayers([{ name: "user", data: { "+priorities": [{ id: "now", label: "X" }] } }], pageDefaults()).config.priorities;
+  assert.deepEqual(real, pageDefaults().priorities.map((p) => (p.id === "now" ? { id: "now", label: "X" } : p)));
+  assert.equal(real.length, pageDefaults().priorities.length);
+});
+ok("config layers: no layer stops with the paths; BOARD_USER_CONFIG names the user file; a user file in a git tree is noted", () => {
+  const b = fresh(false);
+  fs.rmSync(path.join(b.board, "config.json"));
+  const r = cmd(b, "check");
+  assert.equal(r.code, 1);
+  assert.match(r.lines[0], /^no config: write .*config\.json \(references\/data-model\.md\), then run/);
+  const u = path.join(fs.mkdtempSync(path.join(tmp, "u-")), "config.json");
+  fs.writeFileSync(u, JSON.stringify({ link_hosts: ["example.com"], tz: "UTC" }));
+  try {
+    process.env.BOARD_USER_CONFIG = u;
+    const r2 = cmd(b, "check");
+    assert.equal(r2.code, 0, r2.text);
+    const g = fs.mkdtempSync(path.join(tmp, "g-")), ug = path.join(g, "config.json");
+    fs.mkdirSync(path.join(g, ".git"));
+    fs.copyFileSync(u, ug);
+    process.env.BOARD_USER_CONFIG = ug;
+    const r3 = cmd(b, "check");
+    assert.equal(r3.code, 0, r3.text);
+    assert.ok(r3.lines.includes(`note: the user config ${tildeOf(ug)} is inside the git work tree ${g}: keep it out of every repository`), r3.text);
+  } finally { process.env.BOARD_USER_CONFIG = ""; }
+});
+ok("config layers: check merges user, board and local and prints the layer of each key", () => {
+  const b = fresh(), u = path.join(fs.mkdtempSync(path.join(tmp, "u-")), "config.json");
+  const user = { link_hosts: ["tracker.example.com"], tags: [{ id: "ops" }], checks: [{ id: "t", field: "title", forbid: "zzz", message: "No zzz" }] };
+  const board = boardCfg(b);
+  board["+link_hosts"] = board.link_hosts; delete board.link_hosts;
+  const local = { title: "Local title" };
+  fs.writeFileSync(u, JSON.stringify(user));
+  fs.writeFileSync(path.join(b.board, "config.json"), JSON.stringify(board));
+  fs.writeFileSync(path.join(b.board, "config.local.json"), JSON.stringify(local));
+  try {
+    process.env.BOARD_USER_CONFIG = u;
+    const r = cmd(b, "check"), rp = (f) => path.relative(process.cwd(), f);
+    assert.equal(r.code, 0, r.text);
+    for (const l of [`config layers: user ${tildeOf(u)}, board ${rp(path.join(b.board, "config.json"))}, local ${rp(path.join(b.board, "config.local.json"))}`,
+      'config title: local  "Local title"', 'config agent: board  "Coordinator"', "config tabs: board  2 entries", "config link_hosts: user, +board  2 entries",
+      "config tags: board  2 entries", "config checks: user  1 entry  (script only)", defaultLine(user, board, local)]) assert.ok(r.lines.includes(l), l + "\n" + r.text);
+    const named = r.lines.map((l) => /^config ([a-z_]+): /.exec(l)).filter((m) => m && !["layers", "default", "ids"].includes(m[1])).map((m) => m[1]);
+    assert.deepEqual(named, setKeys(user, board, local));
+    assert.ok(!r.lines.some((l) => l.startsWith("config board: ")));
+    const merged = JSON.parse(fs.readFileSync(path.join(b.board, "config.merged.json"), "utf8"));
+    assert.deepEqual(merged.link_hosts, ["tracker.example.com", "example.com"]);
+    assert.ok(!("checks" in merged) && !("settings" in merged));
+    assert.deepEqual(merged.priorities, pageDefaults().priorities);
+  } finally { process.env.BOARD_USER_CONFIG = ""; }
+});
+ok("config layers: the unknown-field check skips _ keys and reads +key by its base name", () => {
+  const b = fresh();
+  cfgOf(b, (x) => { x._note = "x"; x["+tags"] = [{ id: "ops" }]; delete x.tags; });
+  fs.writeFileSync(path.join(b.board, "config.local.json"), JSON.stringify({ zzz: 1 }));
+  const r = cmd(b, "check");
+  assert.deepEqual(r.lines.filter((l) => l.includes("unknown field")), ['problem: config local: unknown field "zzz"']);
+  // Unsafe keys are reported once, as not allowed, even __proto__ that starts with _; +_q is a comment.
+  const p = path.join(b.board, "config.json"), text = fs.readFileSync(p, "utf8").trim();
+  fs.writeFileSync(p, text.slice(0, -1) + ', "__proto__": {"title": "x"}, "constructor": 1, "+_q": [1]}');
+  const r2 = cmd(b, "check");
+  assert.equal(r2.code, 1);
+  assert.deepEqual(r2.lines.filter((l) => /unknown field|not allowed|_q/.test(l)),
+    ['problem: config board: field "__proto__" is not allowed', 'problem: config board: field "constructor" is not allowed', 'problem: config local: unknown field "zzz"']);
+  const m = mergeLayers([{ name: "board", data: JSON.parse('{"+_q": [1], "_r": 2, "obj": {"__proto__": {"a": 1}}}') }], {});
+  assert.deepEqual([m.problems, Object.keys(m.config), m.config.obj], [['board: field "obj.__proto__" is not allowed'], ["obj"], {}]);
+});
+ok("check: meta/config holds the merged page keys only; config.merged.json holds no checks; a change in the user file alone is a new write", () => {
+  const b = fresh(), u = path.join(fs.mkdtempSync(path.join(tmp, "u-")), "config.json");
+  const valid = { id: "t", field: "title", forbid: "zzz", message: "No zzz" };
+  const more = { "+priorities": [{ id: "someday", label: "Someday" }] };
+  fs.writeFileSync(u, JSON.stringify({ title: "U", checks: [valid], ...more }));
+  cfgOf(b, (x) => { delete x.title; }); // the board layer would win over the user title
+
+  try {
+    process.env.BOARD_USER_CONFIG = u;
+    const r = cmd(b, "check");
+    assert.equal(r.code, 0, r.text);
+    const w = writesOf(r.lines).flat().find((x) => x.collection === "meta"), data = JSON.parse(fs.readFileSync(w.file_path, "utf8"));
+    assert.ok(!("checks" in data) && !("standing" in data));
+    assert.ok(!("domains" in data), "a default that no layer set stays off");
+    assert.deepEqual(data.priorities, pageDefaults().priorities.concat(more["+priorities"]), "a +key list is written whole, defaults included");
+    assert.equal(data.settings, "Settings: " + tildeOf(u) + ", " + path.relative(process.cwd(), path.join(b.board, "config.json")));
+    const merged = JSON.parse(fs.readFileSync(path.join(b.board, "config.merged.json"), "utf8"));
+    assert.ok(!("checks" in merged) && "link_hosts" in merged && "standing" in merged);
+    fs.writeFileSync(u, JSON.stringify({ title: "U2", checks: [valid], ...more }));
+    assert.ok(cmd(b, "check").lines.includes("config: changed, write it"));
+    assert.ok(cmd(b, "check").lines.includes("config: unchanged"));
+  } finally { process.env.BOARD_USER_CONFIG = ""; }
+});
+ok("check: a layer file may not set settings; meta/config settings names the board file alone", () => {
+  const b = fresh(), r = cmd(b, "check");
+  const w = writesOf(r.lines).flat().find((x) => x.collection === "meta");
+  assert.equal(JSON.parse(fs.readFileSync(w.file_path, "utf8")).settings, "Settings: " + path.relative(process.cwd(), path.join(b.board, "config.json")));
+  cfgOf(b, (x) => { x.settings = "x"; });
+  const r2 = cmd(b, "check");
+  assert.equal(r2.code, 1);
+  assert.ok(r2.lines.includes('problem: config board: unknown field "settings"'), r2.text);
+});
+const CHECK_LINE = "a check line is a rule of the operator's config: change the card, never the check";
+ok("checks: sync refuses a card that breaks a check and prints the check message; closed cards and cards outside when pass", () => {
+  const b = fresh();
+  cfgOf(b, (x) => { x.checks = [{ id: "tl", field: "links.url", match: "^https://wiki\\.example\\.com/x/", when: { source: ["infra"] }, message: "Link the x page" },
+    { field: "title", forbid: "\\bASAP\\b", except: "ASAP-ok", flags: "i", message: "No ASAP" }]; });
+  const before = fs.readFileSync(b.state, "utf8");
+  const r = sync(b, [yn("a", { source: "infra" })]);
+  assert.equal(r.code, 1);
+  assert.ok(r.lines.includes("a: check tl: Link the x page"), r.text);
+  assert.equal(r.lines.filter((l) => l === CHECK_LINE).length, 1);
+  assert.equal(fs.readFileSync(b.state, "utf8"), before, "a refused sync leaves the state unchanged");
+  assert.ok(sync(b, [yn("b", { title: "asap?" })]).lines.includes("b: check 2: No ASAP"));
+  assert.equal(sync(b, [yn("c", { title: "ASAP-ok?" })]).code, 0, "the one hit is cleared; the i flag applies to except too");
+  assert.ok(sync(b, [yn("d", { title: "ASAP-ok, then asap" })]).lines.includes("d: check 2: No ASAP"), "the second hit is not cleared");
+  const shut = sync(b, [yn("a", { source: "infra", status: "closed" }), yn("b", { title: "asap?", status: "closed" }), yn("d", { title: "ASAP-ok, then asap", status: "closed" })]);
+  assert.equal(shut.code, 0, shut.text);
+  const other = sync(b, [yn("e", { source: "other" })]);
+  assert.equal(other.code, 0, other.text);
+  assert.ok(!other.lines.includes(CHECK_LINE));
+});
+ok("checks: compileChecks and checkHits over a list field and an object field; no lastIndex carry-over", () => {
+  const { checks, problems } = compileChecks([{ id: "u", field: "links.url", match: "/x/" }, { id: "w", field: "first_asked.who", forbid: "bot", message: "No bot" }].map((x) => Object.assign({ message: "m" }, x)));
+  assert.deepEqual(problems, []);
+  const c = { id: "c", links: [{ label: "a", url: "https://example.com/a" }, { label: "b", url: "https://example.com/x/1" }], first_asked: { date: "2026-01-01", who: "ops-bot" } };
+  assert.deepEqual(checkHits(c, checks), ["check w: No bot"]);
+  assert.deepEqual(checkHits(c, checks), ["check w: No bot"], "the same result twice in a row");
+  const f = compileChecks([{ field: "title", forbid: "a", message: "No a" }]).checks;
+  assert.deepEqual([checkHits({ title: "banana" }, f), checkHits({ title: "banana" }, f), checkHits({ title: "kiwi" }, f)], [["check 1: No a"], ["check 1: No a"], []]);
+  assert.deepEqual(checkHits({ links: [{ url: "https://example.com/a" }] }, checks.slice(0, 1)), ["check u: m"], "no link matches");
+});
+ok("checks: check refuses a broken check with its reason", () => {
+  const b = fresh(), m = { message: "m" }, T = { field: "title" };
+  cfgOf(b, (x) => { x.checks = [{ ...T, forbid: "x", ...m, zzz: 1 }, { field: "nope", forbid: "x", ...m }, { ...T, match: "x", forbid: "y", ...m },
+    { ...T, match: "x", except: "y", ...m }, { ...T, match: "(", ...m }, { ...T, forbid: "x", flags: "g", ...m }, { ...T, forbid: "x", when: { source: [] }, ...m },
+    { ...T, forbid: "x" }, { id: "dup", ...T, forbid: "x", ...m }, { id: "dup", ...T, forbid: "y", ...m }]; });
+  const r = cmd(b, "check");
+  assert.equal(r.code, 1);
+  const reMsg = (() => { try { new RegExp("("); } catch (e) { return e.message; } })();
+  assert.deepEqual(r.lines.filter((l) => l.startsWith("problem: config checks")), ['problem: config checks[0]: unknown field "zzz"',
+    `problem: config checks[1].field: one of ${checkFields().join(", ")}`, "problem: config checks[2]: give one of match or forbid",
+    "problem: config checks[3].except: goes with forbid only; widen match instead", "problem: config checks[4].match: not a regex: " + reMsg,
+    "problem: config checks[5].flags: distinct letters of i, m, s, u", "problem: config checks[6].when: an object with source and tags lists of texts",
+    "problem: config checks[7].message: missing", 'problem: config checks: id "dup" twice']);
+  assert.ok(!r.lines.some((l) => /^problem: config checks: .* entries kept$/.test(l)));
+});
+ok("checks: more than 50 checks keep the first 50 in check and in sync", () => {
+  const b = fresh();
+  cfgOf(b, (x) => { x.checks = Array.from({ length: 50 }, (_, i) => ({ field: "title", forbid: "zzz" + i, message: "m" })).concat({ field: "title", forbid: ".", message: "Never" }); });
+  const r = cmd(b, "check");
+  assert.equal(r.code, 1);
+  assert.deepEqual(r.lines.filter((l) => l.startsWith("problem: config checks")), ["problem: config checks: 50 of 51 entries kept"]);
+  const s = sync(b, [yn("fine")]);
+  assert.equal(s.code, 1);
+  assert.ok(s.lines.includes("config checks: 50 of 51 entries kept"), s.text);
+});
+ok("checks: check notes the state's cards that break a check and still writes the config", () => {
+  const b = fresh();
+  cfgOf(b, (x) => { x.checks = [{ id: "no-grow", field: "title", forbid: "Grow", message: "No grow" }]; });
+  const r = cmd(b, "check");
+  assert.equal(r.code, 0, r.text);
+  assert.ok(r.lines.includes("note: card disk-size: check no-grow: No grow"), r.text);
+  assert.ok(r.lines.includes("config: changed, write it"));
+});
+ok("checks: the shipped examples in assets/config.example.json pass check and fire when uncommented", () => {
+  const b = fresh(false), ex = JSON.parse(fs.readFileSync(path.join(SKILL, "assets", "config.example.json"), "utf8"));
+  ex.checks = ex._examples.checks; delete ex._examples; ex.tz = "UTC";
+  fs.writeFileSync(path.join(b.board, "config.json"), JSON.stringify(ex));
+  const c = cmd(b, "check");
+  assert.equal(c.code, 0, c.text);
+  const msg = Object.fromEntries(ex.checks.map((k) => [k.id, k.message]));
+  const fires = (card, id) => { const r = sync(b, [card]); assert.equal(r.code, 1, r.text); assert.ok(r.lines.includes(`${card.id}: check ${id}: ${msg[id]}`), r.text); };
+  fires(yn("t1", { source: "tracker", links: [{ label: "x", url: "https://wiki.example.com/a" }] }), "tracker-link");
+  fires(yn("s1", { summary: "Password = hunter2" }), "no-secrets");
+  fires(yn("s2", { summary: "password: <redacted>, old password = hunter2" }), "no-secrets");
+  fires(yn("m1", { source: "mail" }), "mail-tag");
+  const good = sync(b, [yn("t2", { source: "tracker", links: [{ label: "x", url: "https://tracker.example.com/1" }] }), yn("s3", { summary: "password: <redacted>" }),
+    yn("m2", { source: "mail", tags: ["ops"] })]);
+  assert.equal(good.code, 0, good.text);
+});
+const rulesOf = (b) => path.relative(process.cwd(), path.join(b.board, "rules.md"));
+const rulesLines = (r) => r.lines.filter((l) => l.startsWith("rules:"));
+const guideWrites = (r) => writesOf(r.lines).flat().filter((w) => w.collection === "guides");
+ok("rules: check offers board/rules.md when it is missing; read says nothing", () => {
+  const b = fresh(), rf = rulesOf(b);
+  assert.ok(cmd(b, "check").lines.includes(`rules: no ${rf}. Read references/rules.md, "Start the rules", and follow it`));
+  assert.deepEqual(rulesLines(ok2(b, "read")), []);
+  fs.writeFileSync(path.join(b.board, "rules.md"), "# Rules\n");
+  const r = cmd(b, "check");
+  assert.equal(r.code, 0, r.text);
+  assert.deepEqual([rulesLines(r), guideWrites(r)], [[], []]);
+  assert.match(state(b).rules_md, /^[0-9a-f]{12}$/);
+  assert.deepEqual(rulesLines(cmd(b, "check")), []);
+  assert.deepEqual(rulesLines(ok2(b, "read")), []);
+});
+ok("rules: a change of board/rules.md: read names check, check posts the guide rules once", () => {
+  const b = fresh(), rf = rulesOf(b), file = path.join(b.board, "rules.md");
+  fs.writeFileSync(file, "# Rules\n\n## Alerts\n- x\n\n## Owners\n- y\n");
+  assert.ok(ok2(b, "read").lines.includes(`rules: ${rf} changed. Run node ${SELF} check --state ${JSON.stringify(b.state)} and pass its array`));
+  assert.equal(state(b).rules_md, undefined);
+  const r = cmd(b, "check");
+  assert.equal(r.code, 0, r.text);
+  assert.ok(r.lines.includes(`rules: ${rf} changed. Read it; check posts it as the guide rules in the array below`), r.text);
+  assert.deepEqual(r.lines.filter((l) => l.startsWith("config:")), ["config: changed, write it"]);
+  assert.deepEqual(guideWrites(r).map((w) => [w.op, w.doc_id, w.if_version]), [["set", "rules", undefined]]);
+  apply(b, r);
+  const d = doc(b, "guides", "rules").data;
+  assert.deepEqual([d.kind, d.title, d.status, d.sections.map((s) => s.title)], ["text", "Rules", "active", ["Alerts", "Owners"]]);
+  assert.match(state(b).rules_md, /^[0-9a-f]{12}$/);
+  const again = cmd(b, "check");
+  assert.deepEqual([rulesLines(again), guideWrites(again)], [[], []]);
+  assert.deepEqual(rulesLines(ok2(b, "read")), []);
+  const first = d.sections.find((s) => s.id === "alerts").updated;
+  fs.appendFileSync(file, "\n## Noise\n- z\n");
+  try {
+    process.env.BOARD_NOW = "2026-02-02T12:00:00Z";
+    const r2 = cmd(b, "check");
+    assert.deepEqual(guideWrites(r2).map((w) => [w.op, w.doc_id, w.if_version]), [["set", "rules", 1]]);
+    apply(b, r2);
+    const d2 = doc(b, "guides", "rules").data;
+    assert.equal(d2.sections.find((s) => s.id === "alerts").updated, first, "an unchanged section keeps its time");
+    assert.notEqual(d2.sections.find((s) => s.id === "noise").updated, first);
+    fs.writeFileSync(file, "# Rules\n");
+    const r3 = cmd(b, "check");
+    assert.ok(r3.lines.includes(`rules: ${rf} changed. Read it; check posts it as the guide rules in the array below`), r3.text);
+    assert.deepEqual(guideWrites(r3).map((w) => [w.op, w.collection, w.doc_id, w.if_version]), [["delete", "guides", "rules", 2]]);
+  } finally { process.env.BOARD_NOW = "2026-02-01T12:00:00Z"; }
+});
+ok("rules: a rules.md that is not a valid guide is a check problem and keeps the hash", () => {
+  const b = fresh(), rf = rulesOf(b);
+  fs.writeFileSync(path.join(b.board, "rules.md"), "# Rules\n\n## Alerts\n- x\n");
+  assert.equal(cmd(b, "check").code, 0);
+  const before = state(b).rules_md;
+  assert.match(before, /^[0-9a-f]{12}$/, "a hash from the passing check");
+  fs.writeFileSync(path.join(b.board, "rules.md"), "# Rules\n\n## Big\n" + "x".repeat(210000) + "\n");
+  const r = cmd(b, "check");
+  assert.equal(r.code, 1);
+  assert.ok(r.lines.some((l) => l.startsWith(`problem: rules: ${rf}: `)), r.text);
+  assert.deepEqual(writesOf(r.lines), []);
+  assert.equal(state(b).rules_md, before);
+});
+ok("rules: guide refuses the id rules", () => {
+  const b = fresh(), md = path.join(tmp, "st-rules.md");
+  fs.copyFileSync(path.join(FIX, "status.md"), md);
+  for (const id of ["rules", "Rules", "RULES"]) {
+    const r = dumped(b, "guide", md, "--id", id);
+    assert.deepEqual([r.code, r.lines], [1, [`guide: the guide rules is posted by check from board/rules.md. Run node ${SELF} check`]], id);
+  }
+  assert.equal(dumped(b, "guide", "--id", "Rules", "--delete").code, 1, "archive and delete are refused too");
+});
+ok("rules: read flags rule answers and standing notes", () => {
+  const b = fresh(), RH = "(read references/rules.md and do what it says for this line)";
+  apply(b, sync(b, [yn("rule-alerts", { source: "rules" })]));
+  const rev = card(b, "disk-size").rev;
+  const notes = (o) => ({ noteIds: Object.keys(o), notes: Object.fromEntries(Object.entries(o).map(([k, text]) => [k, { text, item: "" }])) });
+  const block = (r, id) => { const i = r.lines.indexOf(r.lines.find((l) => l.startsWith(`batch ${id} `))); return r.lines.slice(i + 1, r.lines.findIndex((l, j) => j > i && l.startsWith("  when handled"))); };
+  putDoc(b, "batches", "b7", batch("b7", "2026-01-07T00:00:00+00:00", { "rule-alerts": { answer: "Add it", note: "", rev: 1 }, "disk-size": { answer: "Yes", note: "From now on, back up first.", rev } },
+    notes({ n1: "never page me at night", n2: "not a preference" })));
+  const l = block(ok2(b, "read"), "b7");
+  assert.ok(l[0].startsWith("  rule-alerts ") && l[0].endsWith("  [rule]  " + RH), l[0]);
+  assert.ok(l[1].startsWith("  disk-size ") && l[1].endsWith("  [standing]  " + RH), l[1]);
+  assert.ok(l[2].includes("never page me") && l[2].endsWith("  [standing]  " + RH), l[2]);
+  assert.ok(l[3].includes("not a preference") && l[3].endsWith("\"  (act on it)"), l[3]);
+  cfgOf(b, (x) => { x["+standing"] = ["zawsze"]; });
+  putDoc(b, "batches", "b8", batch("b8", "2026-01-08T00:00:00+00:00", {}, notes({ n3: "Zawsze pytaj", n4: "alwaysish" })));
+  const l8 = block(ok2(b, "read"), "b8");
+  assert.ok(l8[0].endsWith("  [standing]  " + RH), l8[0]);
+  assert.ok(l8[1].endsWith("\"  (act on it)") && !l8[1].includes("[standing]"), l8[1]);
+  apply(b, sync(b, [yn("rule-alerts", { source: "rules", title: "Add the alert rule?" })]));
+  putDoc(b, "batches", "b9", batch("b9", "2026-01-09T00:00:00+00:00", { "rule-alerts": { answer: "Add it", note: "", rev: 1 } }));
+  const l9 = block(ok2(b, "read"), "b9");
+  assert.ok(l9[0].endsWith("  [stale-rev]  (skip)") && !l9[0].includes("[rule]"), l9[0]);
+});
+ok("rules: check refuses an invalid standing list", () => {
+  const b = fresh();
+  cfgOf(b, (x) => { x.standing = []; });
+  const r = cmd(b, "check");
+  assert.equal(r.code, 1);
+  assert.ok(r.lines.includes("problem: config standing: a list of 1 to 50 texts, each 1 to 40 characters"), r.text);
+});
+ok("check: config ids lists the tag and priority ids that sync accepts", () => {
+  const b = fresh();
+  assert.ok(cmd(b, "check").lines.includes("config ids: tags " + boardCfg(b).tags.map((t) => t.id).join(", ") + "; priorities " + pageDefaults().priorities.map((p) => p.id).join(", ")));
 });
 ok("close changes the local state and writes cards/main; an unknown id writes nothing; remove is gone", () => {
   const b = fresh();
@@ -415,16 +724,26 @@ ok("dumps: a __proto__ key changes no prototype; version and data beside other k
   fs.writeFileSync(w, '{"version": 2, "id": "w", "title": "T", "data": {"status": "closed"}}');
   assert.deepEqual(cmd(b, "read", "--dump", b.db, "--dumped").lines, ["unknown dump shape: " + w + " holds version and data beside other keys. Dump the board again"]);
 });
-ok("sync: every card needs a link; without link_hosts the refusal says to set them", () => {
+ok("sync: links are optional; an open card without a link gets one note line; a given link is still checked", () => {
   const b = fresh();
   cfgOf(b, (x) => { x.link_hosts = []; });
   const r = sync(b, [mk({ id: "nolink", title: "T", links: undefined }), mk({ id: "haslink", title: "T" })]);
-  assert.deepEqual([r.code, r.lines], [1, ["nolink: links: missing. Every card needs 1 to 10 links {\"label\", \"url\"}. Set link_hosts in config.json first",
-    "haslink: links[0]: no link_hosts in the config: set link_hosts in meta/config"]]);
+  assert.deepEqual([r.code, r.lines], [1, ["haslink: links[0]: no link_hosts in the config: set link_hosts in meta/config"]]);
   const r2 = sync(fresh(), [mk({ id: "empty", title: "T", links: [] }), mk({ id: "many", title: "T", links: Array.from({ length: 11 }, () => NEED.links[0]) }),
     mk({ id: "info", kind: "info", status: "closed", title: "T", links: undefined, options: undefined })]);
-  assert.deepEqual(r2.lines, ["empty: links: missing. Every card needs 1 to 10 links {\"label\", \"url\"}", "many: links: more than 10",
-    "info: links: missing. Every card needs 1 to 10 links {\"label\", \"url\"}"], "the link rule has no exemption");
+  assert.deepEqual([r2.code, r2.lines], [1, ["many: links: more than 10"]]);
+  const c = fresh(), cards = [mk({ id: "nolink", title: "T", links: undefined }), mk({ id: "shut", title: "T", status: "closed", links: undefined }), mk({ id: "haslink", title: "T" })];
+  const r3 = sync(c, cards);
+  assert.equal(r3.code, 0, r3.text);
+  assert.ok(r3.lines[0].startsWith("sync: "));
+  assert.deepEqual(r3.lines.filter((l) => l.startsWith("note: ")), ["note: nolink: no link"]);
+  const r4 = sync(c, cards);
+  assert.ok(r4.lines.includes("note: nolink: no link") && r4.lines.includes("no writes"), r4.text);
+  const d = fresh(false);
+  cfgOf(d, (x) => { x.link_hosts = []; });
+  const r5 = cmd(d, "check");
+  assert.equal(r5.code, 0, r5.text);
+  assert.ok(r5.lines.includes("note: config link_hosts: none, so sync refuses every card link. A card needs no link"), r5.text);
 });
 ok("sync: a link is https:, without a user name or password, on link_hosts or a subdomain; the stored url is normalised", () => {
   const b = fresh();
