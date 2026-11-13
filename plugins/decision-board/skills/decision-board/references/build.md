@@ -12,7 +12,7 @@ Read this only to build a board or to change or republish the page. `S`, `P1` to
    (`tz`, `week_start`, `link_hosts`, `tags`, `checks`, `people`) go in the user file instead, outside every repository: its path is on the
    `config layers:` line of `check` (data-model.md, "The config"). Ask which quick controls they want on the
    cards (`controls` in `references/data-model.md`); all are off by default.
-4. Run `node S check` and pass the array. It makes the state, merges the config layers and prints the layer of
+4. Run `node S check --url URL` and pass the array. It makes the state, merges the config layers and prints the layer of
    each key, checks the config and the cards, and writes `meta/config`. Run it again after every config change.
 5. Write the URL into `board/README.md` and give it to the operator (a signed-in claude.ai session).
 6. If `check` printed a `rules:` line, do what it says.

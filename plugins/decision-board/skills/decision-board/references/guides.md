@@ -22,7 +22,7 @@ asks nothing; a question goes on a card.
 
 ## The status guide
 
-Use the id `status` and these four sections. Update it after each batch you handle.
+Keep one only when the config sets `status.guide` to `true`; the script then prints a `status guide:` line after `ack` and `guide --archive` that says when and how to update it. A status guide uses the id `status` and these four sections:
 
 ```markdown
 # Status

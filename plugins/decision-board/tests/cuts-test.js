@@ -82,3 +82,6 @@ ok("quick controls write no HTML and keep the old cut names away", () => {
   assert.ok(i > 0 && j > i);
   assert.ok(!src.slice(i, j).includes("innerHTML"));
 });
+ok("the status document has no agent field", () => {
+  assert.equal("agent" in P.SCHEMA.status, false);
+});

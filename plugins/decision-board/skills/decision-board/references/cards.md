@@ -2,7 +2,8 @@
 
 ## Fields
 
-A card file is a JSON list of cards. The script fills `rev`, `created` and `updated`, and refuses an
+A card file is a JSON list of cards. The script fills `rev`, `created` and
+`updated` (and `ack --result` fills `result` and `result_at`), and refuses an
 unknown field.
 
 | Field | Value |
@@ -37,7 +38,7 @@ The operator reads the card on a phone, without your session: it must stand alon
 - Every action for the operator gets a card with `blocks`, even when a guide holds the steps: a
   terminal reply scrolls away.
 - Safety mechanisms that are the operator's own to manage stay off the cards as choices.
-- When a "done" needs a check, check it yourself, then add --close <id> to the ack of that batch.
+- When a "done" needs a check, check it yourself, then add --close <id> --result <id> "<what you checked>" to the ack of that batch.
 - A text to paste goes in `draft`, never in a fenced block. `sync` warns when a draft starts with a label such as `DRAFT` or `Note:`.
 
 ## Text format

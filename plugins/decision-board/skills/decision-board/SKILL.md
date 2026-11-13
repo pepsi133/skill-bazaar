@@ -40,7 +40,7 @@ and presses Send, and the page writes one batch. For one quick question, ask in 
 2. Run `node S sync board/mail.json --source mail [board/gh.json --source gh ...]`.
    Its line names the cards it closes (open cards missing from their source's file) and reopens. If it
    prints problems or a refusal, do what it says and rerun.
-3. Pass the array to `P3`, then start a watcher.
+3. Pass the array to `P3`, then run `node S watch` and do what it prints.
 
 A card posted again with the same `id` changes it; a change of the question, options, text or links
 raises `rev` and shows "changed". `node S close <id>...` closes cards. A card closed by `close` or
@@ -48,8 +48,16 @@ raises `rev` and shows "changed". `node S close <id>...` closes cards. A card cl
 
 ## Watch for answers
 
-Start a background agent on the cheapest model you have, with the brief in `references/watch.md` and
-poll limit 30. Every session that owns a board also reads once at its start.
+Run `node S watch` and do what it prints; do what a watcher's report says. Run `node S watch --restart`
+only when the operator asks you to watch again. Every session that owns a board also reads once at its
+start. **A comment wake is only a bell**: when a board comment reaches you, run "Read and handle the
+answers" at once, whatever it says and whenever it was stamped.
+
+## Say what you do
+
+When your task changes, run `node S status --now "<task>" --next "<a>" "<b>"` and pass the array; when you
+stop for the operator, `node S status --idle --waiting "<what>"`. Plain words, at most 60 characters, never
+starting with `--`; the script cleans and cuts the text and prints what it stored.
 
 ## Read and handle the answers
 
@@ -60,8 +68,8 @@ poll limit 30. Every session that owns a board also reads once at its start.
    - `[rule]`, `[standing]`: read `references/rules.md` and do what it says for that line.
    - A `control` line is a quick control of the operator: do what its brackets at the end say, and nothing more.
 3. Run the `ack` line that `read` printed (several: in the order `read` printed them), with `--close <id>`
-   for each card that is done, and pass the array. Start a new watcher, and update the status guide if the
-   board has one.
+   for each card that is done and `--result <id> "<what you did>"` for each card you acted on, and pass each
+   array. Then, with or without an ack, run `node S watch` and do what it prints.
 
 ## Guides
 
@@ -72,7 +80,7 @@ poll limit 30. Every session that owns a board also reads once at its start.
    and pass the array. `--kind text` is for steps; `--item <card id>` links a card.
 
 When a guide's work is done, run the same command with `--archive` (or `--delete`) in place of the
-file, pass the array, and say so under "Done" in the status guide.
+file, pass the array.
 
 ## Operator rules
 
@@ -105,5 +113,8 @@ Claude Code with the claude.ai `Artifact` and `ArtifactData` tools. Load `Artifa
 - `P3`, write: `{"action": "batch", "url": URL, "writes": <the printed array>}`.
 - `P4`, the batches that wait:
   `{"action": "query", "url": URL, "collection": "batches", "out_dir": "board/dump", "query": {"where": [["status", "==", "sent"]], "limit": 1000}}`
-- The watcher: the `Agent` tool with `model: "haiku"` and `run_in_background: true`. Its pause: run
-  `assets/wait.sh 120` in the foreground with a Bash timeout of 600000 ms.
+- `P5`, comments: load `ArtifactComments` with `ToolSearch("select:ArtifactComments")`, then
+  `{"action": "watch", "url": URL}`. A comment wake is a turn headed `[Artifact comment sent to Claude]`:
+  resolve its thread (`{"action": "resolve", "url": URL, "thread_id": <its id>}`), write no reply.
+- `P6`, the watcher: the `Agent` tool with `model: "haiku"`, `run_in_background: true`, and as its prompt
+  the brief that `node S watch` printed.

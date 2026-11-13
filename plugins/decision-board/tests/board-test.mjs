@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { run, readDump, COMMANDS, FLAGS, CONFIG_KEYS, SCRIPT_KEYS, mergeLayers, pageDefaults, compileChecks, checkHits, checkFields } from "../skills/decision-board/scripts/board.mjs";
 import { applyBatch, dump, readDb, writesOf } from "./fakedb.mjs";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(here, "fixtures");
@@ -618,7 +619,7 @@ ok("read: a newline in a database text cannot forge a line", () => {
 ok("ack: an update of batches/<id> pinned to version 1, with the cards write of --close; decisions.md once the batch no longer waits", () => {
   const b = fresh();
   const r = dumped(b, "ack", BB, "--close", "disk-size");
-  assert.equal(r.lines[0], `ack ${BB}: handled, 1 cards closed, 0 reopened. The answers go to decisions.md when the next read no longer lists the batch`);
+  assert.equal(r.lines[0], `ack ${BB}: handled, 1 cards closed, 0 reopened, 0 results. The answers go to decisions.md when the next read no longer lists the batch`);
   const ws = apply(b, r);
   assert.deepEqual(ws.map((w) => [w.op, w.collection, w.doc_id, w.if_version]), [["update", "batches", BB, 1], ["set", "cards", "main", 3]]);
   assert.deepEqual([card(b, "disk-size").status, state(b).next.cards], ["closed", 4]);
@@ -983,7 +984,6 @@ ok("the watch brief makes one database call per poll", () => {
   assert.ok(!/\bP2\b/.test(loop) && !/acks/.test(loop) && !/--state/.test(loop), "no P2, no acks, no --state in the loop");
   assert.ok(!brief.includes("next_cursor"));
   const skill = fs.readFileSync(SKILL_MD, "utf8");
-  assert.ok(section(skill, "## Watch for answers").includes("poll limit 30"));
   assert.ok(section(skill, "## Platform execution notes").includes('`{"action": "query", "url": URL, "collection": "batches", "out_dir": "board/dump", "query": {"where": [["status", "==", "sent"]], "limit": 1000}}`'));
 });
 ok("SKILL.md stays short", () => {
@@ -1179,11 +1179,11 @@ ok("read prints one control line per change, after the answers, with its flags a
   assert.equal(ds({ rev: 1, dismiss: "on" }), '  disk-size  control dismiss "on"  [stale-rev]  (skip)');
   assert.equal(ds({ rev: 3, dismiss: "on" }), '  disk-size  control dismiss "on"  [other-rev]  (skip)');
   assert.equal(ds({ rev: 1, assign: "me", keep: { dismiss: "off", done: "off" } }), '  disk-size  control assign "me"  (ack applies it)', "assign has no rev flag");
-  assert.equal(t7({ rev: 1, close: "on" }), '  tracker-7  control close "on"  (close item "tracker" "7" "https://example.com/t/7" in its source with the operator\'s own tool for it; change nothing else there; then add --close tracker-7 to the ack line; if you cannot, leave the card and say why in your reply)');
+  assert.equal(t7({ rev: 1, close: "on" }), '  tracker-7  control close "on"  (close item "tracker" "7" "https://example.com/t/7" in its source with the operator\'s own tool for it; change nothing else there; then add --close tracker-7 to the ack line; if you cannot, add --result tracker-7 "not closed: <why, in a few words>" to it instead)');
   assert.equal(ds({ rev: 2, close: "on" }), '  disk-size  control close "on"  [no-item]  (skip)');
   assert.equal(t7({ rev: 1, close: "off" }), '  tracker-7  control close "off"  (nothing to do)');
-  assert.equal(t7({ rev: 1, assign: "agent", keep: { dismiss: "off", done: "off" } }), '  tracker-7  control assign "agent"  (do the work the card asks; in a source change only item "tracker" "7" "https://example.com/t/7"; leave the card open and say what you did in your reply)');
-  assert.equal(ds({ rev: 2, assign: "agent", keep: { dismiss: "off", done: "off" } }), '  disk-size  control assign "agent"  (do the work the card asks, with no write to any source; leave the card open and say what you did in your reply)');
+  assert.equal(t7({ rev: 1, assign: "agent", keep: { dismiss: "off", done: "off" } }), '  tracker-7  control assign "agent"  (do the work the card asks; in a source change only item "tracker" "7" "https://example.com/t/7"; leave the card open and add --result tracker-7 "<what you did, in a few words>" to the ack line)');
+  assert.equal(ds({ rev: 2, assign: "agent", keep: { dismiss: "off", done: "off" } }), '  disk-size  control assign "agent"  (do the work the card asks, with no write to any source; leave the card open and add --result disk-size "<what you did, in a few words>" to the ack line)');
   assert.equal(t7({ rev: 1, assign: "jane", keep: { dismiss: "off", done: "off" } }), '  tracker-7  control assign "jane"  (ack applies it)');
   assert.equal(t7({ rev: 1, snooze: "" }), '  tracker-7  control snooze ""  (nothing to do)');
   assert.equal(t7({ rev: 1, tags_on: ["security"], tags_off: ["cost"] }), '  tracker-7  control tags +["security"] -["cost"]  (nothing to do)');
@@ -1219,16 +1219,16 @@ ok("ack applies dismiss, done and assign; undo reopens only what a control close
   const b = ctlBoard();
   putDoc(b, "batches", CB, theBatch());
   const r = dumped(b, "ack", CB), ws = apply(b, r);
-  assert.equal(r.lines[0], `ack ${CB}: handled, 1 cards closed, 0 reopened. The answers go to decisions.md when the next read no longer lists the batch`);
+  assert.equal(r.lines[0], `ack ${CB}: handled, 1 cards closed, 0 reopened, 0 results. The answers go to decisions.md when the next read no longer lists the batch`);
   assert.deepEqual(ws.map((w) => [w.op, w.collection, w.doc_id, w.if_version]), [["update", "batches", CB, 1], ["set", "cards", "main", state(b).next.cards - 1]]);
   assert.equal(card(b, "tracker-7").status, "closed");
   assert.ok(state(b).held.includes("tracker-7"));
   assert.deepEqual(state(b).ctl_closed, { "tracker-7": "dismiss" });
   let x = ackCtl(b, { "tracker-7": { rev: 1, close: "on" } });
-  assert.match(x.line, /: handled, 0 cards closed, 0 reopened\. /);
+  assert.match(x.line, /: handled, 0 cards closed, 0 reopened, 0 results\. /);
   assert.ok(!x.ws.some((w) => w[1] === "cards"), "no cards write");
   x = ackCtl(b, { "tracker-7": { rev: 1, dismiss: "off", keep: KEEP0 } });
-  assert.match(x.line, /: handled, 0 cards closed, 1 reopened\. /);
+  assert.match(x.line, /: handled, 0 cards closed, 1 reopened, 0 results\. /);
   assert.equal(card(b, "tracker-7").status, "open");
   assert.ok(!(state(b).held || []).includes("tracker-7"));
   assert.equal("ctl_closed" in state(b), false);
@@ -1239,15 +1239,15 @@ ok("ack applies dismiss, done and assign; undo reopens only what a control close
   assert.equal("ctl_closed" in state(b), false);
   const c = ctlBoard();
   x = ackCtl(c, { "tracker-7": { rev: 1, assign: "agent", keep: { dismiss: "off", done: "off" } } });
-  assert.match(x.line, /: handled, 0 cards closed, 0 reopened\. /);
+  assert.match(x.line, /: handled, 0 cards closed, 0 reopened, 0 results\. /);
   assert.equal(card(c, "tracker-7").status, "open");
   const d = ctlBoard();
   apply(d, cmd(d, "close", "disk-size"));
   x = ackCtl(d, { "disk-size": { rev: 2, done: "on", keep: { assign: "", dismiss: "off" } } });
-  assert.match(x.line, /: handled, 0 cards closed, 0 reopened\. /);
+  assert.match(x.line, /: handled, 0 cards closed, 0 reopened, 0 results\. /);
   assert.equal("ctl_closed" in state(d), false);
   x = ackCtl(d, { "disk-size": { rev: 2, done: "off", keep: { assign: "", dismiss: "off" } } });
-  assert.match(x.line, /0 reopened\. /);
+  assert.match(x.line, /0 reopened, 0 results\. /);
   assert.equal(card(d, "disk-size").status, "closed");
   const e = ctlBoard();
   x = ackCtl(e, { "disk-size": { rev: 1, dismiss: "on", keep: KEEP0 } });
@@ -1271,7 +1271,7 @@ ok("ack: an earlier waiting batch with controls for the same card goes first", (
   assert.equal(cmd(b, "ack", "b-o1", "--dump", dir).code, 0);
   const r = cmd(b, "ack", "b-o2", "--dump", dir);
   assert.equal(r.code, 0, r.text);
-  assert.match(r.lines[0], /^ack b-o2: handled, 1 cards closed, 0 reopened\. /);
+  assert.match(r.lines[0], /^ack b-o2: handled, 1 cards closed, 0 reopened, 0 results\. /);
 });
 ok("decisions.md logs the changed control lines, with their flags", () => {
   const b = ctlBoard();
@@ -1383,7 +1383,7 @@ ok("sync: a card assigned to other stays closed whatever its source file says, u
     assert.equal(card(b, "tracker-7").status, "closed", JSON.stringify(x));
   }
   const x = ackCtl(b, { "tracker-7": { rev: card(b, "tracker-7").rev, assign: "me", keep: { dismiss: "off", done: "off" } } });
-  assert.match(x.line, /, 1 reopened\. /);
+  assert.match(x.line, /, 1 reopened, 0 results\. /);
   assert.equal("ctl_closed" in state(b), false);
   assert.equal(card(b, "tracker-7").status, "open");
 });
@@ -1392,8 +1392,8 @@ ok("ack: a batch whose ack is pending in the state is already handled; its contr
   putDoc(b, "batches", "b-pa", ctlBatch("b-pa", "2026-11-13T12:00:00+00:00", { "tracker-7": { rev: 1, dismiss: "on", keep: KEEP0 } }));
   putDoc(b, "batches", "b-pb", ctlBatch("b-pb", "2026-11-13T12:01:00+00:00", { "tracker-7": { rev: 1, dismiss: "off", keep: KEEP0 } }));
   const dir = dumpNow(b);
-  assert.match(cmd(b, "ack", "b-pa", "--dump", dir).lines[0], /^ack b-pa: handled, 1 cards closed, 0 reopened\. /);
-  assert.match(cmd(b, "ack", "b-pb", "--dump", dir).lines[0], /^ack b-pb: handled, 0 cards closed, 1 reopened\. /);
+  assert.match(cmd(b, "ack", "b-pa", "--dump", dir).lines[0], /^ack b-pa: handled, 1 cards closed, 0 reopened, 0 results\. /);
+  assert.match(cmd(b, "ack", "b-pb", "--dump", dir).lines[0], /^ack b-pb: handled, 0 cards closed, 1 reopened, 0 results\. /);
   const before = fs.readFileSync(b.state, "utf8"), again = cmd(b, "ack", "b-pa", "--dump", dir);
   assert.deepEqual(again.lines, [`ack b-pa: its write is printed but not confirmed. Run: node ${SELF} push batches/b-pa --state ${JSON.stringify(b.state)}`, "no writes"]);
   assert.equal(fs.readFileSync(b.state, "utf8"), before, "the third ack changes nothing");
@@ -1404,7 +1404,7 @@ ok("ack: a kept done holds the card closed when dismiss is undone", () => {
   ackCtl(b, { "tracker-7": { rev: 1, dismiss: "on", done: "on", keep: { assign: "" } } });
   assert.deepEqual(state(b).ctl_closed, { "tracker-7": "dismiss" });
   const x = ackCtl(b, { "tracker-7": { rev: 1, dismiss: "off", keep: { assign: "", done: "on" } } });
-  assert.match(x.line, /, 0 reopened\. /);
+  assert.match(x.line, /, 0 reopened, 0 results\. /);
   assert.deepEqual(state(b).ctl_closed, { "tracker-7": "done" });
   assert.equal(card(b, "tracker-7").status, "closed");
 });
@@ -1468,5 +1468,487 @@ ok("ack of a batch the dump shows handled clears a pending write left without un
   setState(b, (st) => { st.pending = { ["batches/" + A]: { op: "update", collection: "batches", doc_id: A, if_version: 1 } }; });
   assert.deepEqual(dumped(b, "ack", A).lines, [`ack ${A}: already handled`, "no writes"]);
   assert.equal(((state(b).pending || {})["batches/" + A]), undefined);
+});
+// Agent status and wake modes: the board link that check --url stores, and the problems of status and wake.
+const URL1 = "https://claude.ai/artifact/test-board";
+ok("check: status problems", () => {
+  const b = fresh();
+  cfgOf(b, (c) => { c.status = { stale_minutes: 0, guide: "yes", x: 1 }; });
+  let r = cmd(b, "check");
+  assert.equal(r.code, 1, r.text);
+  const want = ['problem: config status: unknown field "x"', "problem: config status.stale_minutes: a whole number from 1 to 1440", "problem: config status.guide: true or false"];
+  assert.deepEqual(r.lines.filter((l) => want.includes(l)), want, r.text);
+  cfgOf(b, (c) => { c.status = []; });
+  assert.ok(cmd(b, "check").lines.includes("problem: config status: not an object"));
+  cfgOf(b, (c) => { c.status = { stale_minutes: 45, guide: true }; });
+  r = cmd(b, "check");
+  assert.equal(r.code, 0, r.text);
+  assert.ok(!r.lines.some((l) => l.startsWith("problem: config status")), r.text);
+});
+ok("check: wake problems", () => {
+  const b = fresh();
+  cfgOf(b, (c) => { c.wake = { mode: "sometimes", poll_seconds: 30, poll_limit: 0, x: 1 }; });
+  let r = cmd(b, "check");
+  assert.equal(r.code, 1, r.text);
+  const want = ['problem: config wake: unknown field "x"', "problem: config wake.mode: not one of poll, comment, both, off",
+    "problem: config wake.poll_seconds: a whole number from 60 to 86400", "problem: config wake.poll_limit: a whole number from 1 to 1000"];
+  assert.deepEqual(r.lines.filter((l) => want.includes(l)), want, r.text);
+  cfgOf(b, (c) => { c.wake = []; });
+  assert.ok(cmd(b, "check").lines.includes("problem: config wake: not an object"));
+  cfgOf(b, (c) => { c.wake = { mode: "comment", poll_seconds: 120 }; });
+  r = cmd(b, "check");
+  assert.equal(r.code, 0, r.text);
+  assert.ok(!r.lines.some((l) => l.startsWith("problem: config wake")), r.text);
+});
+ok("check --url stores the link; a link with a space or no https is refused", () => {
+  const b = fresh(false);
+  let r = cmd(b, "check", "--url", URL1);
+  assert.equal(r.code, 0, r.text);
+  assert.equal(state(b).url, URL1);
+  for (const u of ["https://claude.ai/artifact/x y", "http://x", 'https://claude.ai/"x', ""]) {
+    r = cmd(b, "check", "--url", u);
+    assert.equal(r.code, 1, u);
+    assert.deepEqual(r.lines, ["check --url: the https link of the artifact, with no space or quote"], u);
+  }
+  assert.equal(state(b).url, URL1, "a refused link changes nothing");
+});
+// status: the out file of the meta/status write of a command's output.
+const statusOut = (r) => { const w = writesOf(r.lines).flat().find((x) => x.collection === "meta" && x.doc_id === "status"); return w && JSON.parse(fs.readFileSync(w.file_path, "utf8")); };
+const T0 = "2026-02-01T12:00:00+00:00", q = (s) => JSON.stringify(String(s));
+ok("status: --now and --next write meta/status, a create first and then pinned", () => {
+  const b = fresh(), st = " --state " + JSON.stringify(b.state), dd = path.relative(process.cwd(), b.dump) || "dump";
+  const r = cmd(b, "status", "--now", "Build X", "--next", "A", "B");
+  assert.equal(r.code, 0, r.text);
+  assert.equal(r.lines[0], 'status: now "Build X", next ["A","B"], waiting ""');
+  const ws = writesOf(r.lines).flat();
+  assert.deepEqual(ws.map((w) => [w.op, w.collection, w.doc_id, w.if_version]), [["set", "meta", "status", undefined]]);
+  assert.deepEqual(statusOut(r), { now: "Build X", next: ["A", "B"], waiting: "", updated: T0 });
+  const i = r.lines.findIndex((l) => /^batch 1 of 1:/.test(l));
+  assert.deepEqual(r.lines.slice(i + 2), [`if refused: rm -rf ${dd}, then P2 meta with versions, then node ${SELF} adopt meta/status --dump ${dd} --dumped${st}`,
+    `if the reply is lost: node ${SELF} push meta/status${st}`]);
+  apply(b, r);
+  const r2 = cmd(b, "status", "--now", "Build Y");
+  assert.deepEqual(writesOf(r2.lines).flat().map((w) => [w.op, w.collection, w.doc_id, w.if_version]), [["set", "meta", "status", 1]]);
+});
+ok("status: a refused write is adopted through the generic path", () => {
+  const b = fresh();
+  apply(b, cmd(b, "status", "--now", "Build X"));
+  const f = path.join(b.db, "meta", "status.json"), raw = JSON.parse(fs.readFileSync(f, "utf8"));
+  raw.version = 2; raw.data.now = "changed by hand"; fs.writeFileSync(f, JSON.stringify(raw));
+  const r = cmd(b, "status", "--now", "Z");
+  assert.equal(writesOf(r.lines).flat()[0].if_version, 1);
+  assert.throws(() => apply(b, r), /no longer at version 1, .* now at version 2/);
+  const ad = ok2(b, "adopt", "meta/status");
+  assert.equal(ad.lines[0], "meta/status: write again, pinned to version 2");
+  assert.deepEqual(writesOf(ad.lines).flat().map((w) => [w.collection, w.doc_id, w.if_version]), [["meta", "status", 2]]);
+  apply(b, ad);
+  assert.equal(doc(b, "meta", "status").data.now, "Z");
+});
+ok("status: size", () => {
+  const b = fresh(), x = "x".repeat(60), e = "€".repeat(60);
+  const r = cmd(b, "status", "--now", x, "--next", x, x, x, "--waiting", x);
+  assert.equal(r.code, 0, r.text);
+  const out = statusOut(r);
+  assert.deepEqual([out.now, out.next, out.waiting], [x, [x, x, x], x]);
+  assert.ok(Buffer.byteLength(JSON.stringify(Object.assign({}, out, { watch: { started: T0, until: T0 } }))) <= 500);
+  const before = fs.readFileSync(b.state, "utf8"), big = cmd(b, "status", "--now", e, "--next", e, e, e);
+  assert.equal(big.code, 1);
+  assert.equal(big.lines.length, 1, big.text);
+  assert.match(big.lines[0], /^status: \d+ bytes with a watcher, over 500; shorten the lines$/);
+  assert.equal(fs.readFileSync(b.state, "utf8"), before, "nothing written");
+});
+ok("status: --idle keeps waiting; a new --now clears it; --waiting in the same call wins; --next with no value clears next; --now idle is --idle", () => {
+  const b = fresh(), go = (...argv) => { const r = cmd(b, "status", ...argv); assert.equal(r.code, 0, r.text); apply(b, r); return statusOut(r); };
+  let o = go("--now", "Build", "--next", "A", "--waiting", "the key");
+  assert.deepEqual([o.now, o.next, o.waiting], ["Build", ["A"], "the key"]);
+  o = go("--idle");
+  assert.deepEqual([o.now, o.next, o.waiting], ["idle", ["A"], "the key"]);
+  o = go("--now", "Test");
+  assert.deepEqual([o.now, o.waiting], ["Test", ""]);
+  o = go("--now", "Deploy", "--waiting", "CI");
+  assert.deepEqual([o.now, o.waiting], ["Deploy", "CI"]);
+  o = go("--next");
+  assert.deepEqual([o.now, o.next, o.waiting], ["Deploy", [], "CI"]);
+  o = go("--now", "IDLE");
+  assert.deepEqual([o.now, o.waiting], ["idle", "CI"]);
+  o = go("--waiting");
+  assert.equal(o.waiting, "");
+});
+ok("status: refused input", () => {
+  const b = fresh(), before = fs.readFileSync(b.state, "utf8");
+  const no = (want, ...argv) => { const r = cmd(b, "status", ...argv); assert.deepEqual([r.code, r.lines], [1, [want]], argv.join(" ")); };
+  no("status: give --now, --next, --waiting or --idle");
+  no("status: --idle and --now together; give one", "--idle", "--now", "x");
+  no("status --now: empty text", "--now", "");
+  no("status --next: an empty line", "--next", "a", "");
+  no("status --next: at most 3 lines", "--next", "a", "b", "c", "d");
+  no("status --now: empty text", "--now", " $\x60 ");
+  assert.equal(fs.readFileSync(b.state, "utf8"), before, "no write");
+});
+ok("status: cleans and cuts the text and prints what it stored", () => {
+  const b = fresh();
+  for (const [given, want] of [["x".repeat(61), "x".repeat(57) + "..."], ["a\nb", "a b"], ['say "hi" for $5 \x60now\x60', "say 'hi' for 5 now"]]) {
+    const r = cmd(b, "status", "--now", given);
+    assert.equal(r.code, 0, r.text);
+    assert.equal(writesOf(r.lines).flat().length, 1);
+    assert.equal(statusOut(r).now, want);
+    assert.ok(r.lines[0].includes(q(want)), r.lines[0]);
+    apply(b, r);
+  }
+  assert.equal("x".repeat(57).length + 3, 60);
+});
+ok("status: push meta/status prints the last write again", () => {
+  const b = fresh(), r = cmd(b, "status", "--now", "Build X");
+  const line = r.lines[r.lines.findIndex((l) => /^batch 1 of 1:/.test(l)) + 1];
+  const p = cmd(b, "push", "meta/status");
+  assert.equal(p.lines[1], line);
+});
+ok("status: two status calls leave one out file of meta/status", () => {
+  const b = fresh();
+  apply(b, cmd(b, "status", "--now", "One"));
+  apply(b, cmd(b, "status", "--now", "Two"));
+  assert.equal(fs.readdirSync(path.join(b.board, "out", "meta")).filter((f) => f.startsWith("status.")).length, 1);
+});
+const TAIL = "The answers go to decisions.md when the next read no longer lists the batch";
+ok("ack --result: stores one line on the card and writes the cards document with the ack", () => {
+  const b = fresh(), rev = card(b, "disk-size").rev;
+  const r = dumped(b, "ack", BB, "--result", "disk-size", "checked the disk");
+  assert.equal(r.code, 0, r.text);
+  assert.ok(r.lines[0].endsWith(`0 cards closed, 0 reopened, 1 results. ${TAIL}`), r.lines[0]);
+  assert.equal(r.lines[1], '  result disk-size: "checked the disk"');
+  const ws = apply(b, r), c = card(b, "disk-size");
+  assert.deepEqual(ws.map((w) => [w.op, w.collection, w.doc_id]), [["update", "batches", BB], ["set", "cards", "main"]]);
+  assert.deepEqual([c.result, c.result_at, c.updated, c.rev], ["checked the disk", T0, T0, rev]);
+});
+ok("ack: a batch whose only effect is a dismiss undo still writes the cards document", () => {
+  const b = ctlBoard();
+  ackCtl(b, { "tracker-7": { rev: 1, dismiss: "on", keep: KEEP0 } });
+  const x = ackCtl(b, { "tracker-7": { rev: 1, dismiss: "off", keep: { assign: "", done: "off" } } });
+  assert.ok(x.line.includes("0 cards closed, 1 reopened, 0 results"), x.line);
+  assert.ok(x.ws.some((w) => w[0] === "set" && w[1] === "cards" && w[2] === "main" && Number.isInteger(w[3])), JSON.stringify(x.ws));
+});
+ok("ack --result: odd value count, unknown card, twice, empty: refused, nothing written", () => {
+  const b = fresh(), before = fs.readFileSync(b.state, "utf8");
+  const no = (want, ...argv) => { const r = dumped(b, "ack", BB, ...argv); assert.deepEqual([r.code, r.lines], [1, [want]], argv.join(" ")); };
+  no("ack --result: give a card id and one text per --result", "--result", "disk-size");
+  no("ack --result: give a card id and one text per --result", "--result", "disk-size", "a", "--result", "old-dns");
+  no(`ack: no card nope in ${b.state}`, "--result", "nope", "x");
+  no("ack --result: card disk-size twice", "--result", "disk-size", "a", "--result", "disk-size", "b");
+  no("ack --result disk-size: empty text", "--result", "disk-size", " $\x60 ");
+  assert.equal(fs.readFileSync(b.state, "utf8"), before, "nothing written");
+  assert.equal(state(b).pending, undefined);
+});
+ok("ack --result: a line break, 201 characters, a double quote, a dollar sign and a backtick are cleaned, not refused", () => {
+  const b = fresh(), text = 'not closed in X: why "timeout" $1 \x60y\x60\n' + "z".repeat(200);
+  const r = dumped(b, "ack", BB, "--result", "disk-size", text);
+  assert.equal(r.code, 0, r.text);
+  apply(b, r);
+  assert.equal(doc(b, "batches", BB).data.status, "handled");
+  const got = card(b, "disk-size").result;
+  assert.equal(got.length, 200);
+  assert.ok(got.endsWith("...") && got.includes("why 'timeout' 1 y z"), got);
+  assert.equal(r.lines[1], "  result disk-size: " + q(got));
+});
+ok("ack --result: a second ack of a handled batch still stores the result", () => {
+  const b = fresh();
+  apply(b, dumped(b, "ack", BB));
+  const r = dumped(b, "ack", BB, "--result", "disk-size", "done");
+  assert.equal(r.lines[0], `ack ${BB}: already handled, 1 results stored`);
+  assert.equal(r.lines[1], '  result disk-size: "done"');
+  const ws = apply(b, r);
+  assert.deepEqual(ws.map((w) => [w.op, w.collection, w.doc_id]), [["set", "cards", "main"]]);
+  assert.equal(card(b, "disk-size").result, "done");
+});
+ok("the status guide line shows only when the config turns it on", () => {
+  let b = fresh();
+  assert.ok(!dumped(b, "ack", BB).lines.some((l) => l.startsWith("status guide:")));
+  b = fresh();
+  cfgOf(b, (c) => { c.status = { guide: true }; });
+  const st = " --state " + JSON.stringify(b.state), f = path.relative(process.cwd(), path.join(b.board, "status.md"));
+  const r = dumped(b, "ack", BB);
+  assert.equal(r.lines[1], `status guide: on in the config. Add what you did with this batch in ${f}, dump guides with versions, then run node ${SELF} guide ${f} --id status --kind status --dump ${b.dump}${st} and pass its array`);
+  const md = path.join(tmp, "ga.md");
+  fs.writeFileSync(md, "# A\n\n## Steps\n\n- one\n");
+  apply(b, dumped(b, "guide", md, "--id", "a"));
+  const g = dumped(b, "guide", "--id", "a", "--archive");
+  assert.equal(g.lines[0], "guide a: archive");
+  assert.equal(g.lines[1], `status guide: on in the config. Say under "Done" that a is done in ${f}, dump guides with versions, then run node ${SELF} guide ${f} --id status --kind status --dump ${b.dump}${st} and pass its array`);
+  const s2 = dumped(b, "guide", "--id", "status", "--archive");
+  assert.ok(!s2.lines.some((l) => l.startsWith("status guide:")), "not for the status guide itself");
+});
+ok("sync: a card file with result is refused; a resync keeps the result; a rev rise drops it and says so", () => {
+  const b = fresh();
+  for (const x of [{ result: "x" }, { result_at: T0 }]) {
+    const r = sync(b, [yn("k", x)]);
+    assert.equal(r.code, 1);
+    assert.ok(r.lines.includes("k: result: set only by ack --result"), r.text);
+  }
+  apply(b, sync(b, [yn("k")]));
+  putDoc(b, "batches", "b-k", batch("b-k", "2026-01-20T00:00:00+00:00", { k: { answer: "Yes", note: "", rev: 1 } }));
+  apply(b, dumped(b, "ack", "b-k", "--result", "k", "done it"));
+  assert.equal(sync(b, [yn("k")]).lines[0], "sync: 0 new, 0 changed (rev up), 0 changed (same rev), 1 unchanged, 0 closed");
+  let r = sync(b, [yn("k", { priority: "now" })]);
+  assert.equal(r.lines[0], "sync: 0 new, 0 changed (rev up), 1 changed (same rev), 0 unchanged, 0 closed");
+  apply(b, r);
+  assert.deepEqual([card(b, "k").result, card(b, "k").result_at], ["done it", T0]);
+  r = sync(b, [yn("k", { priority: "now", title: "k again?" })]);
+  assert.ok(r.lines[0].endsWith(", 1 results dropped (rev up)"), r.lines[0]);
+  apply(b, r);
+  assert.deepEqual([card(b, "k").rev, "result" in card(b, "k"), "result_at" in card(b, "k")], [2, false, false]);
+});
+ok("sync: a dismissed card that returns on a new input drops its result", () => {
+  const b = ctlBoard();
+  syncT7(b, { input: "i1" });
+  ackCtl(b, { "tracker-7": { rev: 1, dismiss: "on", keep: KEEP0 } }, "--result", "tracker-7", "x");
+  assert.equal(card(b, "tracker-7").result, "x");
+  const r = syncT7(b, { input: "i2" });
+  assert.ok(r.lines[0].includes("1 reopened (tracker-7)") && r.lines[0].endsWith(", 1 results dropped (rev up)"), r.lines[0]);
+  assert.equal("result" in card(b, "tracker-7"), false);
+});
+// watch: a board with the wake config x (tz UTC) and the link stored by check --url.
+function wakeBoard(wake) {
+  const b = fresh();
+  cfgOf(b, (c) => { c.wake = wake; });
+  const r = cmd(b, "check", "--url", URL1);
+  assert.equal(r.code, 0, r.text);
+  b.wf = path.join(b.board, "watch.json"); b.wd = path.join(b.board, "watch-dump");
+  return b;
+}
+const atNow = (t, fn) => { const was = process.env.BOARD_NOW; process.env.BOARD_NOW = t; try { return fn(); } finally { process.env.BOARD_NOW = was; } };
+const watchJson = (b) => JSON.parse(fs.readFileSync(b.wf, "utf8"));
+const setWatch = (b, x) => fs.writeFileSync(b.wf, JSON.stringify(Object.assign(watchJson(b), x)) + "\n");
+const startLine = (mode, s, n, until) => `wake ${mode}: start one watcher, every ${s} s, at most ${n} polls, until ${until}. Pass the array below to P3, then start P6 with the lines between "--- brief" and "--- end" as its prompt.`;
+const limitLine = (mode) => `wake ${mode}: the watcher window ended at its poll limit; start none. Start a new one only when the operator asks you to watch again: node ${SELF} watch --restart.` +
+  (mode === "both" ? " A comment on the board still wakes you." : " Read the board when the operator asks.");
+const COMMENTS = "comments: if this session has not run P5 for this board yet, run it now.";
+const T14 = "2026-02-01T14:00:00+00:00";
+// The poll case: watch in mode poll, its write applied.
+function pollStarted(mode = "poll") { const b = wakeBoard({ mode }), r = cmd(b, "watch"); assert.equal(r.code, 0, r.text); apply(b, r); return b; }
+ok("watch: poll starts one watcher, writes the watch file and the status window, and prints the filled brief", () => {
+  const b = wakeBoard({ mode: "poll" }), r = cmd(b, "watch");
+  assert.equal(r.code, 0, r.text);
+  assert.equal(r.lines[0], startLine("poll", 300, 24, T14));
+  assert.equal(r.lines[1], "--- brief");
+  const e = r.lines.indexOf("--- end"), brief = r.lines.slice(2, e).join("\n");
+  assert.ok(e > 2);
+  assert.ok(brief.includes('ToolSearch("select:ArtifactData")'));
+  assert.ok(brief.includes(`"url":"${URL1}"`) && brief.includes(`"out_dir":${JSON.stringify(b.wd)}`) && brief.includes('"where":[["status","==","sent"]]'), brief);
+  assert.ok(brief.includes(`waiting --dump "${b.wd}" --count "${b.wf}"`), brief);
+  for (const x of ["<P4>", "<SCRIPT>", "<DUMP>", "<COUNT>"]) assert.ok(!brief.includes(x), x);
+  assert.ok(!r.lines.includes(COMMENTS));
+  const ws = writesOf(r.lines).flat();
+  assert.deepEqual(ws.map((w) => [w.op, w.collection, w.doc_id]), [["set", "meta", "status"]]);
+  assert.deepEqual(statusOut(r).watch, { started: T0, until: T14 });
+  assert.deepEqual(watchJson(b), { dump: b.wd, seconds: 300, limit: 24, poll: 0, started: T0, until: T14 });
+});
+ok("watch: both uses 900 s and 32 polls by default, the config values when set, and prints the comments line", () => {
+  let r = cmd(wakeBoard({ mode: "both" }), "watch");
+  assert.equal(r.lines[0], startLine("both", 900, 32, "2026-02-01T20:00:00+00:00"));
+  assert.equal(r.lines[r.lines.indexOf("--- end") + 1], COMMENTS);
+  r = cmd(wakeBoard({ mode: "both", poll_seconds: 600, poll_limit: 6 }), "watch");
+  assert.equal(r.lines[0], startLine("both", 600, 6, "2026-02-01T13:00:00+00:00"));
+});
+ok("watch: a running watcher is not started again", () => {
+  const b = pollStarted();
+  assert.deepEqual(cmd(b, "watch").lines, [`wake poll: a watcher runs until ${T14}; start none.`, "no writes"]);
+});
+ok("watch: after a batch report or a dead watcher a new one starts", () => {
+  const b = pollStarted();
+  setWatch(b, { reported: true });
+  let r = cmd(b, "watch");
+  assert.equal(r.lines[0], startLine("poll", 300, 24, T14));
+  apply(b, r);
+  assert.equal("reported" in watchJson(b), false);
+  r = atNow("2026-02-01T15:00:00Z", () => cmd(b, "watch"));
+  assert.equal(r.lines[0], startLine("poll", 300, 24, "2026-02-01T17:00:00+00:00"));
+});
+ok("watch: at the poll limit it ends the window once and starts none; only watch --restart starts a new one", () => {
+  for (const mode of ["poll", "both"]) {
+    const b = pollStarted(mode), lim = limitLine(mode), tail = mode === "both" ? [COMMENTS] : [];
+    setWatch(b, { poll: mode === "poll" ? 24 : 32 });
+    atNow("2026-02-01T14:05:00Z", () => {
+      const r = cmd(b, "watch");
+      assert.deepEqual(r.lines.slice(0, 1 + tail.length), [lim].concat(tail), mode);
+      const ws = writesOf(r.lines).flat();
+      assert.deepEqual(ws.map((w) => [w.collection, w.doc_id, w.if_version]), [["meta", "status", 1]]);
+      assert.equal(statusOut(r).watch.until, "2026-02-01T14:05:00+00:00");
+      assert.equal(watchJson(b).ended, true);
+      apply(b, r);
+      const before = fs.readFileSync(b.wf, "utf8");
+      assert.deepEqual(cmd(b, "watch").lines, [lim].concat(tail, ["no writes"]));
+      assert.equal(fs.readFileSync(b.wf, "utf8"), before);
+      apply(b, cmd(b, "sync", path.join(FIX, "cards.json")));
+      apply(b, dumped(b, "ack", BB));
+      assert.equal(fs.readFileSync(b.wf, "utf8"), before, "sync and ack leave the watch file");
+      assert.deepEqual(cmd(b, "watch").lines, [lim].concat(tail, ["no writes"]));
+      const rs = cmd(b, "watch", "--restart");
+      const until = mode === "poll" ? "2026-02-01T16:05:00+00:00" : "2026-02-01T22:05:00+00:00";
+      assert.equal(rs.lines[0], startLine(mode, mode === "poll" ? 300 : 900, mode === "poll" ? 24 : 32, until));
+      assert.equal(rs.lines[1], "--- brief");
+      assert.deepEqual(statusOut(rs).watch, { started: "2026-02-01T14:05:00+00:00", until });
+      assert.deepEqual([watchJson(b).poll, "ended" in watchJson(b)], [0, false]);
+    });
+  }
+});
+ok("watch --restart: before until at the limit it starts one; with a running watcher it starts none", () => {
+  let b = pollStarted();
+  setWatch(b, { poll: 24 });
+  const r = atNow("2026-02-01T13:58:00Z", () => cmd(b, "watch", "--restart"));
+  assert.equal(r.lines[0], startLine("poll", 300, 24, "2026-02-01T15:58:00+00:00"));
+  b = pollStarted();
+  assert.deepEqual(cmd(b, "watch", "--restart").lines, [`wake poll: a watcher runs until ${T14}; start none.`, "no writes"]);
+  b = wakeBoard({ mode: "off" });
+  assert.deepEqual(cmd(b, "watch", "--restart").lines, ["wake off: start no watcher. Read the board when the operator asks.", "no writes"]);
+  assert.equal(fs.existsSync(b.wf), false);
+});
+ok("watch: comment and off start no watcher", () => {
+  let b = wakeBoard({ mode: "comment" });
+  assert.deepEqual(cmd(b, "watch").lines, ["wake comment: start no watcher; a comment on the board wakes you.", COMMENTS, "no writes"]);
+  assert.equal(fs.existsSync(b.wf), false);
+  b = wakeBoard({ mode: "off" });
+  assert.deepEqual(cmd(b, "watch").lines, ["wake off: start no watcher. Read the board when the operator asks.", "no writes"]);
+  assert.equal(fs.existsSync(b.wf), false);
+});
+ok("watch: keeps now, next and waiting of the last status", () => {
+  const b = wakeBoard({ mode: "poll" });
+  apply(b, cmd(b, "status", "--now", "X", "--next", "Y", "--waiting", "Z"));
+  const r = cmd(b, "watch"), o = statusOut(r);
+  assert.deepEqual([o.now, o.next, o.waiting], ["X", ["Y"], "Z"]);
+  assert.equal(writesOf(r.lines).flat()[0].if_version, 1);
+});
+ok("watch: refuses without a board URL or with bad wake values", () => {
+  let b = fresh(false);
+  cfgOf(b, (c) => { c.wake = { mode: "poll" }; });
+  assert.equal(cmd(b, "check").code, 0);
+  let r = cmd(b, "watch");
+  assert.deepEqual([r.code, r.lines], [1, [`watch: no board URL in ${b.state}. Run node ${SELF} check --url <the artifact link> once, then watch again`]]);
+  b = wakeBoard({ mode: "poll" });
+  cfgOf(b, (c) => { c.wake = { mode: "poll", poll_seconds: 5 }; });
+  r = cmd(b, "watch");
+  assert.deepEqual([r.code, r.lines], [1, ["config wake.poll_seconds: a whole number from 60 to 86400", `fix the config, then run \`node ${SELF} check\``]]);
+});
+ok("waiting --count: the script keeps the poll count, removes the dump, and names the next step", () => {
+  const b = fresh(), wf = path.join(b.board, "watch.json"), dir = path.join(b.board, "watch-dump");
+  const waitSh = path.join(SKILL, "assets", "wait.sh");
+  const put = () => fs.writeFileSync(wf, JSON.stringify({ dump: dir, seconds: 300, limit: 2, poll: 0, started: T0, until: T14 }) + "\n");
+  put(); fs.mkdirSync(dir);
+  assert.deepEqual(sh("waiting", "--dump", dir, "--count", wf).lines, [`none, poll 1 of 2. Run bash "${waitSh}" 300 in the foreground, then go to step 1.`]);
+  assert.deepEqual([fs.existsSync(dir), JSON.parse(fs.readFileSync(wf, "utf8")).poll], [false, 1]);
+  assert.deepEqual(sh("waiting", "--dump", dir, "--count", wf).lines, ['none, poll 2 of 2: the limit. Report exactly: "no batch, poll limit reached: run node S watch and do what it prints". Then stop.']);
+  put(); fs.cpSync(path.join(FIX, "dump"), dir, { recursive: true });
+  assert.deepEqual(sh("waiting", "--dump", dir, "--count", wf).lines, [`batches ${BB} wait. Report exactly: "batches wait: run Read and handle the answers". Then stop.`]);
+  assert.deepEqual([JSON.parse(fs.readFileSync(wf, "utf8")).reported, JSON.parse(fs.readFileSync(wf, "utf8")).poll, fs.existsSync(dir)], [true, 0, false]);
+  let r = sh("waiting", "--dump", b.dump, "--count", wf);
+  assert.deepEqual([r.code, r.lines], [1, [`waiting: --dump is not the dump folder of ${wf}. Report "wrong dump folder, run node S watch" and stop`]]);
+  r = sh("waiting", "--dump", dir, "--count", path.join(b.board, "nope.json"));
+  assert.equal(r.code, 1);
+  assert.ok(r.lines[0].startsWith("waiting: ") && r.lines[0].endsWith('is not a watch file. Report "watch file missing, run node S watch" and stop'), r.text);
+  assert.deepEqual(wait(b).lines, [BB], "the form without --count is unchanged");
+});
+ok("wait.sh: over the cap it pauses and names the whole command", () => {
+  const waitSh = path.join(SKILL, "assets", "wait.sh"), env = (cap) => ({ env: Object.assign({}, process.env, { BOARD_WAIT_CAP: cap }), encoding: "utf8" });
+  assert.equal(spawnSync("bash", [waitSh, "3"], env("1")).stdout, `wait paused: run bash "${waitSh}" 2 again\n`);
+  assert.equal(spawnSync("bash", [waitSh, "1"], env("1")).stdout, "wait ended\n");
+  assert.equal(spawnSync("bash", [waitSh, "x"], env("1")).status, 2);
+  assert.equal(spawnSync("bash", [waitSh, "1"], env("0")).status, 2);
+  assert.equal(spawnSync("bash", [waitSh, "1"], env("00")).status, 2);
+  const lead = spawnSync("bash", [waitSh, "08"], env("1"));
+  assert.deepEqual([lead.status, lead.stdout], [0, `wait paused: run bash "${waitSh}" 7 again\n`], lead.stderr);
+  assert.equal(spawnSync("bash", [waitSh, "01"], env("09")).stdout, "wait ended\n");
+  for (const bad of ["", "1234567890", "00001234567890"]) {
+    const r = spawnSync("bash", [waitSh, bad], env("1"));
+    assert.deepEqual([r.status, r.stdout, r.stderr], [2, "", "wait.sh: seconds must be a whole number\n"], JSON.stringify(bad));
+  }
+  for (const bad of ["1234567890", "0001234567890", "000"]) {
+    const r = spawnSync("bash", [waitSh, "1"], env(bad));
+    assert.deepEqual([r.status, r.stdout, r.stderr], [2, "", "wait.sh: BOARD_WAIT_CAP must be a whole number from 1\n"], bad);
+  }
+  assert.equal(spawnSync("bash", [waitSh, "0000000001"], env("000000001")).stdout, "wait ended\n", "leading zeros do not count");
+});
+ok("waiting --count: a watch file with a count out of range is not a watch file", () => {
+  const b = fresh(), wf = path.join(b.board, "watch.json"), dir = path.join(b.board, "watch-dump");
+  const good = { dump: dir, seconds: 300, limit: 2, poll: 0, started: T0, until: T14 };
+  for (const x of [{ limit: 999999999 }, { limit: 1001 }, { limit: 0 }, { poll: -100000 }, { poll: -1 }, { poll: 3 }, { seconds: 0 }, { seconds: 59 }, { seconds: 86401 }, { seconds: 300.5 }, { limit: "2" }]) {
+    fs.writeFileSync(wf, JSON.stringify(Object.assign({}, good, x)));
+    const r = sh("waiting", "--dump", dir, "--count", wf);
+    assert.deepEqual([r.code, r.lines], [1, [`waiting: ${wf} is not a watch file. Report "watch file missing, run node S watch" and stop`]], JSON.stringify(x));
+  }
+  for (const x of [{ limit: 1000, poll: 999 }, { seconds: 60 }, { seconds: 86400 }, { poll: 1 }]) {
+    fs.writeFileSync(wf, JSON.stringify(Object.assign({}, good, x)));
+    assert.equal(sh("waiting", "--dump", dir, "--count", wf).code, 0, JSON.stringify(x));
+  }
+});
+ok("ack --result on a pending ack is checked, stores nothing, and says to run it again after the push", () => {
+  const b = fresh();
+  dumped(b, "ack", BB);                                  // printed, not applied: the ack is pending
+  const before = fs.readFileSync(b.state, "utf8");
+  const r = dumped(b, "ack", BB, "--close", "disk-size", "--result", "disk-size", "done");
+  assert.deepEqual(r.lines, [`ack ${BB}: its write is printed but not confirmed. Run: node ${SELF} push batches/${BB} --state ${JSON.stringify(b.state)}`,
+    `ack ${BB}: --close disk-size not applied. After the push is confirmed, run: node ${SELF} close disk-size --state ${JSON.stringify(b.state)}`,
+    `ack ${BB}: --result not stored. After the push is confirmed, run this ack again with --result`, "no writes"]);
+  assert.equal(fs.readFileSync(b.state, "utf8"), before, "nothing stored");
+  assert.equal(card(b, "disk-size").result, undefined);
+  assert.deepEqual(dumped(b, "ack", BB, "--result", "nope", "x").lines, [`ack: no card nope in ${b.state}`]);
+  assert.deepEqual(dumped(b, "ack", BB, "--result", "disk-size").lines, ["ack --result: give a card id and one text per --result"]);
+  assert.ok(!dumped(b, "ack", BB).lines.some((l) => l.includes("--result")), "no result line without --result");
+});
+ok("status: cleanText cuts between characters and drops control characters", () => {
+  const b = fresh(), lone = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+  let r = cmd(b, "status", "--now", "\u{1F600}".repeat(40));
+  assert.equal(r.code, 0, r.text);
+  let got = statusOut(r).now;
+  assert.ok(!lone.test(got) && got.length <= 60 && got.endsWith("..."), JSON.stringify(got));
+  assert.equal(got, "\u{1F600}".repeat(28) + "...");
+  apply(b, r);
+  r = cmd(b, "status", "--now", "a\x07b\x1b[31mc\x00d\x7f\u0085e", "--next", "x\ty\nz");
+  assert.deepEqual([statusOut(r).now, statusOut(r).next], ["ab[31mcde", ["x y z"]]);
+  apply(b, r);
+  assert.deepEqual(cmd(b, "status", "--now", "\x07\x1b").lines, ["status --now: empty text"]);
+  const res = dumped(b, "ack", BB, "--result", "disk-size", "\u{1F600}".repeat(150));
+  assert.equal(res.code, 0, res.text);
+  apply(b, res);
+  got = card(b, "disk-size").result;
+  assert.ok(!lone.test(got) && got.length <= 200, got.length);
+  assert.equal(cmd(b, "check").lines.filter((l) => l.startsWith("problem:")).length, 0, "the stored result passes check");
+});
+ok("status: the size check counts a watcher, on both sides of 500 bytes", () => {
+  const b = fresh(), e = "é".repeat(60), x = (n) => "x".repeat(n);
+  const doc = (n, watch) => Buffer.byteLength(JSON.stringify(Object.assign({ now: e, next: [e, x(60), x(n)], waiting: "", updated: T0 }, watch ? { watch: { started: T0, until: T0 } } : {})));
+  assert.deepEqual([doc(37, true), doc(38, true), doc(38, false)], [500, 501, 417]);
+  const r = cmd(b, "status", "--now", e, "--next", e, x(60), x(37));
+  assert.equal(r.code, 0, r.text);
+  const big = cmd(b, "status", "--now", e, "--next", e, x(60), x(38));
+  assert.deepEqual([big.code, big.lines], [1, ["status: 501 bytes with a watcher, over 500; shorten the lines"]]);
+});
+ok("waiting --count: at the limit the count stays at the limit, and watch still ends the window", () => {
+  const b = pollStarted(), lim = 'none, poll 24 of 24: the limit. Report exactly: "no batch, poll limit reached: run node S watch and do what it prints". Then stop.';
+  setWatch(b, { poll: 23 });
+  for (let i = 0; i < 4; i++) {
+    const r = sh("waiting", "--dump", b.wd, "--count", b.wf);
+    assert.deepEqual([r.code, r.lines], [0, [lim]], "call " + (i + 1));
+    assert.equal(watchJson(b).poll, 24, "call " + (i + 1));
+  }
+  assert.equal(sh("waiting", "--dump", b.wd, "--count", b.wf).code, 0, "still a watch file");
+  const w = atNow("2026-02-01T14:05:00Z", () => cmd(b, "watch"));
+  assert.equal(w.lines[0], limitLine("poll"));
+  assert.ok(!w.lines.some((l) => l.startsWith("wake poll: start one watcher")), w.text);
+});
+ok("status and ack --result drop bidi controls, zero-width characters and lone surrogates; a text of only those is empty", () => {
+  const b = fresh();
+  const r = cmd(b, "status", "--now", "a‎b‏c‪d‮e⁦f⁩g​h‌i﻿j\ud800k\udc00l", "--next", "\u{1F468}‍\u{1F4BB} dev");
+  assert.equal(r.code, 0, r.text);
+  assert.deepEqual([statusOut(r).now, statusOut(r).next], ["abcdefghijkl", ["\u{1F468}‍\u{1F4BB} dev"]], "the joiner U+200D stays");
+  apply(b, r);
+  for (const only of ["‎‮⁦", "﻿​ ‌", "\ud800"]) assert.deepEqual(cmd(b, "status", "--now", only).lines, ["status --now: empty text"], JSON.stringify(only));
+  assert.deepEqual(dumped(b, "ack", BB, "--result", "disk-size", "‮​").lines, ["ack --result disk-size: empty text"]);
+});
+ok("ack --result: a bare --result without values is refused; an odd card id is quoted", () => {
+  const b = fresh(), before = fs.readFileSync(b.state, "utf8"), odd = "ack --result: give a card id and one text per --result";
+  assert.deepEqual(dumped(b, "ack", BB, "--result", "disk-size", "ok", "--result").lines, [odd]);
+  assert.deepEqual(dumped(b, "ack", BB, "--result").lines, [odd]);
+  assert.deepEqual(dumped(b, "ack", BB, "--result", "disk-size", "a", "b", "c").lines, [odd], "two texts on one --result");
+  const r = dumped(b, "ack", BB, "--result", "bad\nid x", "t");
+  assert.deepEqual([r.code, r.lines], [1, [`ack: no card ${JSON.stringify("bad\nid x")} in ${b.state}`]]);
+  assert.equal(fs.readFileSync(b.state, "utf8"), before);
 });
 fs.rmSync(tmp, { recursive: true, force: true });
