@@ -49,7 +49,7 @@ Alternatives:
 ## Additions (2026-11-13)
 
 - A result line per card: `ack --result <id> "text"` stores one sentence on the card, and
-  the page shows it under the card, for example "Merged and applied 14:10". It answers "did
+  the page shows it under the card, for example "Merged and deployed 14:10". It answers "did
   the agent act on my answer?" without a terminal.
 - An agent-changed mark: a dot on cards that the agent added or changed since the operator
   last looked. The page keeps the seen `rev` per viewer in localStorage.
