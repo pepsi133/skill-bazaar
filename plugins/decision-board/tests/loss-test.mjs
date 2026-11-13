@@ -12,6 +12,7 @@ import { applyBatch, dump, readDb, writesOf } from "./fakedb.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(here, "fixtures");
+const SELF = path.relative(process.cwd(), path.join(here, "..", "skills", "decision-board", "scripts", "board.mjs"));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loss-test-"));
 let n = 0, failed = 0;
 function ok(name, fn) {
@@ -110,8 +111,111 @@ ok("a refused ack --close: push prints both writes, and adopt batches/<id> print
   const ad = ok2(b, "adopt", "batches/" + ACKED);
   assert.equal(ad.lines[0], `batches/${ACKED}: the board holds the last write`, ad.text);
   assert.deepEqual(writesOf(ad.lines).flat().map((w) => [w.collection, w.doc_id]), [["cards", "main"]], ad.text);
+  assert.ok(!ad.lines.some((l) => l.includes(" adopt cards --dump ") && !l.startsWith("if refused: ")), "the reprinted cards write needs no adopt cards line: " + ad.text);
   apply(b, ad);
   assert.equal(doc(b, "cards", "main").data.cards.find((c) => c.id === "disk-size").status, "closed");
+});
+ok("a refused ack --close after cards/main moved: adopt batches/<id> prints only the batch update and names adopt cards, which lands the close", () => {
+  const b = fresh(), st = " --state " + JSON.stringify(b.state);
+  const r = dumped(b, "ack", ACKED, "--close", "disk-size");
+  // Another writer changed cards/main after the dump, so the whole batch call is refused.
+  edit(path.join(b.db, "cards", "main.json"), (raw) => { raw.version += 1; });
+  assert.throws(() => apply(b, r), /version_mismatch/);
+  const ad = ok2(b, "adopt", "batches/" + ACKED);
+  assert.equal(ad.code, 0, ad.text);
+  assert.equal(ad.lines[0], `batches/${ACKED}: write again, pinned to version 1`);
+  assert.deepEqual(writesOf(ad.lines).flat().map((w) => [w.op, w.collection, w.doc_id, w.if_version]), [["update", "batches", ACKED, 1]], ad.text);
+  assert.equal(ad.lines[ad.lines.length - 1], `batches/${ACKED}: the cards write of this ack is not on the board. Once this array is applied: rm -rf ${b.dump}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${b.dump} --dumped${st}`);
+  assert.equal(card(b, "disk-size").status, "closed", "the close stays in the state");
+  assert.deepEqual(writesOf(cmd(b, "push", "batches/" + ACKED).lines).flat().map((w) => w.collection), ["batches"], "push prints the batch update alone");
+  apply(b, ad);
+  assert.equal(doc(b, "batches", ACKED).data.status, "handled");
+  const ac = ok2(b, "adopt", "cards");
+  assert.equal(ac.code, 0, ac.text);
+  assert.deepEqual(writesOf(ac.lines).flat().map((w) => [w.collection, w.doc_id, w.if_version]), [["cards", "main", doc(b, "cards", "main").version]], ac.text);
+  apply(b, ac);
+  assert.equal(doc(b, "cards", "main").data.cards.find((c) => c.id === "disk-size").status, "closed");
+  const rd = ok2(b, "read");
+  assert.deepEqual(rd.lines, [`decisions.md: the answers of ${ACKED}`, "no batches waiting"]);
+  assert.deepEqual(ok2(b, "read").lines, ["no batches waiting"], "logged once");
+  assert.equal(fs.readFileSync(path.join(b.board, "decisions.md"), "utf8").split("\n").filter((l) => l.startsWith("| disk-size")).length, 2, "the batch's two lines, once");
+});
+// The refused ack of a card close after another writer moved cards/main, then adopt batches/<id>.
+function refusedAck(b, bump = (raw) => { raw.version += 1; }) {
+  const r = dumped(b, "ack", ACKED, "--close", "disk-size");
+  edit(path.join(b.db, "cards", "main.json"), bump);
+  assert.throws(() => apply(b, r), /version_mismatch/);
+  return ok2(b, "adopt", "batches/" + ACKED);
+}
+const cardsLine = (b, word) => `batches/${ACKED}: the cards write of this ack is not on the board. ${word} rm -rf ${b.dump}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${b.dump} --dumped --state ${JSON.stringify(b.state)}`;
+// Follow the adopt cards line of r: it is there, then adopt cards lands the close.
+function followCards(b, r, word) {
+  assert.ok(r.lines.includes(cardsLine(b, word)), r.text);
+  const ac = ok2(b, "adopt", "cards");
+  assert.equal(ac.code, 0, ac.text);
+  apply(b, ac);
+  assert.equal(doc(b, "cards", "main").data.cards.find((c) => c.id === "disk-size").status, "closed", "the close is on the board");
+}
+ok("a refused ack: the reprinted batch update is refused too because another session handled the batch; its if refused line leads to adopt cards", () => {
+  const b = fresh(), ad = refusedAck(b);
+  edit(path.join(b.db, "batches", ACKED + ".json"), (raw) => { raw.version = 2; raw.data.status = "handled"; raw.data.handled_at = "2026-02-01T11:00:00+00:00"; });
+  assert.throws(() => apply(b, ad), /version_mismatch/);
+  assert.ok(ad.lines.some((l) => l.startsWith("if refused: ") && l.includes(` adopt batches/${ACKED} --dump `)), ad.text);
+  const again = ok2(b, "adopt", "batches/" + ACKED);
+  assert.deepEqual(again.lines.slice(0, 3), [`batches/${ACKED}: the board holds the last write`, `decisions.md: the answers of ${ACKED}`, "no writes"], again.text);
+  assert.equal(again.lines[3], cardsLine(b, "Now:"));
+  followCards(b, again, "Now:");
+});
+ok("a refused ack: adopt batches/<id> twice before applying still names adopt cards", () => {
+  const b = fresh();
+  refusedAck(b);
+  const ad2 = ok2(b, "adopt", "batches/" + ACKED);
+  assert.deepEqual(writesOf(ad2.lines).flat().map((w) => w.collection), ["batches"], ad2.text);
+  apply(b, ad2);
+  followCards(b, ad2, "Once this array is applied:");
+});
+ok("a refused ack: a sync before adopt cards is refused by the board and leads to adopt cards; the other writer's card stays", () => {
+  const b = fresh(), other = Object.assign(yn("other-card"), { status: "open", rev: 1, priority: "soon", created: "2026-02-01T11:00:00+00:00", updated: "2026-02-01T11:00:00+00:00" });
+  const ad = refusedAck(b, (raw) => { raw.version += 1; raw.data.cards.push(other); });
+  apply(b, ad);
+  const s = sync(b, [yn("mine")]);
+  assert.equal(s.code, 0, s.text);
+  assert.throws(() => apply(b, s), /version_mismatch/, "the sync pins the refused version again");
+  assert.ok(s.lines.some((l) => l.startsWith("if refused: ") && l.includes(" adopt cards --dump ")), s.text);
+  const ac = ok2(b, "adopt", "cards");
+  apply(b, ac);
+  const ids = doc(b, "cards", "main").data.cards.map((c) => c.id);
+  assert.ok(ids.includes("other-card") && ids.includes("mine"), ids.join());
+  assert.equal(doc(b, "cards", "main").data.cards.find((c) => c.id === "disk-size").status, "closed");
+});
+ok("adopt batches/<id> with a dump that holds no cards names adopt cards", () => {
+  const b = fresh();
+  refusedAck(b);
+  const dir = dumpNow(b);
+  fs.rmSync(path.join(dir, "cards"), { recursive: true });
+  const ad = cmd(b, "adopt", "batches/" + ACKED, "--dump", dir, "--dumped");
+  assert.ok(ad.lines.includes(cardsLine(b, "Once this array is applied:")), ad.text);
+});
+ok("a later refused ack without --close names no adopt cards after the close landed and the board moved", () => {
+  const b = fresh(), LATER = "b20260105T000000+0000-eeee";
+  apply(b, dumped(b, "ack", ACKED, "--close", "disk-size"));
+  edit(path.join(b.db, "cards", "main.json"), (raw) => { raw.version += 1; raw.data.cards.push(Object.assign(yn("other-card"), { status: "open", rev: 1, priority: "soon", created: "2026-02-01T11:00:00+00:00", updated: "2026-02-01T11:00:00+00:00" })); });
+  fs.writeFileSync(path.join(b.db, "batches", LATER + ".json"), JSON.stringify({ version: 1, data: { id: LATER, created: "2026-01-05T00:00:00+00:00", itemIds: ["disk-size"], noteIds: [],
+    answers: { "disk-size": { answer: "Yes", note: "", rev: 2 } }, notes: {}, status: "sent" } }));
+  const r = dumped(b, "ack", LATER);
+  edit(path.join(b.db, "batches", LATER + ".json"), (raw) => { raw.version = 2; raw.data.status = "handled"; raw.data.handled_at = "2026-02-01T11:00:00+00:00"; });
+  assert.throws(() => apply(b, r), /version_mismatch/);
+  const ad = ok2(b, "adopt", "batches/" + LATER);
+  assert.deepEqual(ad.lines, [`batches/${LATER}: the board holds the last write`, `decisions.md: the answers of ${ACKED}, ${LATER}`, "no writes"], ad.text);
+});
+ok("the cards_wait key: kept through a second adopt batches/<id>, accepted by check, gone after adopt cards", () => {
+  const b = fresh();
+  refusedAck(b);
+  ok2(b, "adopt", "batches/" + ACKED);
+  assert.ok(JSON.parse(fs.readFileSync(b.state, "utf8")).cards_wait[ACKED], "kept after a second adopt");
+  assert.equal(cmd(b, "check").code, 0, "a state with the key is no older model");
+  ok2(b, "adopt", "cards");
+  assert.equal(JSON.parse(fs.readFileSync(b.state, "utf8")).cards_wait, undefined, "adopt cards clears it");
 });
 fs.rmSync(tmp, { recursive: true, force: true });
 if (failed) { console.log(failed + " of " + n + " failed"); process.exitCode = 1; }

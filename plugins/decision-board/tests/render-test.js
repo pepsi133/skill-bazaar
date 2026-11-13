@@ -342,7 +342,8 @@ function wakeBox(o = {}) {
     doc: (p) => ({
       set: (d) => { writes.push([p, JSON.parse(JSON.stringify(d))]); return o.failSet && o.failSet(p) ? Promise.reject({ code: "refused", message: "no" }) : Promise.resolve(); },
       update: (d) => { writes.push([p, d]); return Promise.resolve(); }, delete: () => Promise.resolve(),
-      get: () => Promise.resolve(docSnap(p)), onSnapshot: (fn) => { fn(docSnap(p)); return () => {}; } }),
+      get: () => Promise.resolve(docSnap(p)),
+      onSnapshot: (fn, err) => { if (o.configFails && p === "meta/config") err({ code: "refused", message: "no" }); else if (!(o.configNever && p === "meta/config")) fn(docSnap(p)); return () => {}; } }),
     collection: (c) => ({ get: () => Promise.resolve(colSnap(c)), onSnapshot: (fn) => { fn(colSnap(c)); return () => {}; } }),
   };
   const comments = o.comments === undefined ? stubComments() : o.comments;
@@ -363,7 +364,7 @@ function wakeBox(o = {}) {
     cut("  function render() {", "  // Give focus back to el") + cut("  // The agent strip:", '  // "Due today": a link per card') +
     cut('  // "Due today": a link per card', "  // Scroll an element to just below") +
     cut("  function saveCardsSeen()", "  function showMsg(t)") + cut("  function showMsg(t)", "  // ---- pure: start") +
-    cut("  var raf = 0;", "  // ---- reads.") + (o.load ? cut("  // ---- reads.", "})();") : ""));
+    cut("  var raf = 0;", "  // ---- reads.") + (o.realReady ? cut("  function ready()", "  function render() {") + cut('  // The one write of the page to "guides"', "  function renderNotes()") + cut("  function renderSync()", "  var raf = 0;") + cut("  function applyConfigDoc(d)", "  function applyStatus(d)") : "") + (o.load ? cut("  // ---- reads.", "})();") : ""));
   return { W, els, later, writes, store, comments, db };
 }
 const settle = async () => { for (let i = 0; i < 40; i++) await new Promise((r) => setImmediate(r)); };
@@ -505,6 +506,64 @@ aok("strip: hidden before the config loads; Mark all seen shows while a dot show
   const d2 = x.els.agentnow.querySelector("details");
   assert.ok(d2 !== d1 && d2.open === true, "rebuilt and still open");
   assert.ok(x.els.agentnow.textContent.includes("Now: Build") && x.els.agentnow.textContent.includes("Mail"));
+});
+aok("config wait: before meta/config loads, a save, a note, a Send, a control and a guide status write nothing; once it loads they write with the config offset", async () => {
+  const x = wakeBox({ realReady: true }), W = x.W;
+  Object.assign(W.loaded, { items: true, responses: true, notes: true, config: false });
+  const it = W.coerce("item", { id: "a", title: "A", options: ["Yes", "No"], status: "open", rev: 1, updated: "2026-01-01T00:00:00+00:00" });
+  W.items.set("a", it);
+  W.resp.set("a", Object.assign(W.coerce("response", { choice: "Yes", note: "", rev: 1, sent: false, updated: "2026-01-01T00:00:00+00:00" }), { itemId: "a" }));
+  W.guides.set("g", W.coerce("guide", { id: "g", title: "G", status: "active" }));
+  const c = { it, broken: false, undo: null, fs: { querySelector: () => ({ value: "No" }) }, ta: { value: "typed" }, save: new El("span") };
+  W.cards.set("a", c);
+  const tryAll = () => { W.saveResponse("a"); W.$("newnote").value = "hello"; W.addNote(); W.send(); W.setControl(c, { done: true }, null); W.setGuideStatus("g", "archived"); };
+  W.renderSync();
+  assert.equal(W.$("sync").textContent, "Loading", "the sync text says the page still loads");
+  tryAll(); await settle();
+  assert.deepEqual(x.writes, [], "nothing before the config");
+  assert.deepEqual([W.timers.has("a"), W.isPending("a"), W.$("newnote").value, W.$("notestate").textContent], [true, true, "hello", "Saving"], "the answer stays pending, the note stays in its box");
+  W.renderSync();
+  assert.equal(W.$("sync").textContent, "Loading", "a held answer does not read as Saving");
+  assert.deepEqual([W.$("msg").textContent, W.$("msg").hidden], ["The board is still loading. Try again in a moment.", false], "the guide click says why nothing happened");
+  W.$("newnote").value = "hello again";                 // typed on while the note waits: the latest text wins
+  W.applyConfigDoc({ exists: true, data: () => ({ tz: "Asia/Kolkata", controls: { done: true } }) });
+  await settle();
+  const n1 = x.writes.filter(([p]) => p.startsWith("notes/"));
+  assert.ok(n1.length === 1 && n1[0][1].text === "hello again" && /\+05:30$/.test(n1[0][1].created), "the waiting note is added once the config is in: " + JSON.stringify(x.writes));
+  assert.equal(W.$("newnote").value, "");
+  for (const l of x.later.slice()) if (!l.cleared && l.ms === 700) l.f();   // the held answer saves itself
+  await settle();
+  const r1 = x.writes.find(([p]) => p === "responses/a");
+  assert.ok(r1 && r1[1].choice === "No" && r1[1].note === "typed" && /\+05:30$/.test(r1[1].updated), JSON.stringify(x.writes));
+  x.writes.length = 0;
+  tryAll(); await settle();
+  const by = (pre) => x.writes.filter(([p]) => p.startsWith(pre));
+  assert.ok(by("notes/").length === 1 && /^notes\/n\d{8}T\d{6}\+0530-abcd$/.test(by("notes/")[0][0]) && /\+05:30$/.test(by("notes/")[0][1].created), JSON.stringify(x.writes));
+  assert.ok(by("batches/").length === 1 && /\+0530-abcd$/.test(by("batches/")[0][0]) && /\+05:30$/.test(by("batches/")[0][1].created), JSON.stringify(x.writes));
+  assert.ok(by("responses/a").some(([, d]) => d.controls && d.controls.done === true && /\+05:30$/.test(d.updated)), JSON.stringify(x.writes));
+  assert.ok(by("guides/g").length === 1 && /\+05:30$/.test(by("guides/g")[0][1].updated), JSON.stringify(x.writes));
+  assert.equal(W.$("newnote").value, "", "the note was saved and its box cleared");
+  // loaded.config is set also when meta/config does not exist, or its read fails.
+  for (const o of [{ load: true }, { load: true, configFails: true }]) { const y = wakeBox(o); y.W.loaded.config = false; await settle(); assert.equal(y.W.loaded.config, true, JSON.stringify(o)); }
+  // meta/config never arrives: after 10 s the sync line says so, though the cards and answers loaded.
+  const z = wakeBox({ load: true, configNever: true, realReady: true });
+  z.W.loaded.config = false;                // the page starts with it false; the sandbox default is true
+  await settle();
+  assert.equal(z.W.loaded.config, false);
+  for (const l of z.later.slice()) if (!l.cleared && l.ms === 10000) l.f();
+  assert.equal(z.W.$("sync").textContent, "Cannot reach the database yet");
+  z.W.renderSync();                                    // as the retry of a held answer does
+  assert.equal(z.W.$("sync").textContent, "Cannot reach the database yet", "the text stays until the data is in");
+  z.W.applyConfigDoc(null); z.W.renderSync();
+  assert.notEqual(z.W.$("sync").textContent, "Cannot reach the database yet", "the data is in");
+  // A note queued before the config, then its box emptied: nothing is added and the note state clears.
+  const e = wakeBox({ realReady: true });
+  Object.assign(e.W.loaded, { items: true, responses: true, notes: true, config: false });
+  e.W.$("newnote").value = "x"; e.W.addNote();
+  assert.equal(e.W.$("notestate").textContent, "Saving");
+  e.W.$("newnote").value = "";
+  e.W.applyConfigDoc(null); await settle();
+  assert.deepEqual([e.writes, e.W.$("notestate").textContent], [[], ""]);
 });
 (async () => {
   let k = 0;

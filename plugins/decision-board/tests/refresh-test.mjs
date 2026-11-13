@@ -231,6 +231,24 @@ ok("map: created with a leading space before a Z time is the day in the config t
   const warsaw = put("c-waw2.json", Object.assign({}, CONFIG, { tz: "Europe/Warsaw" }));
   assert.equal(one({ created_at: " 2026-01-10T23:30:00Z" }, MAP, "--config", warsaw).cards[0].first_asked.date, "2026-01-11");
 });
+ok("map: created and due read Z, +hh:mm, +hhmm and +hh, with or without a space before the zone, as the day in the config tz", () => {
+  const warsaw = put("c-waw3.json", Object.assign({}, CONFIG, { tz: "Europe/Warsaw" })), day = (v) => one({ created_at: v }, MAP, "--config", warsaw).cards[0].first_asked.date;
+  for (const v of ["2026-01-10T23:30:00Z", "2026-01-10T23:30:00 Z", "2026-01-10T23:30:00+0000", "2026-01-10T23:30:00+00", "2026-01-10 23:30:00 +00:00",
+    "2026-01-10T23:30-0000", "2026-01-11T05:30:00+0600", "2026-01-11T05:30:00 +06", "2026-01-10T20:30:00-0300", "2026-01-10T20:30:00.250 -03"]) assert.equal(day(v), "2026-01-11", v);
+  assert.equal(day("2026-01-11T03:30:00+0500"), "2026-01-10", "+hhmm moves the day back");
+  assert.equal(day("2026-01-10T23:30:00 "), "2026-01-10", "a time without a zone keeps its date, after the trim");
+  const bad = one({ created_at: "2026-02-30T10:00:00 +0100" }, MAP, "--config", warsaw);
+  assert.deepEqual([bad.code, bad.details.skipped[0].reasons], [1, ["created date 2026-02-30 is not a real date"]]);
+  // An offset out of range is read as a zone and refused; a zone with seconds is no zone, so the date stays as written.
+  for (const z of ["+24", "+2500", "+0560", " +24"]) {
+    const r = one({ created_at: "2026-01-10T23:30:00" + z }, MAP, "--config", warsaw);
+    assert.deepEqual([r.code, r.details.skipped[0].reasons], [1, ["created date cannot be read"]], z);
+  }
+  assert.equal(day("2026-01-10T23:30:00+01:00:00"), "2026-01-10", "+01:00:00: the date as written");
+  const M2 = Object.assign({}, MAP, { due: "due_on" });
+  assert.equal(one({ due_on: "2026-03-05T03:30:00+0500" }, M2, "--config", warsaw).cards[0].due, "2026-03-04");
+  assert.equal(one({ due_on: "2026-03-05T03:30:00 +05" }, M2, "--config", warsaw).cards[0].due, "2026-03-04");
+});
 ok("refresh's default zone is the page's", () => {
   const m = /const DEFAULT_TZ = "([^"]+)"/.exec(fs.readFileSync(REFRESH, "utf8"));
   assert.ok(m, "DEFAULT_TZ in refresh.mjs");
