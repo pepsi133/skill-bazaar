@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { run } from "../skills/board-refresh/scripts/refresh.mjs";
 import { run as board } from "../skills/decision-board/scripts/board.mjs";
-import { writesOf } from "./fakedb.mjs";
+import { applyBatch, dump, writesOf } from "./fakedb.mjs";
 import { createRequire } from "node:module";
 
 // The page pure part, for its default zone and dayIn (a test never names the default zone).
@@ -56,7 +56,7 @@ ok("map: fields, source, kind action, tag rules over a list path, both closed va
   assert.equal(r.lines.length, 1);
   assert.equal(r.lines[0], `map: 4 rows, 4 cards (2 closed), 0 dropped, 0 skipped, 0 overrides without a row; rules matched: closed 2, tags[0] security 1, tags[1] cost 2 -> ${r.out}`);
   const [a, b, c, d] = r.cards;
-  assert.deepEqual(a, { id: "tracker-101", source: "tracker", kind: "action", title: "Backup job fails on day 9",
+  assert.deepEqual(a, { id: "tracker-101", source: "tracker", source_key: "101", kind: "action", title: "Backup job fails on day 9",
     links: [{ label: "tracker 101", url: URL1 + "101" }], first_asked: { date: "2026-01-10", who: "ops-bot" }, tags: ["cost"] });
   assert.deepEqual([b.status, b.tags, b.first_asked], ["closed", ["security"], { date: "2026-01-12", who: "Jane-Doe" }]);
   assert.deepEqual([c.status, c.tags, c.first_asked], ["closed", undefined, { date: "2026-01-13" }], "epoch ms; no empty tags; a blank who is dropped");
@@ -300,9 +300,10 @@ ok("map: the example maps of references/maps.md map their sample rows", () => {
   const blocks = [...md.matchAll(/```json\n([\s\S]*?)```/g)].map((x) => JSON.parse(x[1]));
   assert.equal(blocks.length, 2);
   const [T, K] = blocks;
-  const t = map([{ number: 7, title: "Disk full on the backup host", url: "https://tracker.example.com/t/7", created_at: "2026-01-10T08:00:00Z", state: "open", labels: [{ name: "Urgent" }, { name: "incident" }] }], T);
+  const t = map([{ number: 7, title: "Disk full on the backup host", url: "https://tracker.example.com/t/7", created_at: "2026-01-10T08:00:00Z", updated_at: "2026-01-11T08:00:00Z", state: "open", labels: [{ name: "Urgent" }, { name: "incident" }] }], T);
   assert.equal(t.code, 0, t.text);
   assert.deepEqual([t.cards[0].id, t.cards[0].priority, t.cards[0].tags, t.cards[0].status], ["tracker-7", "now", ["incident"], undefined]);
+  assert.deepEqual([t.cards[0].input, t.cards[0].source_key], ["2026-01-11T08:00:00Z", "7"]);
   const krow = { id: "t1", content: "Renew the domain", url: "https://tracker.example.com/task/t1", created_at: "2026-01-05", due: { date: "2026-02-20" }, priority: 4, is_completed: false };
   const kk = map([krow], K);
   assert.equal(kk.code, 0, kk.text);
@@ -319,6 +320,43 @@ ok("map: a board config without tags gets the default tags through config.merged
   assert.equal(r.code, 0, r.text);
   assert.deepEqual(r.cards[0].tags, ["incident"]);
   assert.ok(read(merged).tags.map((x) => x.id).includes("incident"));
+});
+ok("map: input is the row field that changes with new activity; a list is joined; a missing field adds nothing; source_key is the raw key", () => {
+  const a = one({ updated_at: "2026-01-11T08:00:00Z" }, Object.assign({}, MAP, { input: "updated_at" }));
+  assert.equal(a.code, 0, a.text);
+  assert.equal(a.cards[0].input, "2026-01-11T08:00:00Z");
+  assert.equal(one({ notes: [{ at: "a" }, { at: "b" }] }, Object.assign({}, MAP, { input: "notes.at" })).cards[0].input, "a,b");
+  assert.ok(!("input" in one({}, Object.assign({}, MAP, { input: "updated_at" })).cards[0]), "no field, no input");
+  assert.ok(map(GOOD, Object.assign({}, MAP, { input: 5 })).text.includes("input: a string"));
+  assert.equal(one({}).cards[0].source_key, String(row({}).iid));
+  const r = map();
+  assert.deepEqual(r.cards.map((c) => c.source_key), GOOD.map((x) => String(x.iid)));
+});
+ok("a dismissed card returns only when a new source input arrives", () => {
+  const dir = fs.mkdtempSync(path.join(tmp, "board-")), state = path.join(dir, "state.json"), db = path.join(dir, "db"), dd = path.join(dir, "dump");
+  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(Object.assign({}, CONFIG, { controls: { dismiss: true } })));
+  assert.equal(sh(board, "check", "--state", state).code, 0);
+  const M = Object.assign({}, MAP, { input: "updated_at" });
+  // A board command with the state; its writes go to the stand-in database.
+  const cmd = (...argv) => { const r = sh(board, ...argv, "--state", state); assert.equal(r.code, 0, r.text); writesOf(r.lines).forEach((w) => applyBatch(db, w)); return r; };
+  const dumped = () => { const lines = dump(db, dd); fs.writeFileSync(path.join(dd, "versions.txt"), lines.join("\n") + "\n"); return dd; };
+  const card = () => JSON.parse(fs.readFileSync(state, "utf8")).cards.find((c) => c.id === "tracker-7");
+  const rows = (u) => map([row({ iid: 7, updated_at: u })], M).out;
+  cmd("sync", rows("u1"), "--source", "tracker");
+  const bid = "b20260201T120000+0000-ctl7";
+  fs.mkdirSync(path.join(db, "batches"), { recursive: true });
+  fs.writeFileSync(path.join(db, "batches", bid + ".json"), JSON.stringify({ version: 1, data: { id: bid, created: "2026-02-01T12:00:00+00:00", itemIds: [], noteIds: [],
+    controlIds: ["tracker-7"], answers: {}, notes: {}, controls: { "tracker-7": { rev: 1, dismiss: "on" } }, status: "sent" } }));
+  const rd = cmd("read", "--dump", dumped(), "--dumped");
+  assert.ok(rd.lines.includes('  tracker-7  control dismiss "on"  (ack applies it)'), rd.text);
+  cmd("ack", bid, "--dump", dumped());
+  assert.equal(card().status, "closed");
+  const same = cmd("sync", rows("u1"), "--source", "tracker");
+  assert.match(same.lines[0], / 1 unchanged, /);
+  assert.equal(card().status, "closed");
+  const back = cmd("sync", rows("u2"), "--source", "tracker");
+  assert.match(back.lines[0], / 1 changed \(rev up\), .* 1 reopened \(tracker-7\)$/);
+  assert.deepEqual([card().status, card().rev], ["open", 2]);
 });
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`${n} tests passed`);

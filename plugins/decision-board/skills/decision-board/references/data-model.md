@@ -42,6 +42,8 @@ people) in the user file, outside every repository. Each layer is optional, but 
 | `groups` | The sections of a tab, in order: a list of `{id, label, match}`. A card goes to the first group whose `match` fits ("Groups and sort" below) | the six groups below |
 | `sort` | The order inside a group: keys of `priority`, `due`, `first_asked`, `created`, `updated`, `title`, `id`; `-` in front reverses one. Missing values go last | `["priority", "due", "created", "id"]` |
 | `week_start` | When the week of the groups starts: a day and a 24-hour time, `"<day> <HH:MM>"`, for example `"monday 00:00"`. "This week" runs from it to the next one | `"tuesday 12:00"` |
+| `controls` | Quick controls on every card: an object of `assign`, `snooze`, `dismiss`, `close`, `done`, `tags`, each `true` or `false`. Turn on only what the operator uses; the user file is a good place | all `false` |
+| `people` | More names for `assign`: a list of `{id, label}`. `id` is 1 to 40 of `a-z 0-9 _ -`, not `me`, `agent` or `other`. Names of real people belong in the user file, never in a repository | none |
 | `domains` | Hosts a reference guide may load from by `https:`, for example `["docs.example.com"]`. Only the operator adds a host | none |
 | `checks` | Script only, never on the page: regex checks that `sync` runs on each open card, below | none |
 | `standing` | Script only: the words that make `read` flag a note `[standing]`; add words of your language with `"+standing"` | `always`, `never`, `from now on` |
@@ -101,9 +103,9 @@ replaces that group. The defaults:
 |---|---|---|---|
 | `cards` | `main` (the only document; `SCHEMA.cardsDoc`) | the agent: `sync`, `close`, `ack --close`, `purge`, `adopt` | `{cards: [item], refreshed: stamp or ""}` |
 | `guides` | the guide id (`--id`), any id of `SCHEMA.idRe` | the agent: `guide`; the page sets `status` and `updated` | kind, title, sections, status, linked card id in `item` |
-| `responses` | the card id | the page | the draft answer, with the earlier sent answers in `history` |
+| `responses` | the card id | the page | the draft answer and the operator's quick controls, with the earlier sent answers in `history` |
 | `notes` | `n<compact stamp>-<4 chars>` | the page | a free note |
-| `batches` | `b<compact stamp>-<4 chars>` | the page creates it with `status: "sent"`; the agent's `ack` sets `status: "handled"` and `handled_at` | a copy of each answer and note |
+| `batches` | `b<compact stamp>-<4 chars>` | the page creates it with `status: "sent"`; the agent's `ack` sets `status: "handled"` and `handled_at` | a copy of each answer and note, and the controls that changed |
 | `meta` | `config` | the agent: `check` | the merged config of the layers, without script-only keys, with `settings`. (`meta/board` is still read for the title fallback; nothing writes it.) |
 
-A batch has `status` "sent" until `ack` sets "handled" and `handled_at`.
+A batch has `status` "sent" until `ack` sets "handled" and `handled_at`. A card that `ack` closed for `dismiss` or `done` comes back when its content or its `input` changes; one set to Not ours (`assign` `other`) leaves the board and stays closed until the operator assigns it again.

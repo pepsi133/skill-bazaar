@@ -15,7 +15,7 @@ function load(state, extra) {
   const ctx = vm.createContext(Object.assign({
     items: new Map(), resp: new Map(), notes: new Map(), guides: new Map(), batches: new Map(),
     f: { tab: "all" },
-    loaded: { config: true }, isPending: () => false, URL,
+    loaded: { config: true }, isPending: () => false, lingerOf: () => "", URL,
   }, state || {}));
   vm.runInContext(cut("  // ---- pure: start", "  // ---- pure: end") + (extra || ""), ctx, { filename: pageFile });
   return ctx;

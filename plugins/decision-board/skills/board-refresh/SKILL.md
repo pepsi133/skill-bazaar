@@ -36,8 +36,10 @@ description: Refresh the cards of a decision board from outside sources, such as
    `tags` replace the map's. Map again with `--overrides <file>`.
 6. **Sync** with `node S sync board/tracker.json --source tracker` (the `--source` given
    to `map`), as the decision-board skill says. If sync refuses to close cards, check the fetch first;
-   add `--allow-close` only when those closes are real. A card closed on the page reopens while its
-   row stays open; `"status": "closed"` keeps it closed.
+   add `--allow-close` only when those closes are real. A card closed by `close` or `ack --close` stays
+   closed until its content changes; one the operator dismissed or marked done stays closed until its
+   content or its `input` changes, and one set to Not ours until the operator assigns it again;
+   `"status": "closed"` in an override keeps any card closed.
 
 ## The map file
 
@@ -46,7 +48,7 @@ a row field. A dotted name reaches into an object (`author.login`) and over a li
 `[{"name": "a"}]` gives `["a"]`).
 
 ```json
-{"key": "iid", "title": "title", "url": "web_url", "created": "created_at", "who": "author.login",
+{"key": "iid", "title": "title", "url": "web_url", "created": "created_at", "who": "author.login", "input": "updated_at",
  "closed": {"field": "state", "equals": ["closed", "resolved"]},
  "tags": [{"field": "labels.name", "equals": "security", "tag": "security"}]}
 ```
@@ -56,14 +58,17 @@ a row field. A dotted name reaches into an object (`author.login`) and over a li
 `priority` (rules like `tags`, each with `"priority": <config priority id>`; the first that matches sets it),
 `due` (a row field, read like `created`; a value that cannot be read leaves the card without a due date and
 prints `note: <key>: due not read`), `summary` (a row field, cut to 300 characters), `draft` (a row field,
-kept byte for byte), and `rows` (the field that holds the list when the export wraps it). A rule matches when the field, or an
-element of it, equals a value, case ignored. `created` takes a date, an ISO timestamp, or epoch
+kept byte for byte), `input` (the field that changes when the item gets new activity, for example
+`updated_at`: a card the operator dismissed or marked done comes back when it changes), and `rows` (the
+field that holds the list when the export wraps it). A rule matches when the field, or an element of it,
+equals a value, case ignored. `created` takes a date, an ISO timestamp, or epoch
 seconds or milliseconds. The url must be `https:` on a host of `link_hosts`.
 A chat source (Teams, Slack) has no due date: leave out `due` and the groups place its cards by priority;
 never infer a date, and set `due` in an override only when the message text states one.
 
 The card id is `<source>-<key>`, stable across runs (a key outside the id characters gets a short
-hash). The link label is `<source> <key>`.
+hash). The link label is `<source> <key>`. The card's `source_key` is the raw key: the Close control and an
+assign to the agent name the item by it.
 
 ## Never guess a missing field
 

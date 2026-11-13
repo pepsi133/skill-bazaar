@@ -618,7 +618,7 @@ ok("read: a newline in a database text cannot forge a line", () => {
 ok("ack: an update of batches/<id> pinned to version 1, with the cards write of --close; decisions.md once the batch no longer waits", () => {
   const b = fresh();
   const r = dumped(b, "ack", BB, "--close", "disk-size");
-  assert.equal(r.lines[0], `ack ${BB}: handled, 1 cards closed. The answers go to decisions.md when the next read no longer lists the batch`);
+  assert.equal(r.lines[0], `ack ${BB}: handled, 1 cards closed, 0 reopened. The answers go to decisions.md when the next read no longer lists the batch`);
   const ws = apply(b, r);
   assert.deepEqual(ws.map((w) => [w.op, w.collection, w.doc_id, w.if_version]), [["update", "batches", BB, 1], ["set", "cards", "main", 3]]);
   assert.deepEqual([card(b, "disk-size").status, state(b).next.cards], ["closed", 4]);
@@ -1109,5 +1109,364 @@ ok("check: a group that names an unknown tag or priority gets a note, not a prob
   assert.ok(!r.lines.some((l) => l.startsWith("problem:")), r.text);
   cfgOf(b, (c) => { delete c.groups; c.tags = [{ id: "cost" }]; });
   assert.ok(cmd(b, "check").lines.includes('note: config groups: alerts matches tag "alert" that is not in tags'));
+});
+ok("check: controls and people are checked; groups stay in the entries-kept list", () => {
+  const b = fresh();
+  cfgOf(b, (c) => { c.controls = { snooze: "yes", bogus: true }; });
+  let r = cmd(b, "check");
+  assert.equal(r.code, 1, r.text);
+  assert.ok(r.lines.includes("problem: config controls.snooze: true or false"), r.text);
+  assert.ok(r.lines.includes('problem: config controls: unknown field "bogus"'), r.text);
+  cfgOf(b, (c) => { c.controls = 5; });
+  assert.ok(cmd(b, "check").lines.includes("problem: config controls: not an object"));
+  cfgOf(b, (c) => { delete c.controls; c.people = [{ id: "jane" }, { id: "me" }]; });
+  assert.ok(cmd(b, "check").lines.includes("problem: config people: 1 of 2 entries kept"));
+  cfgOf(b, (c) => { c.groups = [{ id: "a", match: { due: ["thisweek"] } }, { id: "b", match: {} }]; });
+  r = cmd(b, "check");
+  assert.ok(r.lines.includes("problem: config people: 1 of 2 entries kept") && r.lines.includes("problem: config groups: 1 of 2 entries kept"), r.text);
+  cfgOf(b, (c) => { delete c.groups; c.controls = { snooze: true }; c.people = [{ id: "jane", label: "Jane" }]; });
+  r = cmd(b, "check");
+  assert.equal(r.code, 0, r.text);
+  assert.ok(CONFIG_KEYS.includes("controls") && CONFIG_KEYS.includes("people"));
+});
+// Quick controls: the 2.4-shaped batch, the tracker-7 card (a map card with source_key) and the helpers.
+const ALL_ON = { assign: true, snooze: true, dismiss: true, close: true, done: true, tags: true };
+const CB = "b20261113T133108+0100-k3x9";
+const ctlBatch = (id, created, controls, x) => Object.assign(batch(id, created, {}), { controlIds: Object.keys(controls), controls }, x || {});
+const ctlOn = (b, on) => cfgOf(b, (c) => { c.controls = on; });
+const T7 = mk({ id: "tracker-7", title: "T7", source: "tracker", source_key: "7", links: [{ label: "tracker 7", url: "https://example.com/t/7" }] });
+const syncT7 = (b, x, ...more) => { const r = sync(b, [Object.assign({}, T7, x || {})].concat(more), "--source", "tracker"); assert.equal(r.code, 0, r.text); apply(b, r); return r; };
+const theBatch = () => ctlBatch(CB, "2026-11-13T13:31:08.412+01:00",
+  { "disk-size": { rev: 2, snooze: "2026-11-20" }, "tracker-7": { rev: 1, dismiss: "on", keep: { assign: "", done: "off" } } },
+  { itemIds: ["disk-size"], answers: { "disk-size": { answer: "Yes", note: "", rev: 2 } } });
+// The board of the control cases: tracker-7 synced at rev 1, every control on unless on says otherwise.
+function ctlBoard(on, tz) {
+  const b = fresh();
+  cfgOf(b, (c) => { c.controls = on || ALL_ON; c.tz = tz || "UTC"; });
+  syncT7(b);
+  return b;
+}
+// The read line of one control in a waiting batch b-ctl that holds only it.
+function ctlLine(b, id, x, key) {
+  putDoc(b, "batches", "b-ctl", ctlBatch("b-ctl", "2026-11-13T12:00:00+00:00", { [id]: x }));
+  const r = ok2(b, "read");
+  return r.lines.find((l) => l.startsWith(`  ${id}  control ${key || ""}`)) || r.text;
+}
+ok("read prints one control line per change, after the answers, with its flags and what to do", () => {
+  const b = ctlBoard(ALL_ON, "Europe/Warsaw");
+  putDoc(b, "batches", CB, theBatch());
+  const want = [`batch ${CB}  "2026-11-13T13:31:08+01:00"  1 answers  0 notes  controls on 2 cards`,
+    '  disk-size  "Yes"  ""  (act on it)',
+    '  disk-size  control snooze "2026-11-20"  (no follow-up before 2026-11-20)',
+    '  tracker-7  control dismiss "on"  (ack applies it)',
+    `  when handled: node ${SELF} ack ${CB} --dump ${b.dump} --state ${JSON.stringify(b.state)}`];
+  let r = ok2(b, "read");
+  const at = want.map((l) => r.lines.indexOf(l));
+  assert.ok(at.every((i, k) => i >= 0 && (k === 0 || i > at[k - 1])), r.text);
+  assert.ok(r.lines.includes(`batch ${BB}  "2026-01-03T01:00:00+01:00"  1 answers  1 notes`), "a batch without controls prints the header unchanged");
+  ctlOn(b, { dismiss: true, done: true });
+  r = ok2(b, "read");
+  assert.ok(r.lines.includes('  disk-size  control snooze "2026-11-20"  [not-enabled]  (skip)'), r.text);
+  assert.ok(!r.lines.some((l) => l.startsWith("  tracker-7  control assign") || l.startsWith("  tracker-7  control done")), "keep values are not printed");
+  fs.rmSync(path.join(b.db, "batches", CB + ".json"));
+  ctlOn(b, ALL_ON);
+  cfgOf(b, (c) => { c.people = [{ id: "jane" }]; });
+  const t7 = (x, key) => ctlLine(b, "tracker-7", x, key), ds = (x, key) => ctlLine(b, "disk-size", x, key);
+  assert.equal(t7({ rev: 1, snooze: "2026-02-30" }), '  tracker-7  control snooze "2026-02-30"  [bad-value]  (skip)');
+  assert.equal(t7({ rev: 1, dismiss: "maybe" }), '  tracker-7  control dismiss "maybe"  [bad-value]  (skip)');
+  assert.equal(t7({ rev: 1, tags_on: ["zzz"], tags_off: [] }), '  tracker-7  control tags +["zzz"] -[]  [bad-value]  (skip)');
+  assert.equal(ctlLine(b, "nope", { rev: 1, done: "on" }), '  nope  control done "on"  [missing]  (skip)');
+  assert.equal(ds({ rev: 1, dismiss: "on" }), '  disk-size  control dismiss "on"  [stale-rev]  (skip)');
+  assert.equal(ds({ rev: 3, dismiss: "on" }), '  disk-size  control dismiss "on"  [other-rev]  (skip)');
+  assert.equal(ds({ rev: 1, assign: "me", keep: { dismiss: "off", done: "off" } }), '  disk-size  control assign "me"  (ack applies it)', "assign has no rev flag");
+  assert.equal(t7({ rev: 1, close: "on" }), '  tracker-7  control close "on"  (close item "tracker" "7" "https://example.com/t/7" in its source with the operator\'s own tool for it; change nothing else there; then add --close tracker-7 to the ack line; if you cannot, leave the card and say why in your reply)');
+  assert.equal(ds({ rev: 2, close: "on" }), '  disk-size  control close "on"  [no-item]  (skip)');
+  assert.equal(t7({ rev: 1, close: "off" }), '  tracker-7  control close "off"  (nothing to do)');
+  assert.equal(t7({ rev: 1, assign: "agent", keep: { dismiss: "off", done: "off" } }), '  tracker-7  control assign "agent"  (do the work the card asks; in a source change only item "tracker" "7" "https://example.com/t/7"; leave the card open and say what you did in your reply)');
+  assert.equal(ds({ rev: 2, assign: "agent", keep: { dismiss: "off", done: "off" } }), '  disk-size  control assign "agent"  (do the work the card asks, with no write to any source; leave the card open and say what you did in your reply)');
+  assert.equal(t7({ rev: 1, assign: "jane", keep: { dismiss: "off", done: "off" } }), '  tracker-7  control assign "jane"  (ack applies it)');
+  assert.equal(t7({ rev: 1, snooze: "" }), '  tracker-7  control snooze ""  (nothing to do)');
+  assert.equal(t7({ rev: 1, tags_on: ["security"], tags_off: ["cost"] }), '  tracker-7  control tags +["security"] -["cost"]  (nothing to do)');
+  fs.rmSync(path.join(b.db, "batches", "b-ctl.json"));
+  putDoc(b, "batches", "b-c1", ctlBatch("b-c1", "2026-11-13T12:00:00+00:00", { "tracker-7": { rev: 1, close: "on" } }));
+  putDoc(b, "batches", "b-c2", ctlBatch("b-c2", "2026-11-13T12:01:00+00:00", { "tracker-7": { rev: 1, close: "off" } }));
+  r = ok2(b, "read");
+  const i1 = r.lines.indexOf("  tracker-7  control close \"on\"  [superseded]  (skip)"), i2 = r.lines.indexOf("  tracker-7  control close \"off\"  (nothing to do)");
+  assert.ok(i1 >= 0 && i2 > i1, r.text);
+  fs.rmSync(path.join(b.db, "batches", "b-c1.json")); fs.rmSync(path.join(b.db, "batches", "b-c2.json"));
+  const T8 = mk({ id: "tracker-8", title: "T8", source: "tracker", source_key: "8" });
+  delete T8.links;
+  const s8 = syncT7(b, {}, T8);
+  assert.ok(s8.lines.includes("note: tracker-8: no link"), s8.text);
+  assert.ok(ctlLine(b, "tracker-8", { rev: 1, close: "on" }).includes('(close item "tracker" "8" link none in its source with the operator\'s own tool for it;'));
+  fs.rmSync(path.join(b.db, "batches", "b-ctl.json"));
+  putDoc(b, "batches", "b-h", ctlBatch("b-h", "2026-11-13T12:00:00+00:00", { "tracker-7": { rev: 1, dismiss: "on" } }, { status: "handled", handled_at: "2026-11-13T13:00:00+00:00" }));
+  r = ok2(b, "read", "--all");
+  assert.ok(r.lines.includes('  tracker-7  control dismiss "on"'), r.text);
+});
+// Put a batch with controls, ack it (with more arguments, such as --close), apply its writes; the ack result.
+let ctlSeq = 0;
+function ackCtl(b, controls, ...more) {
+  const id = "b-ack-" + String(++ctlSeq).padStart(3, "0"), created = `2026-11-13T12:${String(ctlSeq % 60).padStart(2, "0")}:00+00:00`;
+  putDoc(b, "batches", id, ctlBatch(id, created, controls));
+  const r = dumped(b, "ack", id, ...more);
+  assert.equal(r.code, 0, r.text);
+  const ws = apply(b, r);
+  return { id, r, line: r.lines[0], ws: ws.map((w) => [w.op, w.collection, w.doc_id, w.if_version]) };
+}
+const KEEP0 = { assign: "", done: "off" };
+ok("ack applies dismiss, done and assign; undo reopens only what a control closed; close and assign agent are left to the agent", () => {
+  const b = ctlBoard();
+  putDoc(b, "batches", CB, theBatch());
+  const r = dumped(b, "ack", CB), ws = apply(b, r);
+  assert.equal(r.lines[0], `ack ${CB}: handled, 1 cards closed, 0 reopened. The answers go to decisions.md when the next read no longer lists the batch`);
+  assert.deepEqual(ws.map((w) => [w.op, w.collection, w.doc_id, w.if_version]), [["update", "batches", CB, 1], ["set", "cards", "main", state(b).next.cards - 1]]);
+  assert.equal(card(b, "tracker-7").status, "closed");
+  assert.ok(state(b).held.includes("tracker-7"));
+  assert.deepEqual(state(b).ctl_closed, { "tracker-7": "dismiss" });
+  let x = ackCtl(b, { "tracker-7": { rev: 1, close: "on" } });
+  assert.match(x.line, /: handled, 0 cards closed, 0 reopened\. /);
+  assert.ok(!x.ws.some((w) => w[1] === "cards"), "no cards write");
+  x = ackCtl(b, { "tracker-7": { rev: 1, dismiss: "off", keep: KEEP0 } });
+  assert.match(x.line, /: handled, 0 cards closed, 1 reopened\. /);
+  assert.equal(card(b, "tracker-7").status, "open");
+  assert.ok(!(state(b).held || []).includes("tracker-7"));
+  assert.equal("ctl_closed" in state(b), false);
+  assert.ok(x.ws.some((w) => w[1] === "cards"), "a cards write in the same array");
+  ackCtl(b, { "tracker-7": { rev: 1, dismiss: "on", keep: KEEP0 } });
+  x = ackCtl(b, { "tracker-7": { rev: 1, dismiss: "off", keep: KEEP0 } }, "--close", "tracker-7");
+  assert.equal(card(b, "tracker-7").status, "closed", "--close wins");
+  assert.equal("ctl_closed" in state(b), false);
+  const c = ctlBoard();
+  x = ackCtl(c, { "tracker-7": { rev: 1, assign: "agent", keep: { dismiss: "off", done: "off" } } });
+  assert.match(x.line, /: handled, 0 cards closed, 0 reopened\. /);
+  assert.equal(card(c, "tracker-7").status, "open");
+  const d = ctlBoard();
+  apply(d, cmd(d, "close", "disk-size"));
+  x = ackCtl(d, { "disk-size": { rev: 2, done: "on", keep: { assign: "", dismiss: "off" } } });
+  assert.match(x.line, /: handled, 0 cards closed, 0 reopened\. /);
+  assert.equal("ctl_closed" in state(d), false);
+  x = ackCtl(d, { "disk-size": { rev: 2, done: "off", keep: { assign: "", dismiss: "off" } } });
+  assert.match(x.line, /0 reopened\. /);
+  assert.equal(card(d, "disk-size").status, "closed");
+  const e = ctlBoard();
+  x = ackCtl(e, { "disk-size": { rev: 1, dismiss: "on", keep: KEEP0 } });
+  assert.match(x.line, /: handled, 0 cards closed, /, "a stale-rev dismiss closes nothing");
+  ctlOn(e, { dismiss: true });
+  x = ackCtl(e, { "tracker-7": { rev: 1, done: "on", keep: { dismiss: "off" } } });
+  assert.match(x.line, /: handled, 0 cards closed, /, "a control the config turns off closes nothing");
+  assert.equal(card(e, "tracker-7").status, "open");
+});
+ok("ack: an earlier waiting batch with controls for the same card goes first", () => {
+  const b = ctlBoard();
+  putDoc(b, "batches", "b-o1", ctlBatch("b-o1", "2026-11-13T12:00:00+00:00", { "tracker-7": { rev: 1, snooze: "2026-11-20" } }));
+  putDoc(b, "batches", "b-o2", ctlBatch("b-o2", "2026-11-13T12:01:00+00:00", { "tracker-7": { rev: 1, dismiss: "on", keep: KEEP0 } }));
+  putDoc(b, "batches", "b-o3", ctlBatch("b-o3", "2026-11-13T12:02:00+00:00", { "disk-size": { rev: 2, snooze: "2026-11-20" } }));
+  const dir = dumpNow(b), before = fs.readFileSync(b.state, "utf8");
+  const no = cmd(b, "ack", "b-o2", "--dump", dir);
+  assert.equal(no.code, 1);
+  assert.equal(no.text, "ack: ack b-o1 first: it holds controls for the same cards. Nothing written");
+  assert.equal(fs.readFileSync(b.state, "utf8"), before, "the state is byte-identical");
+  assert.equal(cmd(b, "ack", "b-o3", "--dump", dir).code, 0, "a later batch for another card acks without the earlier one");
+  assert.equal(cmd(b, "ack", "b-o1", "--dump", dir).code, 0);
+  const r = cmd(b, "ack", "b-o2", "--dump", dir);
+  assert.equal(r.code, 0, r.text);
+  assert.match(r.lines[0], /^ack b-o2: handled, 1 cards closed, 0 reopened\. /);
+});
+ok("decisions.md logs the changed control lines, with their flags", () => {
+  const b = ctlBoard();
+  putDoc(b, "batches", CB, theBatch());
+  apply(b, dumped(b, "ack", CB));
+  ok2(b, "read");
+  let log = fs.readFileSync(path.join(b.board, "decisions.md"), "utf8");
+  assert.ok(log.includes("| tracker-7 | control dismiss on |  | 2026-11-13 |\n"), log);
+  assert.ok(log.includes("| disk-size | control snooze 2026-11-20 |  | 2026-11-13 |\n"), log);
+  assert.ok(!/\| tracker-7 \| control (assign|done)/.test(log), "keep values are never logged");
+  ackCtl(b, { "disk-size": { rev: 1, dismiss: "on", keep: KEEP0 } });
+  ok2(b, "read");
+  log = fs.readFileSync(path.join(b.board, "decisions.md"), "utf8");
+  assert.ok(log.includes("| disk-size | control dismiss on [stale-rev] |  | 2026-11-13 |\n"), log);
+});
+ok("purge counts the cards of controlIds", () => {
+  const b = fresh();
+  putDoc(b, "batches", "b20260102T120000+0000-ctl1", ctlBatch("b20260102T120000+0000-ctl1", "2026-01-02T12:00:00+00:00", { "old-dns": { rev: 1, done: "on" } }, { status: "handled" }));
+  putDoc(b, "batches", "b20260102T130000+0000-ctl2", ctlBatch("b20260102T130000+0000-ctl2", "2026-01-02T13:00:00+00:00", { "disk-size": { rev: 2, done: "on" } }, { status: "handled" }));
+  const r = dumped(b, "purge", "--ids", "old-dns");
+  assert.equal(r.code, 0, r.text);
+  const del = writesOf(r.lines).flat().filter((w) => w.op === "delete" && w.collection === "batches").map((w) => w.doc_id);
+  assert.ok(del.includes("b20260102T120000+0000-ctl1"), r.text);
+  assert.ok(!del.includes("b20260102T130000+0000-ctl2"), r.text);
+});
+ok("read lists the running snoozes; the script drops a snooze whose day came, whose card changed or closed", () => {
+  const snoozed = () => {
+    const b = ctlBoard();
+    fs.rmSync(path.join(b.db, "batches", BB + ".json"));
+    ackCtl(b, { "disk-size": { rev: 2, snooze: "2026-11-20" } });
+    return b;
+  };
+  const LINE = "snoozed: do not follow up on disk-size before 2026-11-20";
+  let b = snoozed();
+  const r = ok2(b, "read");
+  const i = r.lines.indexOf(LINE);
+  assert.ok(i > 0 && r.lines[i - 1].startsWith("decisions.md: ") && r.lines[i + 1] === "no batches waiting", r.text);
+  assert.deepEqual(state(b).snoozed, { "disk-size": { day: "2026-11-20", rev: 2 } });
+  const gone = (b2, what) => { const rr = ok2(b2, "read"); assert.ok(!rr.lines.includes(LINE), what + ": " + rr.text); assert.equal("snoozed" in state(b2), false, what); };
+  ackCtl(b, { "disk-size": { rev: 2, snooze: "" } });
+  gone(b, "a wake");
+  b = snoozed();
+  process.env.BOARD_NOW = "2026-11-20T12:00:00Z";
+  try { gone(b, "the day came"); } finally { process.env.BOARD_NOW = "2026-02-01T12:00:00Z"; }
+  b = snoozed();
+  const ds = Object.assign({}, card(b, "disk-size"), { title: "Grow the disk to 300 GB?" });
+  for (const k of ["rev", "created", "updated"]) delete ds[k];
+  const s = sync(b, [ds]);
+  assert.equal(s.code, 0, s.text);
+  apply(b, s);
+  assert.equal(card(b, "disk-size").rev, 3);
+  gone(b, "a rev rise");
+  b = snoozed();
+  apply(b, cmd(b, "close", "disk-size"));
+  gone(b, "a close");
+  b = ctlBoard();
+  ackCtl(b, { "disk-size": { rev: 1, snooze: "2026-11-20" } });
+  assert.equal("snoozed" in state(b), false, "a flagged snooze adds nothing");
+});
+const SAME = "sync: 0 new, 0 changed (rev up), 0 changed (same rev), 1 unchanged, 0 closed";
+const BACK = "sync: 0 new, 1 changed (rev up), 0 changed (same rev), 0 unchanged, 0 closed, 1 reopened (tracker-7)";
+ok("sync: a dismissed or done card stays closed until its content or its input changes, then comes back with rev up", () => {
+  for (const mark of ["dismiss", "done"]) {
+    const ctlOf = () => ({ "tracker-7": { rev: card(b, "tracker-7").rev, [mark]: "on", keep: mark === "dismiss" ? KEEP0 : { assign: "", dismiss: "off" } } });
+    const b = ctlBoard();
+    syncT7(b, { input: "i1" });
+    ackCtl(b, ctlOf());
+    let r = syncT7(b, { input: "i1" });
+    assert.equal(r.lines[0], SAME, mark);
+    assert.equal(card(b, "tracker-7").status, "closed");
+    r = syncT7(b, { input: "i2" });
+    assert.equal(r.lines[0], BACK, mark);
+    assert.deepEqual([card(b, "tracker-7").status, card(b, "tracker-7").rev], ["open", 2]);
+    assert.ok(!(state(b).held || []).includes("tracker-7"));
+    assert.equal("ctl_closed" in state(b), false);
+    ackCtl(b, ctlOf());
+    r = syncT7(b, { input: "i2", title: "T7 again" });
+    assert.equal(r.lines[0], BACK, mark + ": a title change");
+    assert.deepEqual([card(b, "tracker-7").status, card(b, "tracker-7").rev], ["open", 3]);
+  }
+  let b = ctlBoard();
+  ackCtl(b, { "tracker-7": { rev: 1, dismiss: "on", keep: KEEP0 } });
+  syncT7(b, { input: "i1" });
+  assert.equal(card(b, "tracker-7").status, "closed", "no stored marker: the first input reopens nothing");
+  b = ctlBoard();
+  assert.equal(syncT7(b, { input: "i1" }).lines[0], "sync: 0 new, 0 changed (rev up), 1 changed (same rev), 0 unchanged, 0 closed");
+  assert.equal(card(b, "tracker-7").rev, 1, "an open card whose input changes keeps its rev");
+  ackCtl(b, { "tracker-7": { rev: 1, dismiss: "on", keep: KEEP0 } });
+  assert.equal(syncT7(b).lines[0], SAME, "a file without input");
+  assert.equal(card(b, "tracker-7").input, "i1", "the marker survives");
+  assert.equal(syncT7(b, { input: "i2" }).lines[0], BACK);
+  b = ctlBoard();
+  syncT7(b, { input: "i1" });
+  apply(b, cmd(b, "close", "tracker-7"));
+  const own = syncT7(b, { input: "i2" });
+  assert.match(own.lines[0], /0 changed \(rev up\), 1 changed \(same rev\)/);
+  assert.equal(card(b, "tracker-7").status, "closed", "the agent's own close does not return on a new input");
+  const before = fs.readFileSync(b.state, "utf8"), hand = sync(b, [mk({ id: "hand-1", title: "H", source_key: "9" })]);
+  assert.equal(hand.code, 1);
+  assert.ok(hand.text.includes("hand-1: source_key: set only by board-refresh map; sync that file with --source"), hand.text);
+  assert.equal(fs.readFileSync(b.state, "utf8"), before, "nothing is written");
+});
+ok("sync: a card assigned to other stays closed whatever its source file says, until the operator assigns it again", () => {
+  const b = ctlBoard();
+  ackCtl(b, { "tracker-7": { rev: 1, assign: "other", keep: { dismiss: "off", done: "off" } } });
+  assert.deepEqual(state(b).ctl_closed, { "tracker-7": "other" });
+  for (const x of [{ title: "T7 new" }, { title: "T7 new", input: "i9" }, { title: "T7 new", input: "i9", status: "open" }]) {
+    syncT7(b, x);
+    assert.equal(card(b, "tracker-7").status, "closed", JSON.stringify(x));
+  }
+  const x = ackCtl(b, { "tracker-7": { rev: card(b, "tracker-7").rev, assign: "me", keep: { dismiss: "off", done: "off" } } });
+  assert.match(x.line, /, 1 reopened\. /);
+  assert.equal("ctl_closed" in state(b), false);
+  assert.equal(card(b, "tracker-7").status, "open");
+});
+ok("ack: a batch whose ack is pending in the state is already handled; its controls are not applied again", () => {
+  const b = ctlBoard();
+  putDoc(b, "batches", "b-pa", ctlBatch("b-pa", "2026-11-13T12:00:00+00:00", { "tracker-7": { rev: 1, dismiss: "on", keep: KEEP0 } }));
+  putDoc(b, "batches", "b-pb", ctlBatch("b-pb", "2026-11-13T12:01:00+00:00", { "tracker-7": { rev: 1, dismiss: "off", keep: KEEP0 } }));
+  const dir = dumpNow(b);
+  assert.match(cmd(b, "ack", "b-pa", "--dump", dir).lines[0], /^ack b-pa: handled, 1 cards closed, 0 reopened\. /);
+  assert.match(cmd(b, "ack", "b-pb", "--dump", dir).lines[0], /^ack b-pb: handled, 0 cards closed, 1 reopened\. /);
+  const before = fs.readFileSync(b.state, "utf8"), again = cmd(b, "ack", "b-pa", "--dump", dir);
+  assert.deepEqual(again.lines, [`ack b-pa: its write is printed but not confirmed. Run: node ${SELF} push batches/b-pa --state ${JSON.stringify(b.state)}`, "no writes"]);
+  assert.equal(fs.readFileSync(b.state, "utf8"), before, "the third ack changes nothing");
+  assert.equal(card(b, "tracker-7").status, "open", "the operator's last word, off, stands");
+});
+ok("ack: a kept done holds the card closed when dismiss is undone", () => {
+  const b = ctlBoard();
+  ackCtl(b, { "tracker-7": { rev: 1, dismiss: "on", done: "on", keep: { assign: "" } } });
+  assert.deepEqual(state(b).ctl_closed, { "tracker-7": "dismiss" });
+  const x = ackCtl(b, { "tracker-7": { rev: 1, dismiss: "off", keep: { assign: "", done: "on" } } });
+  assert.match(x.line, /, 0 reopened\. /);
+  assert.deepEqual(state(b).ctl_closed, { "tracker-7": "done" });
+  assert.equal(card(b, "tracker-7").status, "closed");
+});
+ok("the state drops ctl_closed and snoozed entries of cards it no longer holds", () => {
+  const b = ctlBoard();
+  setState(b, (st) => { st.ctl_closed = { ghost: "dismiss" }; st.snoozed = { ghost: { day: "2026-11-20", rev: 1 } }; });
+  assert.equal(cmd(b, "check").code, 0);
+  assert.equal("ctl_closed" in state(b), false);
+  assert.equal("snoozed" in state(b), false);
+});
+ok("read: a card id twice in controlIds is one control; the header counts the cards with a controls entry", () => {
+  const b = ctlBoard();
+  putDoc(b, "batches", "b-dup", ctlBatch("b-dup", "2026-11-13T12:00:00+00:00", { "tracker-7": { rev: 1, close: "off" } },
+    { controlIds: ["tracker-7", "tracker-7", "nope"] }));
+  const r = ok2(b, "read");
+  assert.ok(r.lines.includes('batch b-dup  "2026-11-13T12:00:00+00:00"  0 answers  0 notes  controls on 1 cards'), r.text);
+  assert.deepEqual(r.lines.filter((l) => l.startsWith("  tracker-7  control")), ['  tracker-7  control close "off"  (nothing to do)']);
+});
+ok("the state's snoozed days and close reasons are checked on load, so no stored value can forge a line", () => {
+  const b = ctlBoard();
+  fs.rmSync(path.join(b.db, "batches", BB + ".json"));
+  setState(b, (st) => { st.snoozed = { "disk-size": { day: "2026-11-20\nbatch evil", rev: 2 } }; st.ctl_closed = { "tracker-7": "x\ny" }; });
+  const r = ok2(b, "read");
+  assert.deepEqual(r.lines, ["no batches waiting"]);
+  assert.equal("snoozed" in state(b), false);
+  assert.equal("ctl_closed" in state(b), false);
+});
+ok("a lost ack: read and ack name push for the pending write; push completes it, and the batch is logged once", () => {
+  const b = ctlBoard();
+  fs.rmSync(path.join(b.db, "batches", BB + ".json"));
+  putDoc(b, "batches", "b-lost", ctlBatch("b-lost", "2026-11-13T12:00:00+00:00", { "tracker-7": { rev: 1, dismiss: "on", keep: KEEP0 } }));
+  const first = dumped(b, "ack", "b-lost");
+  assert.match(first.lines[0], /^ack b-lost: handled, 1 cards closed, /);
+  const HINT = `ack b-lost: its write is printed but not confirmed. Run: node ${SELF} push batches/b-lost --state ${JSON.stringify(b.state)}`;
+  const r = ok2(b, "read");
+  assert.ok(r.lines.includes("  " + HINT), r.text);
+  assert.ok(!r.lines.some((l) => l.includes(" ack b-lost --dump")), "no ack line for the pending batch");
+  assert.ok(r.lines.includes('  tracker-7  control dismiss "on"  (ack applies it)'), "its lines are listed as before");
+  const before = fs.readFileSync(b.state, "utf8"), again = dumped(b, "ack", "b-lost");
+  assert.deepEqual(again.lines, [HINT, "no writes"]);
+  assert.equal(fs.readFileSync(b.state, "utf8"), before, "no state byte changes");
+  const pushed = cmd(b, "push", "batches/b-lost");
+  assert.deepEqual(writesOf(pushed.lines), writesOf(first.lines), "push prints the write again");
+  apply(b, pushed);
+  const done = ok2(b, "read");
+  assert.deepEqual(done.lines, ["decisions.md: the answers of b-lost", "no batches waiting"]);
+  assert.deepEqual(ok2(b, "read").lines, ["no batches waiting"], "logged once");
+});
+ok("ack --close on a pending ack is not applied, and says which close to run", () => {
+  const b = ctlBoard();
+  putDoc(b, "batches", "b-pc", ctlBatch("b-pc", "2026-11-13T12:00:00+00:00", { "disk-size": { rev: 2, snooze: "2026-11-20" } }));
+  dumped(b, "ack", "b-pc");
+  const r = dumped(b, "ack", "b-pc", "--close", "tracker-7");
+  const push = r.lines.indexOf(`ack b-pc: its write is printed but not confirmed. Run: node ${SELF} push batches/b-pc --state ${JSON.stringify(b.state)}`);
+  const later = r.lines.indexOf(`ack b-pc: --close tracker-7 not applied. After the push is confirmed, run: node ${SELF} close tracker-7 --state ${JSON.stringify(b.state)}`);
+  assert.ok(push >= 0 && later === push + 1, r.text);
+  assert.equal(card(b, "tracker-7").status, "open");
+});
+ok("ack of a batch the dump shows handled clears a pending write left without unlogged lines", () => {
+  const b = fresh(), A = "b20260102T000000+0000-aaaa";
+  setState(b, (st) => { st.pending = { ["batches/" + A]: { op: "update", collection: "batches", doc_id: A, if_version: 1 } }; });
+  assert.deepEqual(dumped(b, "ack", A).lines, [`ack ${A}: already handled`, "no writes"]);
+  assert.equal(((state(b).pending || {})["batches/" + A]), undefined);
 });
 fs.rmSync(tmp, { recursive: true, force: true });

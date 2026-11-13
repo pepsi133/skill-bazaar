@@ -123,14 +123,14 @@ function checkMap(m, file) {
   if (!isObj(m)) fail(file + ": not a JSON object");
   const errs = [];
   for (const k of ["key", "title", "url", "created"]) if (typeof m[k] !== "string" || !m[k]) errs.push(`${k}: the row field that holds it, for example "${k}": "${k}"`);
-  for (const k of ["who", "rows", "kind", "due", "summary", "draft"]) if (m[k] !== undefined && (typeof m[k] !== "string" || !m[k])) errs.push(k + ": a string");
+  for (const k of ["who", "rows", "kind", "due", "summary", "draft", "input"]) if (m[k] !== undefined && (typeof m[k] !== "string" || !m[k])) errs.push(k + ": a string");
   const rule = (r) => isObj(r) && typeof r.field === "string" && (isScalar(r.equals) || (Array.isArray(r.equals) && r.equals.length && r.equals.every(isScalar)));
   if (m.closed !== undefined && !rule(m.closed)) errs.push('closed: {"field": ..., "equals": a value or a list of values}');
   if (m.tags !== undefined && !(Array.isArray(m.tags) && m.tags.every((r) => rule(r) && typeof r.tag === "string" && r.tag)))
     errs.push('tags: a list of {"field": ..., "equals": a value or a list of values, "tag": <config tag id>}');
   if (m.priority !== undefined && !(Array.isArray(m.priority) && m.priority.every((r) => rule(r) && typeof r.priority === "string" && r.priority)))
     errs.push('priority: a list of {"field": ..., "equals": a value or a list of values, "priority": <config priority id>}');
-  const known = ["rows", "key", "title", "url", "created", "who", "kind", "closed", "tags", "priority", "due", "summary", "draft"], extra = Object.keys(m).filter((k) => !known.includes(k));
+  const known = ["rows", "key", "title", "url", "created", "who", "kind", "closed", "tags", "priority", "due", "summary", "draft", "input"], extra = Object.keys(m).filter((k) => !known.includes(k));
   if (extra.length) errs.push("unknown fields: " + extra.join(", "));
   if (errs.length) fail(errs.map((e) => file + ": " + e).join("\n"));
 }
@@ -216,7 +216,7 @@ function cmdMap(a, log) {
     const id = cardId(source, key);
     if (seen.has(id)) { skipped.push({ row: at, key, reasons: [`the same card id as row ${seen.get(id)}`] }); return; }
     seen.set(id, at);
-    const c = { id, source, kind: m.kind || "action", title, links: [{ label: source + " " + key, url }] };
+    const c = { id, source, source_key: key, kind: m.kind || "action", title, links: [{ label: source + " " + key, url }] };
     const date = createdDate(get(row, m.created), tz);
     if (date && realDate(date)) {
       c.first_asked = { date };
@@ -232,6 +232,11 @@ function cmdMap(a, log) {
     if (m.draft) { const dv = get(row, m.draft); if (typeof dv === "string" && dv.trim()) c.draft = dv; }
     const due = m.due ? createdDate(get(row, m.due), tz) : undefined, badDue = due === null || (due !== undefined && !realDate(due));
     if (due && !badDue) c.due = due;
+    // input: the row field that changes when the item gets new activity (for example updated_at). A list is joined.
+    if (m.input) {
+      const v = get(row, m.input), t = (Array.isArray(v) ? v.map(text).filter(Boolean).join(",") : text(v)).slice(0, MAX_S);
+      if (t) c.input = t;
+    }
     // An override names the card id or the raw key; the id wins where both name a field.
     const own = (k) => (Object.prototype.hasOwnProperty.call(over, k) ? over[k] : undefined);
     const o = Object.assign({}, own(key), own(id));

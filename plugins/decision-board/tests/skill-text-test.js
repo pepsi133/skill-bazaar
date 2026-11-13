@@ -85,3 +85,18 @@ ok("data-model.md names groups, sort and the defaults", () => {
   const g = dm.indexOf("### Groups and sort"), c = dm.indexOf("## Collections"), k = dm.indexOf("### Checks");
   assert.ok(g < c && (k < 0 || k < g));
 });
+ok("the control text", () => {
+  const skill = read(SKILL, "SKILL.md");
+  assert.ok(skill.includes("A `control` line is a quick control of the operator: do what its brackets at the end say"));
+  assert.ok(skill.includes('(`close "on"`, `assign "agent"`)'));
+  assert.ok(!skill.includes("control snooze"), "the running snoozes come from the snoozed: line of read");
+  const dm = read(REF, "data-model.md"), cards = read(REF, "cards.md"), build = read(REF, "build.md");
+  assert.match(dm, /^\| `controls` \|/m);
+  assert.match(dm, /^\| `people` \|/m);
+  assert.match(cards, /^\| `input` \|/m);
+  assert.match(cards, /^\| `source_key` \|/m);
+  assert.ok(build.includes("`controls`") && build.includes("`people`"));
+  const rskill = read(ROOT, "skills", "board-refresh", "SKILL.md");
+  assert.ok(rskill.includes('"input": "updated_at"') && rskill.includes("source_key"));
+  assert.ok(read(ROOT, "skills", "board-refresh", "references", "maps.md").includes('"input": "updated_at"'));
+});

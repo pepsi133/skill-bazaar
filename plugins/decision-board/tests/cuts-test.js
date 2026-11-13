@@ -75,3 +75,10 @@ ok("page times come only from the time section and the clock helpers", () => {
 ok("the old Done box is gone: no #cards, #done, #donelist or #donesum", () => {
   assert.ok(!/id="cards"|id="done"|id="donelist"|id="donesum"|\$\("done"\)|\$\("cards"\)/.test(src));
 });
+ok("quick controls write no HTML and keep the old cut names away", () => {
+  assert.ok(!src.includes("setSwitch"));
+  for (const name of ["switchRow", "renderControls", "setControl", "saveControls", "renderNotOurs"]) assert.ok(src.includes("  function " + name + "("), name);
+  const i = src.indexOf("  function renderControls"), j = src.indexOf("\n  function ", i + 1);
+  assert.ok(i > 0 && j > i);
+  assert.ok(!src.slice(i, j).includes("innerHTML"));
+});

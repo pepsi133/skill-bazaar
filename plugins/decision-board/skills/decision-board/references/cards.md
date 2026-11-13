@@ -23,6 +23,8 @@ unknown field.
 | `tags` | Tag ids from the config `tags`, each once, matched exactly |
 | `first_asked` | `{"date": "YYYY-MM-DD", "who": "<id>"}`: when the question was first put to the operator, and by whom. Required on every open card whose kind is not `info`. A real date in the config `tz`, no later than tomorrow. `who` is optional: at most 40 of the id characters. A card posted again keeps the stored value |
 | `due` | Optional. `YYYY-MM-DD`, a day in the config `tz`, for a real deadline (a form, a review, a renewal). Only a date the source states; never infer one. From that day the card also shows in "Due today" until it is closed. Post it again without `due` to remove it |
+| `input` | Optional. A marker of the latest source input, such as the item's last update time. When it changes, a card the operator dismissed or marked done comes back as a new question. A card file without it keeps the stored one. `board-refresh` fills it from the map key `input` |
+| `source_key` | Optional. The item's raw key in its source, such as `7` or `OPS-7`; only `board-refresh` fills it: never write it in a card file yourself (`sync` refuses it in a file without `--source`). Only a card with it shows the Close control, and `read` names the item by it and its first link, or `link none` |
 
 ## Rules for a good card
 

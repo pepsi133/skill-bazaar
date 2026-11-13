@@ -189,7 +189,7 @@
         </div>
         <p class="back">If the agent needs more from you, it changes the card or posts a new one, and the cycle starts again.</p>
       </div>
-      <p>Between steps 3 and 4 nothing pushes the agent. A cheap background watcher makes one query per poll, for the batches whose status is <code>sent</code>, and reports only their ids; the agent then reads them itself. It also reads at the start of each session that owns the board. A batch waits until its status is <code>handled</code>, so a phone with a wrong clock cannot hide one.</p>
+      <p>Between steps 3 and 4 nothing pushes the agent. A cheap background watcher makes one query per poll, for the batches whose status is <code>sent</code>, and reports only their ids; the agent then reads them itself. It also reads at the start of each session that owns the board. A batch waits until its status is <code>handled</code>, so a phone with a wrong clock cannot hide one. Quick controls on a card (assign, snooze, dismiss, close in the source, done, tags) are off until the config turns them on; a tap acts on the page at once, and the change goes out in the next batch with the answers, <code>read</code> prints one <code>control</code> line per changed control with the step to take, and <code>ack</code> applies the ones that only move a card.</p>
     </section>
 
     <section id="card">
