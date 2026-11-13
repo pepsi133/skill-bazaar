@@ -56,3 +56,32 @@ ok("links are optional in cards.md and build.md", () => {
   assert.ok(cards.includes("Optional. Up to 10") && !cards.includes("Required. 1 to 10"));
   assert.ok(!read(REF, "build.md").includes("every card needs a link"));
 });
+ok("cards.md states the raw-text rule of draft", () => {
+  const cards = read(REF, "cards.md");
+  assert.match(cards, /\| `draft` \|[^\n]*no preface[^\n]*byte for byte/);
+  assert.match(cards, /\| `draft_label` \|/);
+});
+ok("rules.md puts the rule text in draft", () => {
+  const rules = read(REF, "rules.md");
+  assert.ok(rules.includes("the exact rule text in `draft` with `draft_label` `Rule for board/rules.md`"));
+  assert.ok(rules.includes("add the card's `draft` (the rule text)"));
+  assert.ok(!rules.includes("in a fenced block"));
+});
+ok("the due row and the chat rule", () => {
+  assert.match(read(REF, "cards.md"), /\| `due` \|[^\n]*never infer/);
+  const rs = read(ROOT, "skills", "board-refresh", "SKILL.md");
+  for (const s of ["never infer a date", "`due`, `draft`, `draft_label`", "references/maps.md", "`priority` (rules like `tags`"]) assert.ok(rs.includes(s), s);
+  assert.ok(fs.existsSync(path.join(ROOT, "skills", "board-refresh", "references", "maps.md")));
+  assert.ok(read(REF, "build.md").includes("`week_start`"));
+  const dm = read(REF, "data-model.md");
+  assert.match(dm, /\| `week_start` \|/);
+  assert.ok(dm.includes("the week start, hosts"));
+});
+ok("data-model.md names groups, sort and the defaults", () => {
+  const dm = read(REF, "data-model.md");
+  assert.match(dm, /\| `groups` \|/);
+  assert.match(dm, /\| `sort` \|/);
+  assert.ok(dm.includes("### Groups and sort") && dm.includes('"id": "this-week"'));
+  const g = dm.indexOf("### Groups and sort"), c = dm.indexOf("## Collections"), k = dm.indexOf("### Checks");
+  assert.ok(g < c && (k < 0 || k < g));
+});

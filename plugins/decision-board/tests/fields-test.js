@@ -17,7 +17,7 @@ ok("config: link_hosts keeps hosts with two labels or more, lower case, like dom
   assert.equal(P.hostOk("1.192.0.2.10", P.cfg.link_hosts), false, "an IPv4 entry has no subdomains");
   assert.equal(P.hostOk("wiki.x.invalid", P.cfg.link_hosts), true);
   P.applyConfig(null);
-  assert.deepEqual([plain(P.cfg.link_hosts), plain(P.cfg.tags)], [[], []]);
+  assert.deepEqual([plain(P.cfg.link_hosts), plain(P.cfg.tags)], [[], [{ id: "alert", label: "Alert" }, { id: "incident", label: "Incident" }]]);
 });
 ok("a link is valid for https:, no user name or password, a listed host or a subdomain, on any port", () => {
   P.applyConfig({ link_hosts: ["example.com", "invalid", "wiki.invalid"] });
@@ -87,4 +87,23 @@ ok("the age text: First asked MM-DD (who), N days, counted in calendar days of t
     process.env.TZ = "Asia/Tokyo";
     assert.equal(at("2026-01-01", "x", instant, "UTC"), "First asked 01-01 (x), 10 days", "the device zone does not count");
   } finally { if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz; }
+});
+ok("draft: shown when it holds more than spaces; the label defaults to Draft; the text is the field unchanged", () => {
+  assert.equal(P.hasDraft(P.coerce("item", { draft: " \n\t" })), false);
+  assert.equal(P.hasDraft(P.coerce("item", {})), false);
+  assert.equal(P.hasDraft(P.coerce("item", { draft: "x" })), true);
+  assert.equal(P.draftLabelOf(P.coerce("item", { draft: "x" })), "Draft");
+  assert.equal(P.draftLabelOf(P.coerce("item", { draft: "x", draft_label: "  Reply in the thread " })), "Reply in the thread");
+  const s = "Hi Sam,\r\n\n  indented\tTab  \n```\nnot a fence\n```\n<b>x</b> — ✓  ";
+  assert.equal(P.draftText(P.coerce("item", { draft: s })), s);
+  assert.equal(P.draftText({ draft: 5 }), "");
+});
+ok("draftWarning: names the label a draft starts with, and nothing for plain text", () => {
+  const pairs = [["DRAFT\nHi", "DRAFT"], ["Draft: Hi", "Draft:"], ["[DRAFT] Hi", "[DRAFT]"], ["  Note: send after 5", "Note:"],
+    ["**Note:** x", "**Note:"], ["Proposed reply: thanks", "Proposed reply:"], ["```\nHi\n```", "```"],
+    ["DRAFT", "DRAFT"], ["Draft\r\nHi", "Draft"], ["Note - send after 5", "Note -"], ["NB:x", "NB:"],
+    ["Hi team, note: x", ""], ["Drafting is done.", ""], ["Notes are attached", ""],
+    ["Draft agenda for Monday", ""], ["Note-taking is fine", ""], ["Hi", ""], [5, ""]];
+  assert.equal(pairs.length, 18);
+  pairs.forEach(([t, w]) => assert.equal(P.draftWarning(t), w, JSON.stringify(t)));
 });

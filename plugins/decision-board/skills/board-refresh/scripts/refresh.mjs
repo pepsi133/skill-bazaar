@@ -18,7 +18,7 @@ const USAGE = `Usage: node ${SELF} <command> ...
 const ID_CHARS = /[^A-Za-z0-9_\-.~:@+]/g;
 const SOURCE_RE = /^[a-z0-9_\-.~@+]{1,40}$/;
 const MAX_S = 300;
-const STR_FIELDS = ["priority", "summary", "title", "kind", "recommendation", "blocks", "evidence"];
+const STR_FIELDS = ["priority", "summary", "title", "kind", "recommendation", "blocks", "evidence", "due", "draft", "draft_label"];
 const OVERRIDE_FIELDS = [...STR_FIELDS, "tags", "options", "status", "drop"];
 const UNSAFE = new Set(["__proto__", "constructor", "prototype"]);
 const BOOL_FLAGS = new Set(["allow-skipped"]);
@@ -123,12 +123,14 @@ function checkMap(m, file) {
   if (!isObj(m)) fail(file + ": not a JSON object");
   const errs = [];
   for (const k of ["key", "title", "url", "created"]) if (typeof m[k] !== "string" || !m[k]) errs.push(`${k}: the row field that holds it, for example "${k}": "${k}"`);
-  for (const k of ["who", "rows", "kind"]) if (m[k] !== undefined && (typeof m[k] !== "string" || !m[k])) errs.push(k + ": a string");
+  for (const k of ["who", "rows", "kind", "due", "summary", "draft"]) if (m[k] !== undefined && (typeof m[k] !== "string" || !m[k])) errs.push(k + ": a string");
   const rule = (r) => isObj(r) && typeof r.field === "string" && (isScalar(r.equals) || (Array.isArray(r.equals) && r.equals.length && r.equals.every(isScalar)));
   if (m.closed !== undefined && !rule(m.closed)) errs.push('closed: {"field": ..., "equals": a value or a list of values}');
   if (m.tags !== undefined && !(Array.isArray(m.tags) && m.tags.every((r) => rule(r) && typeof r.tag === "string" && r.tag)))
     errs.push('tags: a list of {"field": ..., "equals": a value or a list of values, "tag": <config tag id>}');
-  const known = ["rows", "key", "title", "url", "created", "who", "kind", "closed", "tags"], extra = Object.keys(m).filter((k) => !known.includes(k));
+  if (m.priority !== undefined && !(Array.isArray(m.priority) && m.priority.every((r) => rule(r) && typeof r.priority === "string" && r.priority)))
+    errs.push('priority: a list of {"field": ..., "equals": a value or a list of values, "priority": <config priority id>}');
+  const known = ["rows", "key", "title", "url", "created", "who", "kind", "closed", "tags", "priority", "due", "summary", "draft"], extra = Object.keys(m).filter((k) => !known.includes(k));
   if (extra.length) errs.push("unknown fields: " + extra.join(", "));
   if (errs.length) fail(errs.map((e) => file + ": " + e).join("\n"));
 }
@@ -146,14 +148,14 @@ function checkOverrides(o, file) {
   }
   if (errs.length) fail(errs.map((e) => file + ": " + e).join("\n"));
 }
-// The board config, when named: link_hosts, tag ids and the time zone. Without --config: null.
+// The board config, when named: link_hosts, tag ids, priority ids and the time zone. Without --config: null.
 function readConfig(file) {
   if (!file) return null;
   const c = readJson(file, "--config");
   if (!isObj(c)) fail(file + ": not a JSON object");
   if (c.tz !== undefined && !tzOk(c.tz)) fail(`--config: tz ${JSON.stringify(c.tz)} is not a time zone name such as "Europe/Warsaw" or "UTC"`);
   return { hosts: (Array.isArray(c.link_hosts) ? c.link_hosts : []).map(low), tags: (Array.isArray(c.tags) ? c.tags : []).map((t) => (isObj(t) ? t.id : t)),
-    tz: c.tz !== undefined ? c.tz : DEFAULT_TZ };
+    tz: c.tz !== undefined ? c.tz : DEFAULT_TZ, priorities: Array.isArray(c.priorities) ? c.priorities.map((p) => (isObj(p) ? p.id : p)) : null };
 }
 
 // The reasons a finished card cannot go to sync; empty when it can.
@@ -187,14 +189,18 @@ function cmdMap(a, log) {
   checkOverrides(over, a.overrides);
   const cfg = readConfig(a.config);
   const tz = cfg ? cfg.tz : DEFAULT_TZ;
+  // A priority rule must name a priority of the config (when the config names its priorities).
+  const badPri = cfg && cfg.priorities ? (m.priority || []).map((r, i) => [r, i]).filter(([r]) => !cfg.priorities.includes(r.priority)) : [];
+  if (badPri.length) fail(badPri.map(([r, i]) => `${a.map}: priority[${i}]: ${JSON.stringify(r.priority)} not in the config priorities (${cfg.priorities.join(", ")})`).join("\n"));
   const doc = readJson(rowsFile, "rows");
   const rows = m.rows ? get(doc, m.rows) : doc;
   if (!Array.isArray(rows)) fail(`${rowsFile}: ${m.rows ? `the field "${m.rows}" is` : "the rows are"} not a JSON list`);
   if (!rows.length) fail(`${rowsFile}: no rows. A source with no rows would close every card of the source; fetch it again`);
   if (rows.length < minRows) fail(`${rowsFile}: ${rows.length} rows, fewer than --min-rows ${minRows}. Fetch every page again`);
 
-  const cards = [], skipped = [], seen = new Map(), used = new Set();
-  const rules = [...(m.closed ? [{ name: "closed", r: m.closed }] : []), ...(m.tags || []).map((r, i) => ({ name: `tags[${i}] ${r.tag}`, r }))];
+  const cards = [], skipped = [], seen = new Map(), used = new Set(), notes = [];
+  const rules = [...(m.closed ? [{ name: "closed", r: m.closed }] : []), ...(m.tags || []).map((r, i) => ({ name: `tags[${i}] ${r.tag}`, r })),
+    ...(m.priority || []).map((r, i) => ({ name: `priority[${i}] ${r.priority}`, r }))];
   const hits = rules.map(() => 0);
   let dropped = 0;
   rows.forEach((row, i) => {
@@ -219,6 +225,13 @@ function cmdMap(a, log) {
     const tags = (m.tags || []).filter((r) => matches(row, r)).map((r) => r.tag);
     if (tags.length) c.tags = [...new Set(tags)];
     if (m.closed && matches(row, m.closed)) c.status = "closed";
+    // Map keys of the card text and the deadline. An override below still wins for each field it names.
+    const pr = (m.priority || []).find((r) => matches(row, r));
+    if (pr) c.priority = pr.priority;
+    if (m.summary) { const s = text(get(row, m.summary)); if (s) c.summary = s.length > MAX_S ? s.slice(0, MAX_S - 3) + "..." : s; }
+    if (m.draft) { const dv = get(row, m.draft); if (typeof dv === "string" && dv.trim()) c.draft = dv; }
+    const due = m.due ? createdDate(get(row, m.due), tz) : undefined, badDue = due === null || (due !== undefined && !realDate(due));
+    if (due && !badDue) c.due = due;
     // An override names the card id or the raw key; the id wins where both name a field.
     const own = (k) => (Object.prototype.hasOwnProperty.call(over, k) ? over[k] : undefined);
     const o = Object.assign({}, own(key), own(id));
@@ -229,12 +242,13 @@ function cmdMap(a, log) {
     if (drop) { dropped++; return; }
     const problems = cardProblems(c, date, cfg, tz);
     if (problems.length) { skipped.push({ row: at, key, reasons: problems }); return; }
+    if (badDue && fields.due === undefined) notes.push(`note: ${key}: due not read`);
     cards.push(c);
   });
   const unused = Object.keys(over).filter((k) => !used.has(k));
   const detailsFile = a.details || a.out + ".details.json";
   fs.mkdirSync(path.dirname(path.resolve(detailsFile)), { recursive: true });
-  fs.writeFileSync(detailsFile, JSON.stringify({ rows: rows.length, cards: cards.length, dropped, skipped, unused_overrides: unused,
+  fs.writeFileSync(detailsFile, JSON.stringify({ rows: rows.length, cards: cards.length, dropped, skipped, unused_overrides: unused, notes,
     rules: Object.fromEntries(rules.map((x, j) => [x.name, hits[j]])) }, null, 1) + "\n");
   const closedN = cards.filter((c) => c.status === "closed").length;
   const matched = rules.length ? "; rules matched: " + rules.map((x, j) => `${x.name} ${hits[j]}`).join(", ") : "";
@@ -244,6 +258,7 @@ function cmdMap(a, log) {
   fs.mkdirSync(path.dirname(path.resolve(a.out)), { recursive: true });
   fs.writeFileSync(a.out, JSON.stringify(cards, null, 1) + "\n");
   log(`${line} -> ${a.out}`);
+  for (const n of notes) log(n);
 }
 
 // Keys in a card: ticket keys such as ABC-123 in the title and the link urls, and each link url itself

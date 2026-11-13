@@ -249,5 +249,76 @@ ok("map --config takes the config.merged.json that check writes, with link_hosts
   assert.equal(r.code, 0, r.text);
   assert.equal(r.cards.length, want.cards.length);
 });
+ok("map: an override sets due, draft and draft_label", () => {
+  const r = one({}, MAP, "--overrides", put("odd.json", { "tracker-1": { due: "2026-11-20", draft: "Hi,\n  thanks ", draft_label: "Reply" } }));
+  assert.equal(r.code, 0, r.text);
+  assert.deepEqual([r.cards[0].due, r.cards[0].draft, r.cards[0].draft_label], ["2026-11-20", "Hi,\n  thanks ", "Reply"]);
+  const f = put("od5.json", { "tracker-1": { due: 5 } }), bad = one({}, MAP, "--overrides", f);
+  assert.equal(bad.code, 1);
+  assert.ok(bad.text.includes(`${f}: tracker-1: due: a string`), bad.text);
+});
+ok("map: map keys due, priority, summary and draft fill the card; an override still wins", () => {
+  const M2 = Object.assign({}, MAP, { due: "due_on", summary: "body", draft: "reply", priority: [{ field: "labels.name", equals: ["urgent"], priority: "now" }, { field: "labels.name", equals: ["p3"], priority: "later" }] });
+  const a = one({ due_on: "2026-02-20", labels: [{ name: "Urgent" }], body: "x".repeat(400), reply: "Hi,\n  thanks " }, M2);
+  assert.equal(a.code, 0, a.text);
+  const c = a.cards[0];
+  assert.deepEqual([c.due, c.priority, c.summary.length, c.summary.endsWith("..."), c.draft], ["2026-02-20", "now", 300, true, "Hi,\n  thanks "]);
+  assert.equal(a.details.rules["priority[0] now"], 1);
+  const p3 = one({ labels: [{ name: "p3" }] }, M2).cards[0];
+  assert.equal(p3.priority, "later");
+  assert.ok(!("due" in p3) && !("summary" in p3) && !("draft" in p3));
+  assert.ok(!("priority" in one({ labels: [] }, M2).cards[0]));
+  const tzc = put("tzc.json", { link_hosts: ["example.com"], tz: "Europe/Warsaw" });
+  assert.equal(one({ due_on: "2026-02-20T23:30:00Z" }, M2, "--config", tzc).cards[0].due, "2026-02-21", "the day in the config tz");
+  for (const v of ["soon", "2026-02-30"]) {
+    const r = one({ due_on: v }, M2);
+    assert.equal(r.code, 0, r.text);
+    assert.equal(r.cards.length, 1);
+    assert.ok(!("due" in r.cards[0]), v);
+    assert.deepEqual(r.details.skipped, []);
+    assert.deepEqual(r.details.notes, ["note: 1: due not read"]);
+    const at = r.lines.indexOf("note: 1: due not read");
+    assert.ok(at > r.lines.findIndex((l) => l.startsWith("map:")) && at >= 0, r.text);
+  }
+  const od = one({ due_on: "soon" }, M2, "--overrides", put("od.json", { "tracker-1": { due: "2026-03-01" } }));
+  assert.equal(od.code, 0, od.text);
+  assert.equal(od.cards[0].due, "2026-03-01");
+  assert.deepEqual(od.details.notes, []);
+  assert.equal(one({}, M2, "--overrides", put("op.json", { "tracker-1": { priority: "soon" } })).cards[0].priority, "soon", "the override wins");
+  const M3 = Object.assign({}, M2, { priority: [{ field: "labels.name", equals: ["x"], priority: "urgent" }] });
+  const pc = one({}, M3, "--config", put("pc.json", { link_hosts: ["example.com"], tz: "UTC", priorities: [{ id: "now" }, { id: "soon" }, { id: "later" }] }));
+  assert.equal(pc.code, 1);
+  assert.ok(pc.text.includes('priority[0]: "urgent" not in the config priorities (now, soon, later)'), pc.text);
+  assert.equal(one({}, M3, "--config", put("pn.json", { link_hosts: ["example.com"], tz: "UTC" })).code, 0, "a config without priorities");
+  const bp = map(GOOD, Object.assign({}, MAP, { priority: "now" }));
+  assert.equal(bp.code, 1);
+  assert.ok(bp.text.includes("priority: a list of"), bp.text);
+  assert.ok(map(GOOD, Object.assign({}, MAP, { due: 5 })).text.includes("due: a string"));
+});
+ok("map: the example maps of references/maps.md map their sample rows", () => {
+  const md = fs.readFileSync(new URL("../skills/board-refresh/references/maps.md", import.meta.url), "utf8");
+  const blocks = [...md.matchAll(/```json\n([\s\S]*?)```/g)].map((x) => JSON.parse(x[1]));
+  assert.equal(blocks.length, 2);
+  const [T, K] = blocks;
+  const t = map([{ number: 7, title: "Disk full on the backup host", url: "https://tracker.example.com/t/7", created_at: "2026-01-10T08:00:00Z", state: "open", labels: [{ name: "Urgent" }, { name: "incident" }] }], T);
+  assert.equal(t.code, 0, t.text);
+  assert.deepEqual([t.cards[0].id, t.cards[0].priority, t.cards[0].tags, t.cards[0].status], ["tracker-7", "now", ["incident"], undefined]);
+  const krow = { id: "t1", content: "Renew the domain", url: "https://tracker.example.com/task/t1", created_at: "2026-01-05", due: { date: "2026-02-20" }, priority: 4, is_completed: false };
+  const kk = map([krow], K);
+  assert.equal(kk.code, 0, kk.text);
+  assert.deepEqual([kk.cards[0].id, kk.cards[0].due, kk.cards[0].priority, kk.cards[0].status], ["tracker-t1", "2026-02-20", "now", undefined]);
+  assert.equal(map([Object.assign({}, krow, { is_completed: true })], K).cards[0].status, "closed");
+});
+ok("map: a board config without tags gets the default tags through config.merged.json", () => {
+  const dir = fs.mkdtempSync(path.join(tmp, "board-")), state = path.join(dir, "state.json");
+  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ link_hosts: ["example.com"], tz: "UTC" }));
+  const c = sh(board, "check", "--state", state);
+  assert.equal(c.code, 0, c.text);
+  const merged = path.join(dir, "config.merged.json");
+  const r = one({ labels: [{ name: "incident" }] }, Object.assign({}, MAP, { tags: [{ field: "labels.name", equals: "incident", tag: "incident" }] }), "--config", merged);
+  assert.equal(r.code, 0, r.text);
+  assert.deepEqual(r.cards[0].tags, ["incident"]);
+  assert.ok(read(merged).tags.map((x) => x.id).includes("incident"));
+});
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`${n} tests passed`);

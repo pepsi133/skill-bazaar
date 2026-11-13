@@ -1013,4 +1013,101 @@ ok("no proof file in the text", () => {
     assert.ok(!fs.readFileSync(f, "utf8").includes("touch board/dump/versions.txt"), f);
   assert.ok(section(fs.readFileSync(SKILL_MD, "utf8"), "## Read and handle the answers").includes("read --dump board/dump --dumped"));
 });
+ok("sync: draft and draft_label are card fields; a draft change raises rev; a label warning prints and does not stop", () => {
+  const b = fresh(), d0 = yn("d", { draft: "Hi Sam,\r\n  thanks  ", draft_label: "Reply in the thread" });
+  const r = sync(b, [d0]);
+  assert.equal(r.code, 0, r.text);
+  assert.ok(r.lines[0].startsWith("sync: 1 new"), r.text);
+  assert.deepEqual([card(b, "d").draft, card(b, "d").rev], ["Hi Sam,\r\n  thanks  ", 1]);
+  sync(b, [Object.assign({}, d0, { draft: "Hi Sam, thanks" })]);
+  assert.equal(card(b, "d").rev, 2);
+  const d2 = Object.assign({}, d0, { draft: "Hi Sam, thanks", draft_label: "Mail" });
+  sync(b, [d2]);
+  assert.equal(card(b, "d").rev, 3);
+  const w = sync(b, [yn("w", { draft: "DRAFT\nHi" }), d2]), at = w.lines.findIndex((l) => l.startsWith("sync: "));
+  assert.equal(w.code, 0, w.text);
+  assert.deepEqual(w.lines.filter((l) => l.startsWith("warning:")), ["warning: w: draft starts with \"DRAFT\"; put notes in summary"]);
+  w.lines.forEach((l, i) => { if (l.startsWith("warning:")) assert.ok(i > at, w.text); });
+  assert.ok(card(b, "w") && writesOf(w.lines).flat().length > 0, "the writes still apply");
+  assert.deepEqual(sync(b, [yn("w", { draft: "DRAFT\nHi" }), d2]).lines.filter((l) => l.startsWith("warning:")), [], "an unchanged card does not warn again");
+  const five = sync(b, ["w1", "w2", "w3", "w4", "w5"].map((id) => yn(id, { draft: "Note: x" }))).lines.filter((l) => l.startsWith("warning:"));
+  assert.equal(five.length, 4);
+  assert.equal(five[3], "warning: and 2 more drafts that start with a label");
+});
+ok("check: a config check can test draft", () => {
+  const b = fresh();
+  cfgOf(b, (c) => { c.checks = [{ id: "nd", field: "draft", forbid: "secret", flags: "i", message: "No secret in a draft" }]; });
+  const r = sync(b, [yn("s", { draft: "the Secret is x" })]);
+  assert.equal(r.code, 1);
+  assert.ok(r.lines.includes("s: check nd: No secret in a draft"), r.text);
+  assert.ok(checkFields().includes("draft") && checkFields().includes("draft_label") && checkFields().includes("due"));
+});
+ok("sync: a draft of only spaces and a draft_label without a draft are refused", () => {
+  const b = fresh(), e = sync(b, [yn("e", { draft: "  \n" })]), f = sync(b, [yn("f", { draft_label: "Mail" })]);
+  assert.equal(e.code, 1);
+  assert.ok(e.text.includes("e: draft: only spaces; leave it out"), e.text);
+  assert.equal(f.code, 1);
+  assert.ok(f.text.includes("f: draft_label: needs a draft"), f.text);
+});
+ok("sync: due is a real date; a due change keeps rev; a card file without due removes it", () => {
+  const b = fresh(), bad = sync(b, [yn("u", { due: "2026-02-30" })]);
+  assert.equal(bad.code, 1);
+  assert.ok(bad.lines.includes("u: due: not a real calendar date written YYYY-MM-DD"), bad.text);
+  assert.equal(sync(b, [yn("u", { due: "2026-01-20" })]).code, 0, "a past date is allowed");
+  assert.equal(card(b, "u").rev, 1);
+  const r = sync(b, [yn("u", { due: "2026-03-01" })]);
+  assert.equal(r.lines.find((l) => l.startsWith("sync: ")), "sync: 0 new, 0 changed (rev up), 1 changed (same rev), 0 unchanged, 0 closed");
+  assert.deepEqual([card(b, "u").rev, card(b, "u").due], [1, "2026-03-01"]);
+  sync(b, [yn("u")]);
+  assert.equal(card(b, "u").due, undefined);
+});
+ok("check: week_start is checked", () => {
+  const b = fresh();
+  cfgOf(b, (c) => { c.week_start = "someday 12:00"; });
+  const r = cmd(b, "check");
+  assert.equal(r.code, 1);
+  assert.ok(r.lines.includes('problem: config week_start: "someday 12:00" is not a day and a time such as "tuesday 12:00"'), r.text);
+  cfgOf(b, (c) => { c.week_start = 5; });
+  assert.ok(cmd(b, "check").lines.includes('problem: config week_start: "5" is not a day and a time such as "tuesday 12:00"'));
+  cfgOf(b, (c) => { c.week_start = "Monday 08:30"; });
+  const g = cmd(b, "check");
+  assert.equal(g.code, 0, g.text);
+  // B's "config board:" line names the keys the board file sets, week_start among them; no problem line names it.
+  assert.ok(!g.lines.some((l) => l.startsWith("problem:") && l.includes("week_start")), g.text);
+  assert.ok(CONFIG_KEYS.includes("week_start"));
+});
+ok("check: an invalid group or sort entry is named and stops check", () => {
+  const b = fresh();
+  cfgOf(b, (c) => { c.groups = [{ id: "a", match: { due: ["thisweek"] } }, { id: "b", match: {} }]; c.sort = ["due", "nope"]; });
+  const r = cmd(b, "check");
+  assert.equal(r.code, 1);
+  assert.ok(r.lines.includes("problem: config groups: 1 of 2 entries kept"), r.text);
+  assert.ok(r.lines.includes("problem: config sort: 1 of 2 entries kept"), r.text);
+  cfgOf(b, (c) => { c.groups = [{ id: "b", label: "B", match: {} }]; c.sort = ["-due"]; });
+  const g = cmd(b, "check");
+  assert.equal(g.code, 0, g.text);
+  const w = writesOf(g.lines).flat().find((x) => x.collection === "meta" && x.doc_id === "config"), data = JSON.parse(fs.readFileSync(w.file_path, "utf8"));
+  assert.deepEqual([data.groups, data.sort], [[{ id: "b", label: "B", match: {} }], ["-due"]]);
+  assert.ok(CONFIG_KEYS.includes("groups") && CONFIG_KEYS.includes("sort"));
+});
+ok("config layers: +groups replaces a default group in place by its id", () => {
+  const d = pageDefaults(), ids = d.groups.map((g) => g.id);
+  const m = mergeLayers([{ name: "board", data: { "+groups": [{ id: "backlog", label: "Later", match: {} }, { id: "ops", match: { tags: ["ops"] } }] } }], pageDefaults());
+  assert.deepEqual(m.problems, []);
+  assert.deepEqual(m.config.groups.map((g) => g.id), ids.concat("ops"));
+  assert.deepEqual(m.config.groups[ids.indexOf("backlog")], { id: "backlog", label: "Later", match: {} });
+  assert.deepEqual(m.config.groups.find((g) => g.id === "this-week").match, d.groups.find((g) => g.id === "this-week").match);
+  assert.ok(Array.isArray(m.config.groups.find((g) => g.id === "this-week").match), "the base is the raw DEFAULTS.groups");
+});
+ok("check: a group that names an unknown tag or priority gets a note, not a problem", () => {
+  const b = fresh();
+  cfgOf(b, (c) => { c.tags = [{ id: "cost" }]; c.groups = [{ id: "x", match: { tags: ["alart"], priority: ["urgent"] } }]; });
+  const r = cmd(b, "check");
+  assert.equal(r.code, 0, r.text);
+  assert.ok(r.lines.includes('note: config groups: x matches tag "alart" that is not in tags'), r.text);
+  assert.ok(r.lines.includes('note: config groups: x matches priority "urgent" that is not in priorities'), r.text);
+  assert.ok(!r.lines.some((l) => l.startsWith("problem:")), r.text);
+  cfgOf(b, (c) => { delete c.groups; c.tags = [{ id: "cost" }]; });
+  assert.ok(cmd(b, "check").lines.includes('note: config groups: alerts matches tag "alert" that is not in tags'));
+});
 fs.rmSync(tmp, { recursive: true, force: true });

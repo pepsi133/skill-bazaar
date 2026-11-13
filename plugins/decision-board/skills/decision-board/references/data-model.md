@@ -16,7 +16,7 @@ owner. A viewer reads the board and writes nothing.
 `check` merges four layers, later ones win: the defaults in the table below; the user file
 `~/.config/decision-board/config.json` (`$XDG_CONFIG_HOME/decision-board/config.json` when that is set;
 `BOARD_USER_CONFIG` names another file, `""` turns it off); `board/config.json`; `board/config.local.json`.
-Keep private values that hold for every board on the machine (the time zone, hosts, tags, checks, names of
+Keep private values that hold for every board on the machine (the time zone, the week start, hosts, tags, checks, names of
 people) in the user file, outside every repository. Each layer is optional, but one must exist.
 
 - An object merges key by key; a text or a list replaces. `"+tags": [...]` appends to the earlier list,
@@ -38,7 +38,10 @@ people) in the user file, outside every repository. Each layer is optional, but 
 | `tabs` | A list of `{id, label, match, rest}` | the All tab only |
 | `priorities` | A list of `{id, label}` in sort order. The first three get the red, amber and grey tag | `now`, `soon`, `later` |
 | `link_hosts` | The hosts card `links` may point to by `https:`. A card needs no link | none |
-| `tags` | A list of `{id, label}` that cards name in `tags` | none |
+| `tags` | A list of `{id, label}` that cards name in `tags` | `alert`, `incident` |
+| `groups` | The sections of a tab, in order: a list of `{id, label, match}`. A card goes to the first group whose `match` fits ("Groups and sort" below) | the six groups below |
+| `sort` | The order inside a group: keys of `priority`, `due`, `first_asked`, `created`, `updated`, `title`, `id`; `-` in front reverses one. Missing values go last | `["priority", "due", "created", "id"]` |
+| `week_start` | When the week of the groups starts: a day and a 24-hour time, `"<day> <HH:MM>"`, for example `"monday 00:00"`. "This week" runs from it to the next one | `"tuesday 12:00"` |
 | `domains` | Hosts a reference guide may load from by `https:`, for example `["docs.example.com"]`. Only the operator adds a host | none |
 | `checks` | Script only, never on the page: regex checks that `sync` runs on each open card, below | none |
 | `standing` | Script only: the words that make `read` flag a note `[standing]`; add words of your language with `"+standing"` | `always`, `never`, `from now on` |
@@ -67,6 +70,27 @@ pass. `sync` refuses a card that fails and prints `<card>: check <id>: <message>
 {"title": "Lab network", "tz": "Europe/Warsaw", "agent": "Coordinator", "link_hosts": ["wiki.example.com"], "tags": [{"id": "cost", "label": "Costs money"}],
  "tabs": [{"id": "router", "label": "Router", "match": {"source": ["router", "wifi"]}},
   {"id": "cost", "label": "Costs", "match": {"tags": ["cost"]}}, {"id": "other", "label": "Other", "rest": true}]}
+```
+
+### Groups and sort
+
+A tab picks the cards; groups order them inside it. A group: `id` (a-z 0-9 _ -), `label`, and `match`, an object or
+a list of objects of which any may fit. In an object every key must fit: `source`, `tags`, `priority`, `kind`
+(lists, any value), `due` (a list of `overdue`, `today`, `this_week`, `next_week`, `later`, `none`; the week starts
+at `week_start`, and a due day counts from its 00:00), `blocked` (true or false), `state` (`active`, the default,
+`done` or `any`). `{}` takes every active card. An entry with an unknown key or value is dropped, and `check` says
+so. Cards no group takes go to "Other" and "Done". `+groups` adds groups to the defaults; an entry with a default id
+replaces that group. The defaults:
+
+```json
+{"groups": [
+ {"id": "alerts", "label": "Alerts and incidents", "match": {"tags": ["alert", "incident"]}},
+ {"id": "blocked", "label": "Now: blocked on a human", "match": {"blocked": true}},
+ {"id": "this-week", "label": "This week", "match": [{"due": ["overdue", "today", "this_week"]}, {"priority": ["now"], "due": ["none"]}]},
+ {"id": "next-week", "label": "Next week", "match": [{"due": ["next_week"]}, {"priority": ["soon"], "due": ["none"]}]},
+ {"id": "backlog", "label": "Backlog", "match": {}},
+ {"id": "done", "label": "Done", "match": {"state": "done"}}
+]}
 ```
 
 ## Collections

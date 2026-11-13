@@ -10,6 +10,8 @@ unknown field.
 | `id` | Required. A short slug, for example `backup-retention`: letters, digits and `_ - . ~ : @ +`, not `.` or `..`. Keep it when the card changes. To replace a card, close it and post a new id: an id belongs to one finding for good |
 | `title` | Required. A plain question that one option answers, at most about 90 characters |
 | `summary`, `evidence` | Text in the format below. `evidence` folds away |
+| `draft` | Only the text the operator pastes elsewhere: a reply, a prompt, a message. Raw text: no preface, no notes, no approval line, no fence. Copy copies it byte for byte. Where it goes, why, and any caveat go in `summary` |
+| `draft_label` | Where the draft goes, for example `Reply in the thread`. Plain text; needs `draft` |
 | `options` | Required on a decision card: 2 to 8 complete answers. An action or info card leaves it out and gets the options of its kind |
 | `recommendation` | One of the options, word for word |
 | `kind` | `decision` (default), `action` (the operator does something outside the board; options "Done", "Done in part, see note", "Later", "Other, see note"), or `info` (one option, "Acknowledge") |
@@ -20,6 +22,7 @@ unknown field.
 | `links` | Optional. Up to 10 `{"label", "url"}`; `sync` prints `note: <id>: no link` for an open card without one. A url must parse, use `https:`, carry no user name or password, and have a host of the config `link_hosts` or a subdomain of one. Give the link of the item when it has one |
 | `tags` | Tag ids from the config `tags`, each once, matched exactly |
 | `first_asked` | `{"date": "YYYY-MM-DD", "who": "<id>"}`: when the question was first put to the operator, and by whom. Required on every open card whose kind is not `info`. A real date in the config `tz`, no later than tomorrow. `who` is optional: at most 40 of the id characters. A card posted again keeps the stored value |
+| `due` | Optional. `YYYY-MM-DD`, a day in the config `tz`, for a real deadline (a form, a review, a renewal). Only a date the source states; never infer one. From that day the card also shows in "Due today" until it is closed. Post it again without `due` to remove it |
 
 ## Rules for a good card
 
@@ -33,6 +36,7 @@ The operator reads the card on a phone, without your session: it must stand alon
   terminal reply scrolls away.
 - Safety mechanisms that are the operator's own to manage stay off the cards as choices.
 - When a "done" needs a check, check it yourself, then add --close <id> to the ack of that batch.
+- A text to paste goes in `draft`, never in a fenced block. `sync` warns when a draft starts with a label such as `DRAFT` or `Note:`.
 
 ## Text format
 
@@ -43,7 +47,7 @@ The operator reads the card on a phone, without your session: it must stand alon
 | A blank line | A new paragraph |
 | `- ` at the start of a line | A bullet |
 | `1. ` at the start of a line | A numbered step; a list starts at the number of its first line |
-| A line of three backticks, then the closing line | A preformatted block with a "Copy" button. Keep its lines under about 40 characters: it wraps on a phone |
+| A line of three backticks, then the closing line | A preformatted block with a "Copy" button, for a command or a short sample. Keep its lines under about 40 characters |
 | `### ` at the start of a line | A small heading |
 | `**text**`, `` `text` `` | Bold, inline code |
 | `Before:`, `Now:`, `Suggested:`, `Why:`, `Risk:`, `Your answer:` at the start of a line | The label in bold |

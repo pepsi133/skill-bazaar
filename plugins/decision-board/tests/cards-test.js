@@ -38,11 +38,11 @@ ok("Refreshed <time> from the refreshed of cards/main", () => {
   assert.equal(P.refreshedText(undefined, t), "");
   assert.ok(fs.readFileSync(pageFile, "utf8").includes("refreshedText(cardDocs.get(SCHEMA.cardsDoc), fmt)"));
 });
-ok("the page reads the cards collection, folds Done at the end of the cards, and counts it", () => {
+ok("the page reads the cards collection and shows the cards in groups; Done is a folded group", () => {
   const src = fs.readFileSync(pageFile, "utf8");
   assert.match(src, /var COLS = \[\["cards", cardDocs\],/);
   assert.ok(!/\["items", items\]|collection\("items"\)/.test(src), "the items collection is no longer read");
-  assert.match(src, /<div id="cards"><\/div>\s*<div id="empty" class="empty" hidden><\/div>\s*<details id="done" class="donebox" hidden><summary id="donesum">Done<\/summary><div id="donelist"><\/div><\/details>/);
-  assert.ok(src.includes('$("donesum").textContent = "Done (" + done.length + ")";') && src.includes('placeCards($("donelist"), done);'));
-  assert.ok(src.includes('if (isDone(it)) $("done").open = true;'), "a tap on a card in Done unfolds it");
+  assert.ok(src.includes("var groups = groupCards(vis, now);") && src.includes("renderGroups(groups);"));
+  assert.ok(src.includes('h("details", { class: "grp" }'), "a group for done cards is folded");
+  assert.ok(src.includes('var fold = c.el.closest("details.grp");'), "a tap on a card in a folded group unfolds it");
 });

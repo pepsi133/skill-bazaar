@@ -1,7 +1,7 @@
 <title>Decision Board</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
-/* Layout: sticky summary bar, tabs, one dense card per item, a folded Done section, notes box last. */
+/* Layout: sticky summary bar, Due today and Blocked on you, tabs, the cards of the tab in groups (the group of done cards folded), notes box last. */
 :root {
   --bg: #f5f6f8;
   --surface: #ffffff;
@@ -65,6 +65,7 @@
 body { background: var(--bg); color: var(--fg); font-family: var(--font); font-size: 14px; line-height: 1.45; }
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); background: var(--surface); z-index: 20; }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 button, select, textarea, input { font: inherit; color: inherit; }
 .in { max-width: 860px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 
@@ -87,9 +88,12 @@ button.primary:hover:not(:disabled) { background: var(--accent); filter: brightn
 button.link { border: 0; background: none; padding: 2px 4px; min-height: 0; color: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.blocked { margin: 10px 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 6px; min-width: 0; }
-.blocked h3 { margin: 0; font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: center; }
-.blocked h3 .n { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; padding: 0 7px; border-radius: 999px; background: var(--now-bg); color: var(--now); }
+.blocked, .due { margin: 10px 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 6px; min-width: 0; }
+.blocked h3, .due h3 { margin: 0; font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: center; }
+.blocked .n, .due h3 .n { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; padding: 0 7px; border-radius: 999px; background: var(--now-bg); color: var(--now); }
+.bfold > summary { font-size: 13px; font-weight: 600; cursor: pointer; padding: 4px 0; min-height: 32px; }
+.bfold[open] > summary { margin-bottom: 6px; }
+.due { border-color: var(--now); background: var(--now-bg); }
 .blist { display: grid; gap: 4px; }
 .brow { display: grid; gap: 2px; width: 100%; min-width: 0; text-align: left; padding: 6px 8px; min-height: 44px; border-radius: 6px; }
 .brow .bt { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
@@ -105,17 +109,24 @@ button.link { border: 0; background: none; padding: 2px 4px; min-height: 0; colo
 .tab.g .tl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 main.in { padding-bottom: 48px; }
-#cards, #donelist { display: grid; gap: 10px; }
-.donebox { margin-top: 14px; }
-.donebox > summary { font-size: 13px; padding: 6px 0; }
-.donebox[open] > summary { margin-bottom: 8px; }
-.donebox[hidden] { display: none; }
+.groups { display: grid; gap: 16px; min-width: 0; }
+.grp { display: grid; gap: 10px; min-width: 0; }
+.grp > h3, .grp > summary { margin: 0; font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: center; }
+.grp > summary { padding: 6px 0; color: var(--fg); }
+.grp .n, .side .n { font-size: 12px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.glist { display: grid; gap: 10px; min-width: 0; }
+.side { display: none; }
+@media (min-width: 1280px) {
+  .board.has-side { display: grid; grid-template-columns: 180px minmax(0, 1fr); column-gap: 20px; align-items: start; margin-left: -200px; }
+  .board.has-side > .side { display: grid; gap: 2px; position: sticky; top: var(--hdr, 120px); }
+  .side .srow { display: flex; justify-content: space-between; gap: 8px; text-align: left; border: 0; background: none; min-height: 32px; }
+  .side .srow .sl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
 .card.done { opacity: 0.8; }
 .card.flash, .guide.flash { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent); }
 .card .gopen { justify-self: start; }
 .guide { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; margin-bottom: 10px; }
-.guide[hidden], #cards[hidden] { display: none; }
 .guide h2 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
 .guide .gbody { overflow-wrap: anywhere; max-width: 70ch; min-width: 0; }
 .guide .gbody.ref { max-width: none; contain: paint; position: relative; overflow: hidden; isolation: isolate; }
@@ -140,7 +151,6 @@ main.in { padding-bottom: 48px; }
 .asked { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
 .links { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; min-width: 0; }
 .links a { color: var(--accent); overflow-wrap: anywhere; }
-.links[hidden], .chips[hidden], .asked[hidden] { display: none; }
 .card h2 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; text-wrap: balance; }
 .summary { margin: 0; overflow-wrap: anywhere; max-width: 70ch; min-width: 0; }
 .rich > :first-child { margin-top: 0; }
@@ -151,6 +161,11 @@ main.in { padding-bottom: 48px; }
 .rich .pre { margin: 0 0 8px; display: grid; gap: 2px; min-width: 0; }
 .rich .pre .copy { justify-self: end; font-size: 12px; padding: 2px 10px; min-height: 30px; color: var(--muted); }
 .rich pre { margin: 0; padding: 8px; font-family: var(--mono); font-size: 12.5px; line-height: 1.4; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.draft { display: grid; gap: 4px; min-width: 0; padding: 8px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--bg); }
+.draft .dhead { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; }
+.draft .dlabel { font-size: 12px; font-weight: 600; color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+.draft .dcopy { font-size: 12px; padding: 2px 12px; min-height: 34px; flex: none; }
+.draft pre { margin: 0; font-family: var(--font); font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-width: 70ch; }
 .rich h4 { margin: 10px 0 4px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
 .rich code { font-family: var(--mono); font-size: 0.92em; background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .rich strong { font-weight: 600; }
@@ -166,7 +181,6 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 .foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; min-height: 18px; }
 .page-foot { margin-top: 24px; padding: 12px 0; }
 .page-foot span { display: block; }
-.page-foot span[hidden] { display: none; }
 .empty { padding: 28px 8px; text-align: center; color: var(--muted); }
 .msg { padding: 8px 10px; border-radius: 6px; background: var(--now-bg); color: var(--now); }
 .notes { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
@@ -194,6 +208,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 </header>
 
 <div class="in">
+  <section id="due" class="due" hidden aria-label="Due today"></section>
   <section id="blocked" class="blocked" aria-label="Blocked on you"></section>
   <div id="tabs" class="tabs" role="tablist" aria-label="Board tabs"></div>
 </div>
@@ -201,9 +216,11 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 <main class="in">
   <div id="msg" class="msg" hidden role="alert"></div>
   <section id="guide" class="guide" hidden aria-label="Guide"></section>
-  <div id="cards"></div>
+  <div id="board" class="board">
+    <nav id="side" class="side" hidden aria-label="Groups"></nav>
+    <div id="groups" class="groups"></div>
+  </div>
   <div id="empty" class="empty" hidden></div>
-  <details id="done" class="donebox" hidden><summary id="donesum">Done</summary><div id="donelist"></div></details>
   <section class="notes" aria-label="New note">
     <h3>New note</h3>
     <div id="about" class="about" hidden></div>
@@ -280,9 +297,9 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     // The one cards document: cards/main holds the card list and the time of the last sync.
     cardsDoc: "main",
     cards: { cards: "a:item", refreshed: "d" },
-    item: { id: "s", title: "s", summary: "t", evidence: "t", options: "L", recommendation: "s", priority: "s",
+    item: { id: "s", title: "s", summary: "t", evidence: "t", draft: "t", draft_label: "s", options: "L", recommendation: "s", priority: "s",
       source: "s", rev: "r", kind: "s", blocks: "s", status: "s", created: "d", updated: "d",
-      links: "a:link", tags: "l", first_asked: "o:asked" },
+      links: "a:link", tags: "l", first_asked: "o:asked", due: "s" },
     link: { label: "s", url: "t" },
     asked: { date: "s", who: "s" },
     response: { itemId: "s", choice: "s", note: "t", rev: "r", updated: "d", sent: "b", batch: "s", history: "a:hist" },
@@ -423,6 +440,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function zoneNote(tz) { return "Times in " + tz; }
 
   // ---- board config. The document meta/config overrides these defaults field by field.
+  // The due buckets a group can match; dueBucket returns one.
+  var DUE_BUCKETS = ["overdue", "today", "this_week", "next_week", "later", "none"];
   var DEFAULTS = {
     title: "Decision board",
     agent: "Claude",
@@ -430,9 +449,19 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     priorities: [{ id: "now", label: "Now" }, { id: "soon", label: "Soon" }, { id: "later", label: "Later" }],
     domains: [],
     link_hosts: [],
-    tags: [],
+    tags: [{ id: "alert", label: "Alert" }, { id: "incident", label: "Incident" }],
     tz: "Europe/Warsaw",
-    settings: ""
+    settings: "",
+    groups: [
+      { id: "alerts", label: "Alerts and incidents", match: { tags: ["alert", "incident"] } },
+      { id: "blocked", label: "Now: blocked on a human", match: { blocked: true } },
+      { id: "this-week", label: "This week", match: [{ due: ["overdue", "today", "this_week"] }, { priority: ["now"], due: ["none"] }] },
+      { id: "next-week", label: "Next week", match: [{ due: ["next_week"] }, { priority: ["soon"], due: ["none"] }] },
+      { id: "backlog", label: "Backlog", match: {} },
+      { id: "done", label: "Done", match: { state: "done" } }
+    ],
+    sort: ["priority", "due", "created", "id"],
+    week_start: "tuesday 12:00"
   };
   // A config list: at most SCHEMA.max.list entries. A list of {id, label}: drop entries without a text id and later duplicates.
   function cfgList(a) { return Array.isArray(a) ? a.slice(0, SCHEMA.max.list) : []; }
@@ -474,11 +503,16 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     out.domains = hostList(g("domains"));
     // Hosts that the links of a card can point to, by the same rules.
     out.link_hosts = hostList(g("link_hosts"));
-    out.tags = idList(g("tags")).map(function (x) { return { id: x.id, label: x.label || x.id }; });
+    var rawTags = g("tags"), tg = idList(rawTags).map(function (x) { return { id: x.id, label: x.label || x.id }; });
+    out.tags = Array.isArray(rawTags) && (tg.length || !rawTags.length) ? tg : DEFAULTS.tags;
     // The time zone of every stamp and of every time shown. A bad name or a fixed offset keeps the default.
     out.tz = normTz(g("tz")) || DEFAULTS.tz;
     // The footer line that check writes: where the settings live.
     out.settings = str(g("settings")).slice(0, 200);
+    var rawGroups = g("groups"), gs = normGroups(rawGroups);
+    out.groups = Array.isArray(rawGroups) && (gs.length || !rawGroups.length) ? gs : DEFAULT_GROUPS;
+    out.sort = normSort(g("sort"));
+    out.week_start = normWeek(g("week_start")) || DEFAULT_WEEK;
     return out;
   }
   // A host entry has two labels or more. An entry of digits and dots is a full IPv4 address. A
@@ -497,6 +531,60 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     host = String(host).toLowerCase();
     return list.some(function (d) { return host === d || (!IPV4.test(d) && host.slice(-d.length - 1) === "." + d); });
   }
+  // ---- groups and sort. A group is {id, label, match: [match objects], fold}; fold is true when every match is for done cards.
+  var GROUP_ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+  var MATCH_KEYS = ["source", "tags", "priority", "kind", "due", "blocked", "state"];
+  var GROUP_STATES = ["active", "done", "any"];
+  var SORT_KEYS = ["priority", "due", "first_asked", "created", "updated", "title", "id"];
+  function normMatch(m) {
+    if (!isObj(m)) return null;
+    var out = Object.create(null), bad = false;
+    Object.keys(m).forEach(function (k) {
+      if (k === "__proto__" || k === "constructor" || k === "prototype") { bad = true; return; }
+      if (k.charAt(0) === "_") return;
+      var v = m[k];
+      if (MATCH_KEYS.indexOf(k) < 0) { bad = true; return; }
+      if (k === "blocked") { if (typeof v === "boolean") out.blocked = v; else bad = true; return; }
+      if (k === "state") { if (GROUP_STATES.indexOf(v) >= 0) out.state = v; else bad = true; return; }
+      var l = Array.isArray(v) ? v.slice(0, SCHEMA.max.list) : [];
+      if (!l.length || l.some(function (x) { return typeof x !== "string" || !x.trim(); })) { bad = true; return; }
+      if (k === "source") l = l.map(function (x) { return x.trim().toLowerCase(); });
+      if (k === "kind" && l.some(function (x) { return !SCHEMA.kinds.some(function (y) { return y.id === x; }); })) { bad = true; return; }
+      if (k === "due" && l.some(function (x) { return DUE_BUCKETS.indexOf(x) < 0; })) { bad = true; return; }
+      out[k] = l;
+    });
+    if (bad) return null;
+    if (!out.state) out.state = "active";
+    return out;
+  }
+  function normGroups(a) {
+    return idList(a, function (id) { return GROUP_ID_RE.test(id); }).map(function (x) {
+      if (!Object.keys(x.src).every(function (k) { return k === "id" || k === "label" || k === "match" || k.charAt(0) === "_"; })) return null;
+      var raw = own(x.src, "match") ? x.src.match : {}, list = Array.isArray(raw) ? cfgList(raw) : [raw], ms = list.map(normMatch);
+      if (!ms.length || ms.some(function (m) { return m === null; })) return null;
+      return { id: x.id, label: x.label || x.id, match: ms, fold: ms.every(function (m) { return m.state === "done"; }) };
+    }).filter(Boolean);
+  }
+  function normSort(a) {
+    var seen = Object.create(null), out = [];
+    strs(cfgList(a)).forEach(function (x) {
+      var k = x.trim(), base = k.charAt(0) === "-" ? k.slice(1) : k;
+      if (SORT_KEYS.indexOf(base) < 0 || seen[base]) return;
+      seen[base] = true; out.push(k);
+    });
+    return out.length ? out : DEFAULTS.sort;
+  }
+  var DEFAULT_GROUPS = normGroups(DEFAULTS.groups);
+  // A week start: a day name and an optional 24-hour time, such as "tuesday 12:00"; case and spaces around ignored.
+  // -> {day: 0 (Sunday) to 6, min: minutes after midnight}, or null when it is not one.
+  var WEEK_DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  function normWeek(v) {
+    var m = typeof v === "string" ? /^\s*([a-z]+)(?:\s+(\d{1,2}):(\d{2}))?\s*$/i.exec(v) : null, d = m ? WEEK_DAYS.indexOf(m[1].toLowerCase()) : -1;
+    if (d < 0 || (m[2] !== undefined && (+m[2] > 23 || +m[3] > 59))) return null;
+    return { day: d, min: m[2] === undefined ? 0 : +m[2] * 60 + +m[3] };
+  }
+  // The parsed DEFAULTS.week_start: the fallback of normConfig.
+  var DEFAULT_WEEK = normWeek(DEFAULTS.week_start);
   var cfg = normConfig(null);
   function applyConfig(raw) { cfg = normConfig(raw); }
   function boardTitle(m) { return cfg.title || (m && str(m.title)) || DEFAULTS.title; }
@@ -621,6 +709,62 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     n = Math.max(0, n);
     return "First asked " + p[1] + "-" + p[2] + (who ? " (" + who + ")" : "") + ", " + n + (n === 1 ? " day" : " days");
   }
+  // A draft: the raw text to paste. Shown when it holds more than spaces; copied exactly as stored.
+  // A label: [draft], (draft), a fence, the word draft alone on the first line, or a label word followed by ":" or a
+  // spaced dash (" - "). "Draft agenda ..." and "Note-taking ..." are text, not labels.
+  var DRAFT_LABEL_RE = /^\s*(?:\[\s*draft\s*\]|\(\s*draft\s*\)|```|draft[ \t]*(?:\r?\n|$)|\**(?:draft|note|notes|nb|preface|approval|caveat|proposed (?:reply|message|text|prompt)|suggested (?:reply|message|text|prompt))\**(?:[ \t]*:|[ \t]+[-–—][ \t]))/i;
+  function draftText(it) { return typeof it.draft === "string" ? it.draft : ""; }
+  function hasDraft(it) { return draftText(it).trim() !== ""; }
+  function draftLabelOf(it) { return str(it.draft_label) || "Draft"; }
+  // The label that a draft starts with, such as "DRAFT" or "Note:", or "" when it starts with the text itself.
+  function draftWarning(t) { var m = typeof t === "string" ? DRAFT_LABEL_RE.exec(t) : null; return m ? m[0].trim() : ""; }
+
+  // ---- due dates. A due date is a day YYYY-MM-DD in the config tz. ms is a time in milliseconds, given by the caller.
+  // The day of ms in the config tz, YYYY-MM-DD.
+  function todayOf(nowMs) { return dayIn(nowMs, cfg.tz); }
+  // Whole calendar days from day a to day b (both YYYY-MM-DD): b - a.
+  function dayDiff(a, b) {
+    var p = a.split("-"), q = b.split("-");
+    return Math.round((Date.UTC(+q[0], +q[1] - 1, +q[2]) - Date.UTC(+p[0], +p[1] - 1, +p[2])) / 86400000);
+  }
+  // The due line of a card, or null without a real due date. cls is the tag colour.
+  function dueInfo(it, today) {
+    if (!realDate(it.due)) return null;
+    var d = dayDiff(today, it.due);
+    if (d < 0) return { days: d, text: "Overdue " + -d + (d === -1 ? " day" : " days"), cls: "now" };
+    if (d === 0) return { days: 0, text: "Due today", cls: "now" };
+    if (d === 1) return { days: 1, text: "Due tomorrow", cls: "soon" };
+    return { days: d, text: "Due " + it.due.slice(5), cls: "" };
+  }
+  // The wall clock of ms in the config tz, as minutes since 1970-01-01 00:00 of that clock (calendar arithmetic:
+  // a DST change moves no week boundary).
+  function wallMin(ms) { var p = zoneParts(ms, cfg.tz); return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute) / 60000; }
+  // The wall-clock minute (as wallMin) at which the week of ms started: the last cfg.week_start at or before ms.
+  // Day 0 of the count, 1970-01-01, was a Thursday (day of week 4, Sunday 0).
+  function weekStartOf(ms) {
+    var w = wallMin(ms), day = Math.floor(w / 1440), s = (day - (day + 4 - cfg.week_start.day + 7) % 7) * 1440 + cfg.week_start.min;
+    return s > w ? s - 10080 : s;
+  }
+  // The bucket of a due date that a group can match: overdue, today, this_week (from tomorrow to the end of the
+  // current week), next_week (the week after), later, or none (no real due date). A due day counts at its start
+  // (00:00), so a card due on the start day of a week that starts at 12:00 belongs to the week that ends that noon.
+  // The bucket names are DUE_BUCKETS, defined at the top of "// ---- board config" (item 3 needs them at load time).
+  function dueBucket(due, ms) {
+    if (!realDate(due)) return "none";
+    var d = dayDiff(todayOf(ms), due);
+    if (d < 0) return "overdue";
+    if (d === 0) return "today";
+    var p = due.split("-"), at = Date.UTC(+p[0], +p[1] - 1, +p[2]) / 60000, s = weekStartOf(ms);
+    if (at < s + 10080) return "this_week";
+    if (at < s + 20160) return "next_week";
+    return "later";
+  }
+  // "Due today": the cards due today or earlier that are not closed, the most overdue first, then in the order of
+  // sorted. An answered card stays until it is closed.
+  function dueList(sorted, today) {
+    return sorted.filter(function (it) { return str(it.status) !== "closed" && realDate(it.due) && it.due <= today; })
+      .sort(function (a, b) { return a.due < b.due ? -1 : a.due > b.due ? 1 : 0; });
+  }
 
   // ---- revisions and answers
   function revOf(x) { return wholeRev(x ? x.rev : 1); }
@@ -673,9 +817,11 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     if (r && (r.choice || r.note)) return !r.sent || isPending(it.id) ? "unsent" : (isQuestion(it, r) ? "waiting" : "sent");
     return "open";
   }
-  // Answered and closed cards go to the folded Done section at the end of each tab.
+  // Answered and closed cards are done: they go to the folded group of done cards in each tab.
   function isDone(it) { var st = stateOf(it); return st === "sent" || st === "closed"; }
-  function isActive(it) { return !isDone(it); }
+  // The state a group matches. C2 adds "snoozed" here; nothing else needs to change for it.
+  function cardState(it) { return isDone(it) ? "done" : "active"; }
+  function isActive(it) { return cardState(it) === "active"; }
   // The text where the cards of a tab would be: "" when the tab shows a card.
   function emptyText(total, active, done) {
     if (!total) return "No cards yet. Agents add cards to this board, and they appear here without a reload.";
@@ -685,14 +831,50 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // "Blocked on you": every card that is not done, whatever tab is selected.
   function blocksOf(it) { return str(it.blocks); }
   function blockedList(sorted) { return sorted.filter(function (it) { return isActive(it) && blocksOf(it) !== ""; }); }
-  function sortedItems() {
-    return Array.from(items.values()).sort(function (a, b) {
-      var pa = priRank(a.priority), pb = priRank(b.priority);
-      if (pa !== pb) return pa - pb;
-      var c = cmpStamp(a.created, b.created);
-      if (c) return c;
+  function sortVal(key, it) {
+    if (key === "priority") return priRank(it.priority);
+    if (key === "due") return realDate(it.due) ? it.due : null;
+    if (key === "first_asked") return isObj(it.first_asked) && realDate(it.first_asked.date) ? it.first_asked.date : null;
+    if (key === "created" || key === "updated") { var t = stampMs(it[key]); return t === -Infinity ? null : t; }
+    if (key === "title") return str(it.title).toLowerCase();
+    return String(it.id);
+  }
+  function cardCmp(keys) {
+    return function (a, b) {
+      for (var i = 0; i < keys.length; i++) {
+        var desc = keys[i].charAt(0) === "-", k = desc ? keys[i].slice(1) : keys[i], va = sortVal(k, a), vb = sortVal(k, b);
+        if (va === null && vb === null) continue;
+        if (va === null) return 1;
+        if (vb === null) return -1;
+        if (va !== vb) return (va < vb ? -1 : 1) * (desc ? -1 : 1);
+      }
       return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    };
+  }
+  function sortedItems() { return Array.from(items.values()).sort(cardCmp(cfg.sort)); }
+  // now: the time in ms for the due buckets (the caller reads the clock, the pure part never does).
+  function matchOne(m, it, now) {
+    if (m.state !== "any" && m.state !== cardState(it)) return false;
+    if (m.source && !(typeof it.source === "string" && m.source.indexOf(it.source.trim().toLowerCase()) >= 0)) return false;
+    if (m.tags && !strs(it.tags).some(function (t) { return m.tags.indexOf(t) >= 0; })) return false;
+    if (m.priority && m.priority.indexOf(str(it.priority)) < 0) return false;
+    if (m.kind && m.kind.indexOf(kindOf(it)) < 0) return false;
+    if (m.due && m.due.indexOf(dueBucket(it.due, now)) < 0) return false;
+    if (own(m, "blocked") && (blocksOf(it) !== "") !== m.blocked) return false;
+    return true;
+  }
+  function groupMatch(g, it, now) { return g.match.some(function (m) { return matchOne(m, it, now); }); }
+  // The sections of a list of sorted cards: the configured groups in order, then the tail groups "Other" (active
+  // cards no group took; "Open" when no group is configured) and "Done" (done cards no group took). Every card is
+  // in exactly one group, in the order of the list. Empty groups stay in the result; the page hides them.
+  function groupCards(list, now) {
+    var gs = cfg.groups.map(function (g) { return { id: g.id, label: g.label, fold: g.fold, cards: [] }; });
+    var other = { id: "_other", label: gs.length ? "Other" : "Open", fold: false, cards: [] }, done = { id: "_done", label: "Done", fold: true, cards: [] };
+    list.forEach(function (it) {
+      for (var i = 0; i < cfg.groups.length; i++) if (groupMatch(cfg.groups[i], it, now)) { gs[i].cards.push(it); return; }
+      (cardState(it) === "done" ? done : other).cards.push(it);
     });
+    return gs.concat([other, done]);
   }
   function unsentCount() { var s = sendable(); return s.r.length + s.n.length; }
   function openCount() { var n = 0; items.forEach(function (it) { var s = stateOf(it); if (s === "open" || s === "changed") n++; }); return n; }
@@ -830,12 +1012,46 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     return out;
   }
 
+  // ---- draft
+  // Copy text to the clipboard; if the clipboard is closed, select the text of pre instead. b shows the result.
+  function copyText(text, pre, b) {
+    function done(ok) { b.textContent = ok ? "Copied" : "Selected. Copy it by hand"; setTimeout(function () { b.textContent = "Copy"; }, 1800); }
+    function bySelection() {
+      var ok = false;
+      try {
+        var r = document.createRange(), sel = window.getSelection();
+        r.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(r);
+        ok = document.execCommand("copy");
+        if (ok) sel.removeAllRanges();
+      } catch (err) {}
+      done(ok);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { done(true); }, bySelection);
+    else bySelection();
+  }
+  // The draft box of a card: its label, a Copy button, and the text. Text goes in by textContent only.
+  function buildDraft(c) {
+    c.dlabel = h("span", { class: "dlabel" });
+    c.dcopy = h("button", { class: "dcopy", type: "button", text: "Copy" });
+    c.dpre = h("pre", { class: "dtext" });
+    c.draft = h("div", { class: "draft" }, h("div", { class: "dhead" }, c.dlabel, c.dcopy), c.dpre);
+    c.draft.hidden = true;
+    c.dcopy.addEventListener("click", function () { copyText(draftText(c.it), c.dpre, c.dcopy); });
+  }
+  function renderDraft(c, it) {
+    var show = hasDraft(it), t = show ? draftText(it) : "";
+    c.draft.hidden = !show;
+    c.dlabel.textContent = show ? draftLabelOf(it) : "";
+    if (c.dpre.textContent !== t) c.dpre.textContent = t;
+  }
+
   // ---- cards. Every DOM id of a card comes from its card number, never from the item id.
   function buildCard(it) {
     var c = { it: it, n: ++cardSeq };
     c.pri = h("span", { class: "tag" });
     c.state = h("span", { class: "tag" });
     c.kind = h("span", { class: "tag" });
+    c.due = h("span", { class: "tag", hidden: true });
     c.blocks = h("div", { class: "blocks" });
     c.changed = h("div", { class: "changed", hidden: true });
     c.title = h("h2");
@@ -845,6 +1061,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.summary = h("div", { class: "summary rich" });
     c.evBody = h("div", { class: "evidence rich" });
     c.ev = h("details", null, h("summary", { text: "Evidence" }), c.evBody);
+    buildDraft(c);
     c.fs = h("fieldset", null);
     c.form = h("form", { onsubmit: function (e) { e.preventDefault(); } }, c.fs);
     c.ta = h("textarea", { id: "n" + c.n, placeholder: "Note or question (saved automatically)" });
@@ -855,8 +1072,8 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.guide.addEventListener("click", function () { var g = guideForItem(Array.from(guides.values()), c.it.id); if (g) openGuide(g.id); });
     c.about.addEventListener("click", function () { noteItem = c.it.id; render(); $("newnote").focus(); bringIntoView($("about"), false); });
     c.el = h("article", { class: "card", id: "card-" + c.n, "data-item": it.id },
-      h("div", { class: "tags" }, c.pri, c.kind, c.state),
-      c.title, c.chips, c.asked, c.blocks, c.changed, c.guide, c.summary, c.links, c.ev, c.form, c.ta,
+      h("div", { class: "tags" }, c.pri, c.kind, c.due, c.state),
+      c.title, c.chips, c.asked, c.blocks, c.changed, c.guide, c.summary, c.draft, c.links, c.ev, c.form, c.ta,
       h("div", { class: "foot" }, c.save, h("span", null, c.about, c.clear)));
     c.optKey = null;
     c.ta.addEventListener("input", function () {
@@ -903,6 +1120,10 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     c.kind.textContent = kindLabel(k);
     c.kind.hidden = isDefaultKind(k);
     c.kind.className = "tag" + (isDefaultKind(k) ? "" : " now");
+    var di = dueInfo(it, lastDay);
+    c.due.textContent = di ? di.text : "";
+    c.due.className = "tag" + (di && di.cls ? " " + di.cls : "");
+    c.due.hidden = !di;
     c.blocks.textContent = blocksOf(it) ? "Blocks: " + blocksOf(it) : "";
     c.blocks.hidden = !blocksOf(it);
     c.changed.hidden = !changed;
@@ -912,6 +1133,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     // fmtText escapes the text. Write the HTML only when the text changed, so that a "Copied" label and a selection stay.
     var rich = JSON.stringify([it.summary, it.evidence]);
     if (c.rich !== rich) { c.rich = rich; c.summary.innerHTML = fmtText(it.summary); c.evBody.innerHTML = fmtText(it.evidence); }
+    renderDraft(c, it);
     var cg = guideForItem(Array.from(guides.values()), it.id);
     c.guide.hidden = !cg;
     c.guide.title = cg ? (cg.title || cg.id) : "";
@@ -951,6 +1173,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
 
   function ready() { return !!db && loaded.items && loaded.responses && loaded.notes; }
   function render() {
+    var now = clockMs(), today = todayOf(now); lastDay = today; lastWeek = weekStartOf(now);
     var glist = Array.from(guides.values());
     // A guide tab stays selected while the guides load, and an item tab while the config loads. An unknown tab falls back to All.
     if (isGuideTab(f.tab) ? (loaded.guides && !guideOfTab(glist, f.tab))
@@ -961,12 +1184,12 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     try { renderGuide(guide); } catch (e) { $("guide").textContent = "Could not render the guide " + guide.id; }
     renderTabs(tabCounts(list, isActive), guideList(glist, false));
     renderArchived(guideList(glist, true));
-    $("cards").hidden = onGuide;
+    renderDue(dueList(list, today), today);
     renderBlocked(blockedList(list));
-    placeCards($("cards"), active);
-    placeCards($("donelist"), done);
-    $("done").hidden = onGuide || !done.length;
-    $("donesum").textContent = "Done (" + done.length + ")";
+    var groups = groupCards(vis, now);
+    $("board").hidden = onGuide;
+    renderGroups(groups);
+    renderSide(groups, onGuide);
     Array.from(cards.keys()).forEach(function (k) { if (!items.has(k)) cards.delete(k); });
 
     // empty states
@@ -996,8 +1219,10 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     renderNotes();
     renderSync();
   }
+  // Give focus back to el when a DOM move took it away and el is still on the page.
+  function restoreFocus(el) { if (el && el !== document.activeElement && document.contains(el)) { try { el.focus({ preventScroll: true }); } catch (e) {} } }
   // The cards of a list in order. The DOM changes only when the order changes.
-  function placeCards(cont, list) {
+  function placeCards(cont, list, focused) {
     var want = list.map(function (it) {
       var c = cards.get(it.id);
       try {
@@ -1008,19 +1233,69 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     });
     var cur = Array.from(cont.children);
     if (cur.length === want.length && cur.every(function (e, i) { return e === want[i]; })) return;
-    var keep = new Set(want), focused = document.activeElement;
+    var keep = new Set(want); focused = focused || document.activeElement;
     cur.forEach(function (e) { if (!keep.has(e)) e.remove(); });
     want.forEach(function (e, i) { if (cont.children[i] !== e) cont.insertBefore(e, cont.children[i] || null); });
-    if (focused && focused !== document.activeElement && document.contains(focused)) { try { focused.focus({ preventScroll: true }); } catch (e) {} }
+    restoreFocus(focused);
+  }
+  var groupEls = new Map(), sideKey = null;
+  // One section per group, built once per group id. A group for done cards is a folded details element.
+  function groupEl(g) {
+    var x = groupEls.get(g.id);
+    if (x && x.fold === g.fold) return x;
+    var lab = h("span", { class: "gl" }), n = h("span", { class: "n" }), list = h("div", { class: "glist" });
+    var el = g.fold ? h("details", { class: "grp" }, h("summary", null, lab, n), list) : h("section", { class: "grp" }, h("h3", null, lab, n), list);
+    x = { el: el, list: list, lab: lab, n: n, fold: g.fold };
+    groupEls.set(g.id, x);
+    return x;
+  }
+  function renderGroups(groups) {
+    var box = $("groups"), focused = document.activeElement, want = groups.map(function (g) {
+      var x = groupEl(g);
+      x.lab.textContent = g.label;
+      x.n.textContent = String(g.cards.length);
+      x.el.hidden = !g.cards.length;
+      placeCards(x.list, g.cards, focused);
+      return x.el;
+    });
+    var keep = new Set(want);
+    Array.from(box.children).forEach(function (e) { if (!keep.has(e)) e.remove(); });
+    want.forEach(function (e, i) { if (box.children[i] !== e) box.insertBefore(e, box.children[i] || null); });
+    restoreFocus(focused);
+  }
+  // The side list: one row per group that holds a card, on a wide screen only (CSS). A tap opens and shows the group.
+  function renderSide(groups, onGuide) {
+    var box = $("side"), rows = groups.filter(function (g) { return g.cards.length; });
+    box.hidden = onGuide || rows.length < 2;
+    $("board").classList.toggle("has-side", !box.hidden);
+    var hd = document.querySelector("header.bar");
+    if (hd) document.documentElement.style.setProperty("--hdr", Math.ceil(hd.getBoundingClientRect().height) + 8 + "px");
+    var key = JSON.stringify(rows.map(function (g) { return [g.id, g.label, g.cards.length]; }));
+    if (key === sideKey) return;
+    sideKey = key;
+    box.textContent = "";
+    rows.forEach(function (g) {
+      box.append(h("button", { type: "button", class: "srow", onclick: function () { goToGroup(g.id); } },
+        h("span", { class: "sl", text: g.label }), h("span", { class: "n", text: String(g.cards.length) })));
+    });
+  }
+  function goToGroup(id) {
+    var x = groupEls.get(id);
+    if (!x || x.el.hidden) return;
+    if (x.fold) x.el.open = true;
+    bringIntoView(x.el, false);
   }
   var blockedKey = null;
+  var dueKey = null, lastDay = "", lastWeek = 0;
+  // "Blocked on you": one folded line with the count; a tap opens the list. With no row, one plain line.
+  // The fold keeps its open state when the list is rebuilt.
   function renderBlocked(rows) {
     var box = $("blocked");
     var key = JSON.stringify([rows.map(function (it) { return [it.id, it.title, kindOf(it), blocksOf(it), it.priority]; }), cfg.kinds]);
     if (key === blockedKey) return;
     blockedKey = key;
+    var was = box.querySelector("details.bfold"), open = !!(was && was.open);
     box.textContent = "";
-    box.append(h("h3", null, "Blocked on you", rows.length ? h("span", { class: "n", text: String(rows.length) }) : null));
     if (!rows.length) { box.append(h("div", { class: "muted small", text: "Nothing is blocked on you." })); return; }
     var list = h("div", { class: "blist" });
     rows.forEach(function (it) {
@@ -1031,18 +1306,39 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
           h("span", { class: "tt", text: it.title || it.id })),
         h("span", { class: "bb", text: "Blocks: " + blocksOf(it) })));
     });
+    var fold = h("details", { class: "bfold" }, h("summary", null, "Blocked on you ", h("span", { class: "n", text: String(rows.length) })), list);
+    fold.open = open;
+    box.append(fold);
+  }
+  // "Due today": a link per card, no card text and no Copy button. Hidden when no card is due.
+  function renderDue(rows, today) {
+    var box = $("due"), key = JSON.stringify([rows.map(function (it) { return [it.id, it.title, it.due]; }), today]);
+    box.hidden = !rows.length;
+    if (key === dueKey) return;
+    dueKey = key;
+    box.textContent = "";
+    if (!rows.length) return;
+    box.append(h("h3", null, "Due today", h("span", { class: "n", text: String(rows.length) })));
+    var list = h("div", { class: "blist" });
+    rows.forEach(function (it) {
+      var di = dueInfo(it, today);
+      list.append(h("button", { type: "button", class: "brow", onclick: function () { goToCard(it.id); } },
+        h("span", { class: "bt" }, h("span", { class: "tag now", text: di.text }), h("span", { class: "tt", text: it.title || it.id }))));
+    });
     box.append(list);
   }
-  // A tap on a "Blocked on you" entry or a guide's card link: select the tab of the card, unfold
-  // Done if the card is there, render, and only then scroll.
+  // A tap on a "Blocked on you" or "Due today" entry or a guide's card link: select the tab of the card, render,
+  // unfold the card's group if it is folded, and only then scroll.
   function goToCard(id) {
     var it = items.get(id);
     if (!it) return;
     if (!inTab(it, f.tab)) { f.tab = tabOf(it, cfg.tabs) || "all"; saveFilter(); }
-    if (isDone(it)) $("done").open = true;
     render();
     var c = cards.get(id);
-    if (c && c.el.isConnected) bringIntoView(c.el, true);
+    if (!c || !c.el.isConnected) return;
+    var fold = c.el.closest("details.grp");
+    if (fold) fold.open = true;
+    bringIntoView(c.el, true);
   }
   // Scroll an element to just below the sticky header. The header height changes with the
   // width of the screen and the text in it, so measure it at the time of the tap.
@@ -1329,23 +1625,11 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   document.addEventListener("click", function (e) {
     var b = e.target && e.target.closest ? e.target.closest("button.copy") : null;
     var pre = b ? b.parentNode.querySelector("pre") : null;
-    if (!pre) return;
-    function done(ok) { b.textContent = ok ? "Copied" : "Selected. Copy it by hand"; setTimeout(function () { b.textContent = "Copy"; }, 1800); }
-    function bySelection() {
-      var ok = false;
-      try {
-        var r = document.createRange(), sel = window.getSelection();
-        r.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(r);
-        ok = document.execCommand("copy");
-        if (ok) sel.removeAllRanges();
-      } catch (err) {}
-      done(ok);
-    }
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(pre.textContent).then(function () { done(true); }, bySelection);
-    else bySelection();
+    if (!pre) return; copyText(pre.textContent, pre, b);
   });
   document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
   window.addEventListener("focus", refresh);
+  setInterval(function () { var t = clockMs(); if (todayOf(t) !== lastDay || weekStartOf(t) !== lastWeek) schedule(); }, 60000);
 
   render();
   if (window.claude && window.claude.use) {

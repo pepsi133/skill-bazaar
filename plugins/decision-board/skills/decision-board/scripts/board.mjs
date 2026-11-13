@@ -418,7 +418,7 @@ function printWrites(list, log, ctx) {
 const cell = (s) => String(s).replace(/\s*\n\s*/g, " ").replace(/\|/g, "\\|");
 
 // ---- cards
-const CONTENT = ["title", "summary", "evidence", "options", "recommendation", "kind", "links"];
+const CONTENT = ["title", "summary", "evidence", "draft", "draft_label", "options", "recommendation", "kind", "links"];
 const MANAGED = ["rev", "created", "updated"];
 // The fields that the answer depends on. A change of one of them raises rev; other changes keep it.
 const contentKey = (x) => { const c = P.coerce("item", x); return JSON.stringify(CONTENT.map((k) => (c[k] === undefined ? null : c[k]))); };
@@ -448,6 +448,8 @@ function cardProblems(c, name, ids, qk) {
   }
   if (decision && (c.options === undefined || (Array.isArray(c.options) && c.options.length < 2))) out.push("options: a decision card needs 2 to " + S.max.options);
   if (typeof c.recommendation === "string" && c.recommendation && !P.optionsOf(P.coerce("item", c)).includes(c.recommendation)) out.push("recommendation: not one of the options");
+  if (typeof c.draft === "string" && !c.draft.trim()) out.push("draft: only spaces; leave it out");
+  if (c.draft_label !== undefined && (typeof c.draft !== "string" || !c.draft.trim())) out.push("draft_label: needs a draft");
   out.push(...linkProblems(c.links), ...tagProblems(c.tags));
   if (c.first_asked === undefined) { if (P.needsAsked(c)) out.push('first_asked: required on an open card whose kind is not info: {"date": "YYYY-MM-DD", "who": "..."}'); }
   else if (P.isObj(c.first_asked)) {
@@ -456,6 +458,7 @@ function cardProblems(c, name, ids, qk) {
     else if (fa.date > tomorrow) out.push("first_asked.date: later than tomorrow");
     if (fa.who !== undefined && !P.whoOk(fa.who)) out.push("first_asked.who: empty, or at most 40 of A-Z a-z 0-9 _ - . ~ : @ +");
   }
+  if (c.due !== undefined && !P.realDate(c.due)) out.push("due: not a real calendar date written YYYY-MM-DD");
   return out.map((p) => name + ": " + p);
 }
 // A card carries up to max.links links, each valid by the rules of the page (P.linkProblem). Links are optional.
@@ -599,6 +602,7 @@ function cmdSync(a, log) {
   if (errs.length) fail(errs);
   const t = now(), n = { new: 0, rev: 0, changed: 0, same: 0 }, closed = [], reopened = [], held = new Set(r.st.held || []);
   const noLink = [];
+  const warn = [];
   const defPri = P.cfg.priorities[Math.min(1, P.cfg.priorities.length - 1)].id;
   for (const { c, f } of cards) {
     const ex = r.card(c.id), old = ex ? plain(P.coerce("item", ex)) : null, doc = { id: c.id };
@@ -606,6 +610,7 @@ function cmdSync(a, log) {
     if (Array.isArray(doc.links)) doc.links = doc.links.map((l) => Object.assign({}, l, { url: new URL(l.url).href }));
     doc.priority = c.priority || (old && old.priority) || defPri;
     const content = !old || contentKey(doc) !== contentKey(old);
+    if (content) { const w = P.draftWarning(c.draft); if (w) warn.push(`warning: ${qid(c.id)}: draft starts with ${q(w)}; put notes in summary`); }
     // A card back in its source's file is open again, unless close or ack --close closed it (held); elsewhere a
     // closed card stays closed. Either way until its content changes.
     if (content) held.delete(c.id);
@@ -629,6 +634,8 @@ function cmdSync(a, log) {
   log(`sync: ${n.new} new, ${n.rev} changed (rev up), ${n.changed} changed (same rev), ${n.same} unchanged, ${closed.length} closed${closed.length ? " (" + closed.join(", ") + ")" : ""}` +
     (reopened.length ? `, ${reopened.length} reopened (${reopened.join(", ")})` : ""));
   noLink.forEach((id) => log(`note: ${qid(id)}: no link`));
+  warn.slice(0, 3).forEach((l) => log(l));
+  if (warn.length > 3) log(`warning: and ${warn.length - 3} more drafts that start with a label`);
   if (n.new + n.rev + n.changed + closed.length) { r.st.refreshed = t; r.putCards(); }
   r.st.held = Array.from(held);
   r.finish(log);
@@ -1018,13 +1025,15 @@ function cmdCheck(a, log) {
   r.needConfig(true);
   const raw = r.config, c = P.cfg;
   errs.push(...r.load.problems.map((p) => "config " + p));
-  for (const k of ["tabs", "priorities", "domains", "link_hosts", "tags"]) {
+  for (const k of ["tabs", "priorities", "domains", "link_hosts", "tags", "groups", "sort"]) {
+    const def = k === "groups" ? P.DEFAULT_GROUPS : P.DEFAULTS[k];
     if (raw[k] === undefined) continue;
-    const got = c[k] === P.DEFAULTS[k] && Array.isArray(raw[k]) && raw[k].length ? 0 : c[k].length;
+    const got = c[k] === def && Array.isArray(raw[k]) && raw[k].length ? 0 : c[k].length;
     if (!Array.isArray(raw[k]) || got < raw[k].length) errs.push(`config ${k}: ${got} of ${Array.isArray(raw[k]) ? raw[k].length : "a non-list"} entries kept`);
   }
   errs.push(...r.load.unknown);
   if (raw.tz !== undefined && !P.tzOk(raw.tz)) errs.push(`config tz: ${q(raw.tz)} is not a time zone name such as "Europe/Warsaw" or "UTC"`);
+  if (raw.week_start !== undefined && !P.normWeek(raw.week_start)) errs.push(`config week_start: ${q(raw.week_start)} is not a day and a time such as "tuesday 12:00"`);
   const ck = compileChecks(raw.checks === undefined ? [] : raw.checks);
   errs.push(...ck.problems);
   if (r.config.standing !== undefined && !standingOk(r.config.standing)) errs.push("config standing: a list of 1 to 50 texts, each 1 to 40 characters");
@@ -1050,6 +1059,11 @@ function cmdCheck(a, log) {
   if (rl) log(rl);
   // A state card that breaks a check is a note: a new check must not block the config write that brings it.
   r.st.cards.forEach((x) => { if (P.isObj(x) && typeof x.id === "string") checkHits(x, ck.checks).forEach((h) => log(`note: card ${qid(x.id)}: ${h}`)); });
+  // A group that names a tag or a priority the config does not have: valid, but it never takes a card.
+  for (const g of P.cfg.groups) for (const m of g.match) {
+    for (const x of m.tags || []) if (!P.cfg.tags.some((t) => t.id === x)) log(`note: config groups: ${g.id} matches tag ${q(x)} that is not in tags`);
+    for (const x of m.priority || []) if (!P.cfg.priorities.some((p) => p.id === x)) log(`note: config groups: ${g.id} matches priority ${q(x)} that is not in priorities`);
+  }
   errs.forEach((e) => log("problem: " + e));
   if (errs.length) throw new Stop(errs.length + " problems");
   const mf = path.join(r.dir, "config.merged.json"), body = JSON.stringify(r.load.merged, null, 1) + "\n";
