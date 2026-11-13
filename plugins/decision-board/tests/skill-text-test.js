@@ -17,10 +17,13 @@ ok("data-model.md names the config layers", () => {
   const md = read(REF, "data-model.md");
   for (const s of ["config.local.json", "BOARD_USER_CONFIG", '"+tags"', "config.merged.json"]) assert.ok(md.includes(s), s);
 });
-ok("board-refresh maps with config.merged.json and the config ids line", () => {
+ok("board-refresh maps with config.merged.json and takes the config ids from it, running check only without it", () => {
   const md = read(ROOT, "skills", "board-refresh", "SKILL.md");
   assert.ok(md.includes("--config board/config.merged.json"));
-  assert.ok(md.includes("config ids:"));
+  const step2 = md.slice(md.indexOf("2. **Write the map**"), md.indexOf("3. **Map.**")).replace(/\s+/g, " ");
+  assert.ok(step2.includes("`tags` and `priorities` in `board/config.merged.json`"), step2);
+  assert.ok(step2.includes("Run `node S check` first only when that file does not exist."), step2);
+  assert.ok(!md.includes("config ids:"), "no refresh reads the check output for the ids");
   assert.ok(!md.includes("--config board/config.json"));
 });
 ok("config.example.json parses, names only example.com hosts, and holds three example checks", () => {

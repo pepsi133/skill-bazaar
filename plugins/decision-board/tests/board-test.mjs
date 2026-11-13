@@ -379,7 +379,8 @@ ok("check: a layer file may not set settings; meta/config settings names the boa
   assert.equal(r2.code, 1);
   assert.ok(r2.lines.includes('problem: config board: unknown field "settings"'), r2.text);
 });
-const CHECK_LINE = "a check line is a rule of the operator's config: change the card, never the check";
+const CHECK_LINE = "a check line that does not say took too long is a rule of the operator's config: change the card, never the check";
+const SLOW_LINE = "a took too long line is a check too slow to run: ask the operator to change that check in the config; leave the card as it is";
 ok("checks: sync refuses a card that breaks a check and prints the check message; closed cards and cards outside when pass", () => {
   const b = fresh();
   cfgOf(b, (x) => { x.checks = [{ id: "tl", field: "links.url", match: "^https://wiki\\.example\\.com/x/", when: { source: ["infra"] }, message: "Link the x page" },
@@ -441,6 +442,30 @@ ok("checks: check notes the state's cards that break a check and still writes th
   assert.equal(r.code, 0, r.text);
   assert.ok(r.lines.includes("note: card disk-size: check no-grow: No grow"), r.text);
   assert.ok(r.lines.includes("config: changed, write it"));
+});
+ok("checks: a regex that backtracks without end stops after its time limit; sync refuses and writes nothing, check prints a problem", () => {
+  const b = fresh(), title = "a".repeat(34) + "!";
+  cfgOf(b, (x) => { x.checks = [{ id: "pre", field: "title", forbid: "^a", message: "No leading a" }, { id: "slow", field: "title", forbid: "^(a+)+$", message: "No a run" }, { id: "fast", field: "title", forbid: "!", message: "No bang" }]; });
+  const before = fs.readFileSync(b.state, "utf8"), t0 = Date.now();
+  const r = sync(b, [yn("x", { title }), yn("y", { title }), yn("z", { title })]);
+  assert.ok(Date.now() - t0 < 4500, "the slow check runs out of time once, not once per card: " + (Date.now() - t0) + " ms");
+  assert.equal(r.code, 1, r.text);
+  assert.deepEqual(r.lines, ["x: check pre: No leading a", "x: check slow: took too long", "x: check fast: No bang", "y: check pre: No leading a", "y: check fast: No bang",
+    "z: check pre: No leading a", "z: check fast: No bang", CHECK_LINE, SLOW_LINE]);
+  assert.deepEqual([fs.readFileSync(b.state, "utf8"), writesOf(r.lines)], [before, []], "nothing written");
+  // Only a slow check: the refusal names the check, not the card.
+  cfgOf(b, (x) => { x.checks = [{ id: "slow", field: "title", forbid: "^(a+)+$", message: "No a run" }]; });
+  const only = sync(b, [yn("x", { title })]);
+  assert.deepEqual([only.code, only.lines], [1, ["x: check slow: took too long", SLOW_LINE]]);
+  cfgOf(b, (x) => { x.checks = [{ id: "pre", field: "title", forbid: "^a", message: "No leading a" }, { id: "slow", field: "title", forbid: "^(a+)+$", message: "No a run" }, { id: "fast", field: "title", forbid: "!", message: "No bang" }]; });
+  const stored = (id) => Object.assign(yn(id, { title }), { status: "open", rev: 1, priority: "soon", created: "2026-01-01T10:00:00+00:00", updated: "2026-01-01T10:00:00+00:00" });
+  setState(b, (st) => { st.cards.push(stored("x"), stored("y")); });
+  const c = cmd(b, "check");
+  assert.equal(c.code, 1, c.text);
+  assert.ok(c.lines.includes("note: card x: check fast: No bang") && c.lines.includes("note: card y: check fast: No bang"), c.text);
+  assert.deepEqual(c.lines.filter((l) => l.includes("took too long")), ["problem: card x: check slow: took too long"], "one problem line, on the first card");
+  assert.ok(!c.lines.some((l) => l.startsWith("note: ") && l.includes("took too long")), c.text);
+  assert.equal(fs.existsSync(path.join(b.board, "config.merged.json")), false, "a stopped check writes no config");
 });
 ok("checks: the shipped examples in assets/config.example.json pass check and fire when uncommented", () => {
   const b = fresh(false), ex = JSON.parse(fs.readFileSync(path.join(SKILL, "assets", "config.example.json"), "utf8"));

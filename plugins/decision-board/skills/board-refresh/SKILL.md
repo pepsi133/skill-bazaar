@@ -15,7 +15,8 @@ description: Refresh the cards of a decision board from outside sources, such as
    states its total, compare it with your count and pass it as `--min-rows`. A CLI that pages by
    default (`gh issue list` returns 30 rows and states no total) needs its own limit flag, or a short
    fetch closes cards. Rows stay as fetched: every change goes through the map or an override.
-2. **Write the map** (next section), with the tag and priority ids of the `config ids:` line that `node S check` prints.
+2. **Write the map** (next section), with the `id` of each entry of `tags` and `priorities` in
+   `board/config.merged.json`. Run `node S check` first only when that file does not exist.
    For a new source, read `references/maps.md` first.
 3. **Map.** Run
    `node R map board/rows/tracker.json --map board/maps/tracker.json --source tracker --out board/tracker.json --config board/config.merged.json`

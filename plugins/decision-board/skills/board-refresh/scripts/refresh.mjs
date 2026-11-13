@@ -109,8 +109,11 @@ function createdDate(v, tz) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
   // A date part that is not a real date stays as it is, so the card check names it; Date.parse would roll it over.
   if (/^\d{4}-\d{2}-\d{2}[T ]/.test(t) && !realDate(t.slice(0, 10))) return t.slice(0, 10);
-  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/i.test(t)) {
-    const ms = Date.parse(t.replace(" ", "T"));
+  // A zone after the time: Z, +hh:mm, +hhmm or +hh (or -), with optional white space before it.
+  const z = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)\s*(Z|[+-]\d{2}(?::?\d{2})?)$/i.exec(t);
+  if (z) {
+    const off = /^z$/i.test(z[3]) ? "Z" : z[3].slice(0, 3) + ":" + (z[3].slice(3).replace(":", "") || "00");
+    const ms = Date.parse(z[1] + "T" + z[2] + off);
     return isNaN(ms) ? null : dayIn(ms, tz);
   }
   const m = /^(\d{4}-\d{2}-\d{2})[T ]/.exec(t);

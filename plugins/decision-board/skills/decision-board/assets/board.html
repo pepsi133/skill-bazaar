@@ -1474,7 +1474,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function saveControls(id, patch) {
     seenOne(id);
     var c = cards.get(id);
-    if (!c || c.broken || !db) return Promise.resolve();
+    if (!c || c.broken || !db || !loaded.config) return Promise.resolve();   // no control write before meta/config
     var prev = resp.get(id) || null, doc = withControls(prev, id, patch, revOf(c.it), nowStamp());
     lastDoc.set(id, doc); resp.set(id, doc);
     inflight.set(id, (inflight.get(id) || 0) + 1); totalInflight++; renderSync();
@@ -1626,7 +1626,9 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // A card that fails to render shows one line instead, so one bad record cannot blank the board.
   function brokenCard(it) { return h("article", { class: "card", "data-item": it.id, text: "Could not render " + it.id }); }
 
-  function ready() { return !!db && loaded.items && loaded.responses && loaded.notes; }
+  // A write that carries a time stamp waits for meta/config, so the stamp has the config tz (loaded.config is set
+  // also when the document is missing or its read fails).
+  function ready() { return !!db && loaded.items && loaded.responses && loaded.notes && loaded.config; }
   function render() {
     var now = clockMs(), today = todayOf(now); lastDay = today; lastWeek = weekStartOf(now);
     setCtlDay(today);
@@ -1933,6 +1935,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   // The one write of the page to "guides": the status and the time of the change.
   function setGuideStatus(id, status) {
     if (!db) return;
+    if (!loaded.config) { showMsg("The board is still loading. Try again in a moment."); return; }
     var now = nowStamp();
     db.doc("guides/" + id).update({ status: status, updated: now }).then(function () {
       var g = guides.get(id);
@@ -1960,11 +1963,15 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function renderSync() {
     var s = $("sync");
     if (!db) s.textContent = "No database";
+    else if (unreachable && !(loaded.items && loaded.responses && loaded.config)) s.textContent = "Cannot reach the database yet";
+    else if (!loaded.config) s.textContent = "Loading";               // nothing saves before meta/config
     else if (totalInflight > 0 || timers.size > 0) s.textContent = "Saving";
     else if (!(loaded.items && loaded.responses)) s.textContent = "Loading";
     else s.textContent = lastSaved ? "Saved " + lastSaved : "Live";
   }
   var raf = 0;
+  // Set when the start timer found the board still not loaded after 10 s; its text stays until the data is in.
+  var unreachable = false;
   function schedule() { if (!raf) raf = requestAnimationFrame(function () { raf = 0; render(); }); }
 
   // ---- writes. One chain per item, so each write sees the one before it.
@@ -1982,6 +1989,13 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     seenOne(id);
     var c = cards.get(id);
     if (!c || c.broken || !db) return Promise.resolve();
+    // Before meta/config the answer stays pending (the card keeps what was typed) and saves again in a moment.
+    if (!loaded.config) {
+      clearTimeout(timers.get(id));
+      timers.set(id, setTimeout(function () { timers.delete(id); saveResponse(id); }, 700));
+      renderSync();
+      return Promise.resolve();
+    }
     var checked = c.fs.querySelector("input[type=radio]:checked");
     var choice = checked ? checked.value : "", note = c.ta.value, prev = null;
     inflight.set(id, (inflight.get(id) || 0) + 1); totalInflight++;
@@ -2013,9 +2027,14 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     Array.from(chains.values()).forEach(function (p) { ps.push(p.catch(function () {})); });
     return Promise.all(ps);
   }
+  // A note added before meta/config waits in its box and is added once the config is in (applyConfigDoc), with the
+  // text the box holds then: the latest text wins. A box emptied meanwhile adds nothing and clears the note state.
+  var noteWait = false;
   function addNote() {
-    var t = $("newnote").value.trim();
-    if (!t || !db) return;
+    var t = $("newnote").value.trim(), waited = noteWait;
+    noteWait = false;
+    if (!t || !db) { if (waited) $("notestate").textContent = ""; return; }
+    if (!loaded.config) { noteWait = true; $("notestate").textContent = "Saving"; return; }
     var id = "n" + idStamp() + "-" + rid(), it = noteItem ? items.get(noteItem) : null;
     var doc = { id: id, text: t, item: it ? it.id : "", created: nowStamp(), sent: false, batch: "" };
     $("notestate").textContent = "Saving";
@@ -2124,7 +2143,7 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
     schedule();
   }
   function applyMeta(d) { var x = d && d.exists ? d.data() : null; meta = isObj(x) ? x : null; schedule(); }
-  function applyConfigDoc(d) { applyConfig(d && d.exists ? d.data() : null); loaded.config = true; schedule(); }
+  function applyConfigDoc(d) { applyConfig(d && d.exists ? d.data() : null); loaded.config = true; if (noteWait) addNote(); schedule(); }
   function applyStatus(d) { var x = d && d.exists ? d.data() : null; agentStatus = isObj(x) ? coerce("status", x) : null; schedule(); }
   var COLS = [["cards", cardDocs], ["responses", resp], ["batches", batches], ["notes", notes], ["guides", guides]];
   function refresh() {
@@ -2139,11 +2158,11 @@ textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg
   function start(dbns) {
     db = dbns;
     if (!db) { showMsg("The database is not available in this view. Sign in, or open the page in claude.ai."); $("empty").textContent = "No database."; renderSync(); return; }
-    var t = setTimeout(function () { if (!(loaded.items && loaded.responses)) { $("sync").textContent = "Cannot reach the database yet"; } }, 10000);
+    var t = setTimeout(function () { if (!(loaded.items && loaded.responses && loaded.config)) { unreachable = true; renderSync(); } }, 10000);
     COLS.forEach(function (c) {
       db.collection(c[0]).onSnapshot(function (s) {
         applySnap(c[1], s, c[0], false);
-        if (loaded.items && loaded.responses) clearTimeout(t);
+        if (loaded.items && loaded.responses && loaded.config) clearTimeout(t);
       }, function (e) { loaded[c[0]] = true; showMsg(c[0] + ": " + errText(e)); });
     });
     db.doc("meta/board").onSnapshot(applyMeta, function () {});

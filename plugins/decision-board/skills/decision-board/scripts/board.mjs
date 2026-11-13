@@ -388,6 +388,7 @@ class Run {
     });
     for (const k of ["pending", "unlogged"]) if (!Object.keys(this.st[k]).length) delete this.st[k];
     if (this.st.purge && !this.st.purge.length) delete this.st.purge;
+    if (this.st.cards_wait !== undefined && !(isPlain(this.st.cards_wait) && Object.keys(this.st.cards_wait).length)) delete this.st.cards_wait;
     if (this.st.held) this.st.held = this.st.held.filter((id) => this.card(id));
     if (this.st.held && !this.st.held.length) delete this.st.held;
     for (const k of ["ctl_closed", "snoozed"]) if (this.st[k]) {
@@ -556,27 +557,55 @@ export function compileChecks(list) {
   });
   return { checks, problems };
 }
-// The checks that card c fails, as "check <ref>: <message>", in list order. A closed card passes every check.
-export function checkHits(c, checks) {
-  if (!isPlain(c) || c.status === "closed") return [];
-  const out = [];
-  for (const k of checks) {
-    if (k.when) {
-      if (k.when.source && !k.when.source.map(lower).includes(lower(c.source))) continue;
-      if (k.when.tags && !(Array.isArray(c.tags) && c.tags.some((t) => k.when.tags.includes(t)))) continue;
+// The regex tests run with a time limit, so a regex that backtracks without end (such as ^(a+)+$ on a long text)
+// stops: fn() runs in one vm context for the whole run. null when the time ran out.
+const CHECK_MS = 1000, TIMED = new vm.Script("fn()");
+let timedCtx = null;
+function timed(fn) {
+  if (!timedCtx) timedCtx = vm.createContext(Object.create(null));
+  timedCtx.fn = fn;
+  try { return TIMED.runInContext(timedCtx, { timeout: CHECK_MS }); }
+  catch (e) { if (e && e.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") return null; throw e; }
+  finally { timedCtx.fn = null; }
+}
+// Whether card c fails check k (its when already applies).
+function checkFails(c, k) {
+  const vals = fieldValues(c, k.field);
+  const hit = (v) => {
+    k.re.lastIndex = 0;
+    for (const m of v.matchAll(k.re)) {
+      if (!k.exceptAt) return true;
+      k.exceptAt.lastIndex = m.index;
+      if (!k.exceptAt.test(v)) return true;
     }
-    const vals = fieldValues(c, k.field);
-    const hit = (v) => {
-      k.re.lastIndex = 0;
-      for (const m of v.matchAll(k.re)) {
-        if (!k.exceptAt) return true;
-        k.exceptAt.lastIndex = m.index;
-        if (!k.exceptAt.test(v)) return true;
-      }
-      return false;
-    };
-    const fails = k.forbid ? vals.some(hit) : !vals.some((v) => { k.re.lastIndex = 0; return k.re.test(v); });
-    if (fails) out.push(`check ${k.ref}: ${k.message}`);
+    return false;
+  };
+  return k.forbid ? vals.some(hit) : !vals.some((v) => { k.re.lastIndex = 0; return k.re.test(v); });
+}
+// The checks that card c fails, as "check <ref>: <message>", in list order. A closed card passes every check.
+// The checks of one card run in one timed call; at tracks the one that runs. When the time runs out, that check runs
+// again alone with the whole limit if others ran before it in the call; if it still runs out, it fails closed as
+// "check <ref>: took too long" (slow, when given, collects that line), is marked slow, and no later card runs it.
+// The checks after it still run.
+export function checkHits(c, checks, slow) {
+  if (!isPlain(c) || c.status === "closed") return [];
+  const todo = checks.filter((k) => !k.slow && !(k.when && ((k.when.source && !k.when.source.map(lower).includes(lower(c.source))) ||
+    (k.when.tags && !(Array.isArray(c.tags) && c.tags.some((t) => k.when.tags.includes(t)))))));
+  const res = new Map();
+  let at = 0;
+  const runFrom = () => { for (; at < todo.length; at++) res.set(todo[at], checkFails(c, todo[at])); return true; };
+  while (at < todo.length) {
+    const start = at;
+    if (timed(runFrom) !== null) break;
+    const k = todo[at], alone = at > start ? timed(() => checkFails(c, k)) : null;
+    if (alone === null) { k.slow = true; res.set(k, null); } else res.set(k, alone);
+    at++;
+  }
+  const out = [];
+  for (const k of todo) {
+    const f = res.get(k);
+    if (f === null) { const l = `check ${k.ref}: took too long`; out.push(l); if (slow) slow.push(l); }
+    else if (f) out.push(`check ${k.ref}: ${k.message}`);
   }
   return out;
 }
@@ -614,9 +643,17 @@ function cmdSync(a, log) {
   cards.forEach(({ c }, i) => { if (P.isObj(c) && (has(c, "result") || has(c, "result_at"))) errs.push(`${typeof c.id === "string" && c.id ? c.id : "#" + (i + 1)}: result: set only by ack --result`); errs.push(...cardProblems(c, c && typeof c.id === "string" && c.id ? c.id : "#" + (i + 1), ids)); if (c && typeof c.id === "string") ids.add(c.id); });
   const ck = compileChecks(r.config.checks === undefined ? [] : r.config.checks);
   if (ck.problems.length) fail(ck.problems.concat("fix the config, then run `node " + SELF + " check`"));
-  let hit = false;
-  cards.forEach(({ c }, i) => { if (!P.isObj(c)) return; const h = checkHits(c, ck.checks); if (h.length) hit = true; errs.push(...h.map((x) => (typeof c.id === "string" && c.id ? c.id : "#" + (i + 1)) + ": " + x)); });
-  if (hit) errs.push("a check line is a rule of the operator's config: change the card, never the check");
+  let hit = false, slowHit = false;
+  cards.forEach(({ c }, i) => {
+    if (!P.isObj(c)) return;
+    const slow = [], h = checkHits(c, ck.checks, slow);
+    if (h.some((x) => !slow.includes(x))) hit = true;
+    if (slow.length) slowHit = true;
+    errs.push(...h.map((x) => (typeof c.id === "string" && c.id ? c.id : "#" + (i + 1)) + ": " + x));
+  });
+  if (hit) errs.push("a check line that does not say took too long is a rule of the operator's config: change the card, never the check");
+  // A check that ran out of time says nothing about the card: the check itself needs the change.
+  if (slowHit) errs.push("a took too long line is a check too slow to run: ask the operator to change that check in the config; leave the card as it is");
   // A source may lose at most half of its open cards in one run, unless --allow-close.
   for (const s of new Set(files.map((f) => f.source).filter(Boolean))) {
     const open = r.st.cards.filter((c) => lower(c.source) === s && c.status !== "closed"), gone = open.filter((c) => !ids.has(c.id));
@@ -1165,6 +1202,7 @@ function cmdAdopt(a, log) {
     // The purge is done when the board holds none of its cards.
     if (purge.size && !(d && d.data.cards || []).some((x) => P.isObj(x) && purge.has(x.id))) { r.st.cards = r.st.cards.filter((x) => !purge.has(x.id)); delete r.st.purge; log(`cards: the purge of ${ids(Array.from(purge))} is done`); }
     if (v === undefined) delete r.st.next.cards; else r.st.next.cards = v;
+    delete r.st.cards_wait;                     // the board holds the cards, or the write below goes with this pin
     const byId = (l) => stable((Array.isArray(l) ? l : []).slice().sort((x, y) => (String(x.id) < String(y.id) ? -1 : 1)));
     if (d && byId(d.data.cards) === byId(r.cardsDoc().cards)) log(`cards: the board holds this state's cards, version ${v}`);
     else { log(`cards: write again, pinned to ${v === undefined ? "a create" : "version " + v}`); r.putCards(); }
@@ -1174,22 +1212,44 @@ function cmdAdopt(a, log) {
   // write and the dumped board lacks it.
   const aw = [].concat(w)[0], cw = [].concat(w).find((x) => x.collection === "cards");
   const also = cw && stable(cw) === stable(r.st.pending.cards) && !holds(dump.col("cards").get(CARDS), cw) ? [cw] : [];
+  // cards_wait holds, by batch id, the cards write that adopt batches/<id> took out of the batch's group; adopt cards
+  // clears it. While the dumped cards/main does not hold that write (a dump without cards cannot show it), each
+  // adopt batches/<id> names adopt cards; once the board holds it, the entry goes. cardsLeft runs before finish.
+  const cardsLeft = () => {
+    const wait = isPlain(r.st.cards_wait) ? r.st.cards_wait : {}, m = c === "batches" && Object.hasOwn(wait, id) ? wait[id] : undefined;
+    if (!isPlain(m)) return false;
+    if (!(m.file_path && fs.existsSync(m.file_path) && holds(dump.col("cards").get(CARDS), m))) return true;
+    delete wait[id];
+    return false;
+  };
+  const hint = (left, after) => { if (left) log(`${key}: the cards write of this ack is not on the board. ${after ? "Once this array is applied:" : "Now:"} rm -rf ${ctx.dump}, then ${dumpCalls("cards")}, then node ${SELF} adopt cards --dump ${ctx.dump} --dumped${ctx.state}`); };
   if (holds(d, aw)) {
     log(`${key}: the board holds the last write${v === undefined || c === "batches" ? "" : ", version " + v}`);
     if (c === "batches") r.logHandled(dump, log);
     else if (v === undefined) delete r.st.next[key]; else r.st.next[key] = v;
-    if (!also.length) return r.finish(log);
+    // A cards write printed again with this array needs no adopt cards line.
+    if (!also.length) { const left = cardsLeft(); r.finish(log); return hint(left, false); }
     log(`${key}: the cards write of this ack is not on the board: write it again`);
     r.finish(() => {});
     return printWrites(again(also), log, ctx);
   }
+  // The batch update goes again alone. Its cards write keeps its old pin, which the board refused when cards/main
+  // moved, so the closes and control effects stay in the state and go through adopt cards, which pins them anew.
+  // Until then the next cards write pins that refused version again, not the one after it (which may be the
+  // version another writer made): a sync or close in between is refused and goes through adopt cards too.
+  if (also.length) {
+    if (cw.if_version === undefined) delete r.st.next.cards; else r.st.next.cards = cw.if_version;
+    if (!UNSAFE.has(id)) r.st.cards_wait = Object.assign(isPlain(r.st.cards_wait) ? r.st.cards_wait : {}, { [id]: cw });
+  }
   const out = Object.assign({}, aw);
   if (c === "batches") { if (v !== undefined) out.if_version = v; } else if (v === undefined) delete out.if_version; else out.if_version = v;
-  r.st.pending[key] = also.length ? [out].concat(also) : out;
+  r.st.pending[key] = out;
   if (c !== "batches") { if (aw.op === "delete") delete r.st.next[key]; else r.st.next[key] = v === undefined ? 1 : v + 1; }
-  log(`${key}: write again, pinned to ${out.if_version === undefined ? "a create" : "version " + out.if_version}${also.length ? ", with its cards write" : ""}`);
+  log(`${key}: write again, pinned to ${out.if_version === undefined ? "a create" : "version " + out.if_version}`);
+  const left = cardsLeft();
   r.finish(() => {});
-  printWrites(again([out].concat(also)), log, ctx);
+  printWrites(again([out]), log, ctx);
+  hint(left, true);
 }
 // push: the last write of a document again, as it was printed; for an ack with --close and a purge, the group.
 function cmdPush(a, log) {
@@ -1308,8 +1368,13 @@ function cmdCheck(a, log) {
   if (!P.cfg.link_hosts.length) log("note: config link_hosts: none, so sync refuses every card link. A card needs no link");
   const rl = rulesLine(rs, "check", a);
   if (rl) log(rl);
-  // A state card that breaks a check is a note: a new check must not block the config write that brings it.
-  r.st.cards.forEach((x) => { if (P.isObj(x) && typeof x.id === "string") checkHits(x, ck.checks).forEach((h) => log(`note: card ${qid(x.id)}: ${h}`)); });
+  // A state card that breaks a check is a note: a new check must not block the config write that brings it. A check
+  // that took too long is a problem of the check itself.
+  r.st.cards.forEach((x) => {
+    if (!P.isObj(x) || typeof x.id !== "string") return;
+    const slow = [];
+    checkHits(x, ck.checks, slow).forEach((h) => (slow.includes(h) ? errs.push(`card ${qid(x.id)}: ${h}`) : log(`note: card ${qid(x.id)}: ${h}`)));
+  });
   // A group that names a tag or a priority the config does not have: valid, but it never takes a card.
   for (const g of P.cfg.groups) for (const m of g.match) {
     for (const x of m.tags || []) if (!P.cfg.tags.some((t) => t.id === x)) log(`note: config groups: ${g.id} matches tag ${q(x)} that is not in tags`);
