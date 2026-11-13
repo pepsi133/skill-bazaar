@@ -19,7 +19,7 @@ unknown field.
 | `status` | `open` (default) or `closed` |
 | `links` | Required. 1 to 10 `{"label", "url"}`. A url must parse, use `https:`, carry no user name or password, and have a host of the config `link_hosts` or a subdomain of one. A card with no natural URL links the report it came from or the repository page of the work |
 | `tags` | Tag ids from the config `tags`, each once, matched exactly |
-| `first_asked` | `{"date": "YYYY-MM-DD", "who": "<id>"}`: when the question was first put to the operator, and by whom. Required on every open card whose kind is not `info`. A real date in the operator's time zone, no later than tomorrow. `who` is optional: at most 40 of the id characters. A card posted again keeps the stored value |
+| `first_asked` | `{"date": "YYYY-MM-DD", "who": "<id>"}`: when the question was first put to the operator, and by whom. Required on every open card whose kind is not `info`. A real date in the config `tz`, no later than tomorrow. `who` is optional: at most 40 of the id characters. A card posted again keeps the stored value |
 
 ## Rules for a good card
 
@@ -32,8 +32,7 @@ The operator reads the card on a phone, without your session: it must stand alon
 - Every action for the operator gets a card with `blocks`, even when a guide holds the steps: a
   terminal reply scrolls away.
 - Safety mechanisms that are the operator's own to manage stay off the cards as choices.
-- When a "done" needs a check, check it yourself, then post the card again with `status: "closed"`
-  and one evidence line saying what you checked.
+- When a "done" needs a check, check it yourself, then add --close <id> to the ack of that batch.
 
 ## Text format
 

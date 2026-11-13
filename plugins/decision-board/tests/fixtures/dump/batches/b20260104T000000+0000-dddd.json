@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "data": {
+  "id": "b20260104T000000+0000-dddd",
+  "created": "2026-01-04T00:00:00+00:00",
+  "itemIds": [
+   "disk-size"
+  ],
+  "noteIds": [],
+  "answers": {
+   "disk-size": {
+    "answer": "Yes",
+    "note": "",
+    "rev": 1
+   }
+  },
+  "notes": {},
+  "status": "handled",
+  "handled_at": "2026-01-04T01:00:00+00:00"
+ }
+}

@@ -3,8 +3,8 @@ const assert = require("node:assert/strict");
 const { load, ok } = require("./_page.js");
 const P = load();
 const plain = (x) => JSON.parse(JSON.stringify(x));
-// A card as the page holds it after the merge: coerced, with the agent of its document.
-const item = (id, x) => Object.assign(P.coerce("item", Object.assign({ id, title: "Q " + id, options: ["Yes", "No"], status: "open" }, x || {})), x && x.agent ? { agent: x.agent } : {});
+// A card as the page holds it: coerced, keyed by its id.
+const item = (id, x) => P.coerce("item", Object.assign({ id, title: "Q " + id, options: ["Yes", "No"], status: "open" }, x || {}));
 const response = (id, x) => Object.assign(P.coerce("response", Object.assign({ choice: "Yes", sent: false }, x || {})), { itemId: id });
 function board(list, responses, noteList) {
   P.items.clear(); P.resp.clear(); P.notes.clear();
@@ -21,7 +21,7 @@ ok("coerce: a value of the wrong type becomes the empty value of its type", () =
   assert.deepEqual(plain(b.itemIds), []); assert.deepEqual(plain(b.noteIds), ["n1"]);
   assert.deepEqual(plain(b.answers), { a: { answer: "", note: "", rev: 1 } });
   assert.deepEqual(plain(P.coerce("response", null).history), []);
-  assert.equal(P.coerce("response", { for: 5 }).for, undefined);
+  assert.equal("for" in P.coerce("response", { for: "x" }), false);
 });
 ok("problems: the strict check names unknown fields, wrong types and long text", () => {
   assert.deepEqual(plain(P.problems("item", { id: "a", title: "ok", rev: 2, options: ["x"] })), []);
@@ -53,30 +53,32 @@ ok("Send takes only answers of cards that exist, are not closed and did not chan
   assert.deepEqual(plain(s.n.map((x) => x.id)), ["n1"]);
   assert.equal(P.stateOf(P.items.get("newer")), "changed");
 });
-ok("answers route by the agent saved in the response, not by the card's from at send time; empty is the config agent", () => {
-  board([item("a", { agent: "agent-evil" }), item("b", { agent: "agent-b" }), item("c"), item("d", { agent: "agent-b" })],
-    { a: { for: "agent-a" }, b: {}, c: { for: "" }, d: { for: "AGENT-B " } },
-    [{ id: "n1", text: "about d", item: "d", for: "agent-b" }, { id: "n2", text: "free" }]);
-  const g = P.splitByAgent(P.sendable()).map((x) => [x.for, x.r.map((r) => r.itemId).sort(), x.n.map((n) => n.id)]);
-  assert.deepEqual(plain(g).sort(), [["agent-a", ["a"], []], ["agent-b", ["b", "d"], ["n1"]], ["claude", ["c"], ["n2"]]]);
-});
 ok("the batch carries a copy of the answers and notes", () => {
-  const gp = { for: "agent-b", r: [response("x", { choice: "No", note: "n", rev: 2 })], n: [P.coerce("note", { id: "n1", text: "hi", item: "x" })] };
-  assert.deepEqual(plain(P.batchDoc("b1", "t", gp)), { id: "b1", created: "t", for: "agent-b", itemIds: ["x"], noteIds: ["n1"],
-    answers: { x: { answer: "No", note: "n", rev: 2 } }, notes: { n1: { text: "hi", item: "x" } }, status: "new" });
-  const odd = P.batchDoc("b2", "t", { for: "", r: [response("__proto__")], n: [] });
+  const s = { r: [response("x", { choice: "No", note: "n", rev: 2 })], n: [P.coerce("note", { id: "n1", text: "hi", item: "x" })] };
+  assert.deepEqual(plain(P.batchDoc("b1", "t", s)), { id: "b1", created: "t", itemIds: ["x"], noteIds: ["n1"],
+    answers: { x: { answer: "No", note: "n", rev: 2 } }, notes: { n1: { text: "hi", item: "x" } }, status: "sent" });
+  // A missing list is empty. Field by field, so a field a later cluster adds does not break this.
+  const empty = plain(P.batchDoc("b1", "t", {}));
+  assert.deepEqual(empty.itemIds, []);
+  assert.deepEqual(empty.noteIds, []);
+  assert.deepEqual(empty.answers, {});
+  assert.deepEqual(empty.notes, {});
+  assert.equal(empty.status, "sent");
+  const odd = P.batchDoc("b2", "t", { r: [response("__proto__")], n: [] });
   assert.deepEqual(plain(Object.keys(odd.answers)), ["__proto__"]);
 });
 ok("a newer copy wins over a stale read; a tie keeps the database copy", () => {
-  const db = { updated: "2026-01-01T10:00:00.000Z" }, mine = { updated: "2026-01-01T10:00:01.000Z" };
+  const db = { updated: "2026-01-01T10:00:00.000+00:00" }, mine = { updated: "2026-01-01T11:00:01.000+01:00" };
   assert.equal(P.newerDoc(db, mine), mine);
   assert.equal(P.newerDoc(mine, db), mine);
   assert.equal(P.newerDoc(db, { updated: db.updated }), db);
   assert.equal(P.newerDoc(undefined, mine), mine);
   assert.equal(P.newerDoc(db, undefined), db);
+  const tie = { updated: "2026-01-01T09:00:00.000+00:00" };
+  assert.equal(P.newerDoc(tie, { updated: "2026-01-01T10:00:00.000+01:00" }), tie, "a tie across zones keeps the database copy");
 });
-ok("a batch is handled when an ack exists, or when an old batch says done or delivered", () => {
-  const acks = new Map([["b1", {}]]);
-  assert.deepEqual(plain([{ id: "b1", status: "new" }, { id: "b2", status: "new" }, { id: "b3", status: "done" }, { id: "b4", status: "delivered" }].map((b) => P.isHandled(b, acks))),
-    [true, false, true, true]);
+ok("a batch is handled when its status is handled", () => {
+  assert.equal(P.isHandled({ status: "handled" }), true);
+  assert.deepEqual(["sent", "new", "done", "delivered", undefined].map((status) => P.isHandled({ status })), [false, false, false, false, false]);
+  assert.deepEqual(plain(P.SCHEMA.batchStatuses), ["sent", "handled"]);
 });

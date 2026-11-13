@@ -1345,7 +1345,7 @@ C2-0. **Name check.** Pre: clusters A, B and C1 merged; tests green. From the pl
       skills/decision-board/assets/board.html|var groups = groupCards(vis, now);
       skills/decision-board/assets/board.html|function renderGroups(groups)
       skills/decision-board/assets/board.html|function placeCards(cont, list, focused)
-      skills/decision-board/assets/board.html|<footer id="foot" class="foot"><span id="zone"
+      skills/decision-board/assets/board.html|<footer id="foot" class="page-foot"><span id="zone"
       skills/board-refresh/scripts/refresh.mjs|for (const k of ["who", "rows", "kind", "due", "summary", "draft"])
       skills/board-refresh/scripts/refresh.mjs|"closed", "tags", "priority", "due", "summary", "draft"]
       skills/board-refresh/scripts/refresh.mjs|if (due && !badDue) c.due = due;

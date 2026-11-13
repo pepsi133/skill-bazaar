@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SELF = path.relative(process.cwd(), fileURLToPath(import.meta.url)) || "refresh.mjs";
+const DEFAULT_TZ = "Europe/Warsaw"; // the same as DEFAULTS.tz in board.html; refresh-test checks that they agree
 const USAGE = `Usage: node ${SELF} <command> ...
   map <rows.json> --map <map.json> --source <name> --out <cards.json> [--overrides <file>] [--config <board/config.json>]
       [--details <file>] [--min-rows <n>] [--allow-skipped]
@@ -82,22 +83,41 @@ function realDate(s) {
   const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
   return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
 }
-// The created field as YYYY-MM-DD: a date, an ISO timestamp (its own date part), or epoch seconds or
-// milliseconds (12 digits or more before any fraction), as a number or a digit string such as
-// "1762650000.000200", in UTC. undefined when the row has none, null when it cannot be read.
-function createdDate(v) {
+// The same rule as tzOk in board.html: an IANA zone name or UTC that the runtime accepts; a fixed offset is not one.
+function tzOk(v) {
+  if (typeof v !== "string" || !/^(UTC|[A-Za-z][A-Za-z0-9_+\-]*(\/[A-Za-z0-9_+\-]+){1,2})$/.test(v)) return false;
+  try { new Intl.DateTimeFormat("en-US", { timeZone: v }); return true; } catch (e) { return false; }
+}
+// The calendar day YYYY-MM-DD of an instant in a zone.
+function dayIn(ms, tz) {
+  const p = {};
+  for (const x of new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(ms))) p[x.type] = x.value;
+  return p.year + "-" + p.month + "-" + p.day;
+}
+// The created field as YYYY-MM-DD in the config tz: a date (itself), a timestamp with Z or an offset (its day in tz), a timestamp without a zone (its own date part), or epoch seconds or milliseconds (12 digits or more before any fraction), as a number or a digit string such as "1762650000.000200" (its day in tz). undefined when the row has none, null when it cannot be read.
+function createdDate(v, tz) {
   if (v === undefined || v === null || v === "") return undefined;
   const EPOCH = /^\d+(\.\d+)?$/;
   if (typeof v === "number" || (typeof v === "string" && EPOCH.test(v.trim()))) {
     const s = String(v).trim(), n = Number(s);
     if (!Number.isFinite(n) || !EPOCH.test(s)) return null;
-    const d = new Date(s.split(".")[0].length >= 12 ? n : n * 1000);
-    return isNaN(d) ? null : d.toISOString().slice(0, 10);
+    const ms = s.split(".")[0].length >= 12 ? n : n * 1000;
+    return isNaN(new Date(ms)) ? null : dayIn(ms, tz);
   }
-  const m = typeof v === "string" ? /^(\d{4}-\d{2}-\d{2})(?:[T ]|$)/.exec(v.trim()) : null;
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  // A date part that is not a real date stays as it is, so the card check names it; Date.parse would roll it over.
+  if (/^\d{4}-\d{2}-\d{2}[T ]/.test(t) && !realDate(t.slice(0, 10))) return t.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/i.test(t)) {
+    const ms = Date.parse(t.replace(" ", "T"));
+    return isNaN(ms) ? null : dayIn(ms, tz);
+  }
+  const m = /^(\d{4}-\d{2}-\d{2})[T ]/.exec(t);
   return m ? m[1] : null;
 }
-const tomorrow = () => new Date(Date.parse(process.env.BOARD_NOW || new Date().toISOString()) + 86400000).toISOString().slice(0, 10);
+// The day after today in the zone: a calendar add, not 24 hours.
+const tomorrow = (tz) => { const ms = process.env.BOARD_NOW ? Date.parse(process.env.BOARD_NOW) : Date.now(); const [y, m, d] = dayIn(ms, tz).split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d + 1)); return t.getUTCFullYear() + "-" + String(t.getUTCMonth() + 1).padStart(2, "0") + "-" + String(t.getUTCDate()).padStart(2, "0"); };
 
 function checkMap(m, file) {
   if (!isObj(m)) fail(file + ": not a JSON object");
@@ -126,16 +146,18 @@ function checkOverrides(o, file) {
   }
   if (errs.length) fail(errs.map((e) => file + ": " + e).join("\n"));
 }
-// The board config, when named: link_hosts and tag ids.
+// The board config, when named: link_hosts, tag ids and the time zone. Without --config: null.
 function readConfig(file) {
   if (!file) return null;
   const c = readJson(file, "--config");
   if (!isObj(c)) fail(file + ": not a JSON object");
-  return { hosts: (Array.isArray(c.link_hosts) ? c.link_hosts : []).map(low), tags: (Array.isArray(c.tags) ? c.tags : []).map((t) => (isObj(t) ? t.id : t)) };
+  if (c.tz !== undefined && !tzOk(c.tz)) fail(`--config: tz ${JSON.stringify(c.tz)} is not a time zone name such as "Europe/Warsaw" or "UTC"`);
+  return { hosts: (Array.isArray(c.link_hosts) ? c.link_hosts : []).map(low), tags: (Array.isArray(c.tags) ? c.tags : []).map((t) => (isObj(t) ? t.id : t)),
+    tz: c.tz !== undefined ? c.tz : DEFAULT_TZ };
 }
 
 // The reasons a finished card cannot go to sync; empty when it can.
-function cardProblems(c, date, cfg) {
+function cardProblems(c, date, cfg, tz) {
   const out = [];
   if (c.title.length > MAX_S) out.push(`title over ${MAX_S} characters`);
   if (c.links[0].label.length > MAX_S) out.push(`link label over ${MAX_S} characters`);
@@ -145,7 +167,7 @@ function cardProblems(c, date, cfg) {
   if (u && cfg && !cfg.hosts.some((h) => u.hostname === h || u.hostname.endsWith("." + h))) out.push(`url host ${u.hostname} not in the config link_hosts`);
   if (date === null) out.push("created date cannot be read");
   else if (date !== undefined && !realDate(date)) out.push(`created date ${date} is not a real date`);
-  else if (date !== undefined && date > tomorrow()) out.push(`created date ${date} is in the future`);
+  else if (date !== undefined && date > tomorrow(tz)) out.push(`created date ${date} is in the future`);
   else if (date === undefined && c.status !== "closed" && c.kind !== "info") out.push("no created date");
   if (c.kind === "decision" && !(Array.isArray(c.options) && c.options.length >= 2)) out.push("a decision card needs 2 or more options: set them in an override");
   if (cfg && c.tags) for (const t of c.tags) if (!cfg.tags.includes(t)) out.push(`tag ${t} not in the config tags`);
@@ -164,6 +186,7 @@ function cmdMap(a, log) {
   const over = a.overrides ? readJson(a.overrides, "--overrides") : {};
   checkOverrides(over, a.overrides);
   const cfg = readConfig(a.config);
+  const tz = cfg ? cfg.tz : DEFAULT_TZ;
   const doc = readJson(rowsFile, "rows");
   const rows = m.rows ? get(doc, m.rows) : doc;
   if (!Array.isArray(rows)) fail(`${rowsFile}: ${m.rows ? `the field "${m.rows}" is` : "the rows are"} not a JSON list`);
@@ -188,7 +211,7 @@ function cmdMap(a, log) {
     if (seen.has(id)) { skipped.push({ row: at, key, reasons: [`the same card id as row ${seen.get(id)}`] }); return; }
     seen.set(id, at);
     const c = { id, source, kind: m.kind || "action", title, links: [{ label: source + " " + key, url }] };
-    const date = createdDate(get(row, m.created));
+    const date = createdDate(get(row, m.created), tz);
     if (date && realDate(date)) {
       c.first_asked = { date };
       if (m.who && who(get(row, m.who))) c.first_asked.who = who(get(row, m.who));
@@ -204,7 +227,7 @@ function cmdMap(a, log) {
     const { drop, ...fields } = JSON.parse(JSON.stringify(o));
     Object.assign(c, fields);
     if (drop) { dropped++; return; }
-    const problems = cardProblems(c, date, cfg);
+    const problems = cardProblems(c, date, cfg, tz);
     if (problems.length) { skipped.push({ row: at, key, reasons: problems }); return; }
     cards.push(c);
   });

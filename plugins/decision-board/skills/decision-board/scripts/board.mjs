@@ -11,35 +11,40 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SELF = path.relative(process.cwd(), fileURLToPath(import.meta.url)) || "board.mjs";
-const USAGE = `Usage: node ${SELF} <command> ... --agent <key> [--state <file>]
+const USAGE = `Usage: node ${SELF} <command> ... [--state <file>]
   check                                     check board/config.json and the state; print the meta/config write when it changed
   sync <file> [--source <s>] [<file> [--source <s>]]... [--allow-close]   add and change cards; a --source closes that source's cards its file no longer holds
   close <id>...                             close cards
-  read --dump <dir>                         the batches that wait for you (dump: batches for you, acks)
-  waiting --dump <dir>                      only the ids of the batches that wait for you, or "none"
+  read --dump <dir> [--all] --dumped        the batches that wait (dump: batches with status "sent"); --dumped: the dump calls succeeded; --all also prints handled ones
+  waiting --dump <dir>                      only the ids of the batches that wait, or "none"
   ack <batch id> [--close <id>...] --dump <dir>   mark a batch handled, and close cards
   guide [<file.md>] --id <id> [--kind text|status|reference] [--item <card id>] [--archive | --delete] --dump <dir>
   purge (--ids <id>... | --closed-before <YYYY-MM-DD>) --dump <dir>
-  adopt [cards | guides/<id> | meta/config | acks/<id> | purge/<stamp>] --dump <dir>   after a refused write: merge the board copy, print the write again
-  push [cards | guides/<id> | meta/config | acks/<id> | purge/<stamp>]   print the last write of a document again
---agent is required on every command that writes. --state defaults to board/state.json; config.json, out/,
-purged/ and decisions.md sit beside it. <dir> holds the ArtifactData dumps: <dir>/<collection>/<doc id>.json;
-a missing folder is an empty collection.`;
+  adopt [cards | guides/<id> | meta/config | batches/<id> | purge/<stamp>] --dump <dir> --dumped   after a refused write: merge the board copy, print the write again
+  push [cards | guides/<id> | meta/config | batches/<id> | purge/<stamp>]   print the last write of a document again
+--state defaults to board/state.json; config.json, out/, purged/ and decisions.md sit beside it. <dir> holds the ArtifactData
+dumps: <dir>/<collection>/<doc id>.json; a missing folder is an empty collection. Every time written or printed is
+ISO 8601 with the offset of the config tz. Under every printed array, an "if refused" and an "if the reply is lost"
+line name the next command.`;
 
 // ---- the shared definitions of the page
 function loadPage() {
   const file = path.join(HERE, "..", "assets", "board.html"), page = fs.readFileSync(file, "utf8");
   const i = page.indexOf("  // ---- pure: start"), j = page.indexOf("  // ---- pure: end", i + 1);
   if (i < 0 || j < 0) throw new Error("the pure markers are missing in " + file);
-  const ctx = vm.createContext({ items: new Map(), resp: new Map(), notes: new Map(), guides: new Map(), batches: new Map(), acks: new Map(),
+  const ctx = vm.createContext({ items: new Map(), resp: new Map(), notes: new Map(), guides: new Map(), batches: new Map(),
     f: { tab: "all" }, loaded: { config: true }, isPending: () => false, URL });
   vm.runInContext(page.slice(i, j), ctx, { filename: file });
   return ctx;
 }
 const P = loadPage();
 const S = P.SCHEMA;
+const CARDS = S.cardsDoc;
 const plain = (x) => JSON.parse(JSON.stringify(x));
-const now = () => process.env.BOARD_NOW || new Date().toISOString().replace(/\.\d+Z$/, "Z");
+// The clock: BOARD_NOW (any instant Date.parse reads) is the test hook. now() is a stamp in the config tz, so it
+// runs only after new Run(...) applied the config.
+const nowMs = () => { const v = process.env.BOARD_NOW; if (!v) return Date.now(); const t = Date.parse(v); if (isNaN(t)) fail("BOARD_NOW: not a time: " + q(v)); return t; };
+const now = () => P.stampIn(nowMs(), P.cfg.tz, false);
 const q = (s) => JSON.stringify(String(s));
 const lower = (s) => String(s || "").trim().toLowerCase();
 // JSON with sorted keys, to compare a board copy with a local one.
@@ -53,7 +58,20 @@ class Stop extends Error {}
 function fail(lines) { throw new Stop([].concat(lines).join("\n")); }
 
 // ---- arguments: positionals, and flags that take every value up to the next flag. sync reads the raw order.
-const SWITCHES = ["archive", "delete", "allow-close"];
+const SWITCHES = ["archive", "delete", "allow-close", "all", "dumped"];
+// The flags each command takes. A later cluster adds a line here for a new command.
+export const FLAGS = {
+  check: ["state"],
+  sync: ["state", "source", "allow-close"],
+  close: ["state"],
+  read: ["state", "dump", "all", "dumped"],
+  waiting: ["dump"],
+  ack: ["state", "dump", "close"],
+  guide: ["state", "dump", "id", "kind", "item", "archive", "delete"],
+  purge: ["state", "dump", "ids", "closed-before"],
+  adopt: ["state", "dump", "dumped"],
+  push: ["state"],
+};
 function parseArgs(argv) {
   const a = { _: [], raw: argv };
   for (let i = 0, key = null; i < argv.length; i++) {
@@ -70,7 +88,7 @@ const one = (a, k) => (a[k] && a[k].length ? a[k][a[k].length - 1] : "");
 // (and maybe id), or the fields with "version" beside them. A version in the file wins; else it comes from
 // <dir>/versions.txt, the saved document lines of the dump replies: - "<id>"  <n> bytes  version <v>  "<path>".
 // Parsed data is copied key by key into a fresh object, never merged, so a key such as "__proto__" cannot
-// change a prototype. A missing folder is an empty collection.
+// change a prototype. A missing folder is an empty collection. only: read just that collection.
 const UNSAFE = new Set(["__proto__", "constructor", "prototype"]);
 const isPlain = (x) => !!x && typeof x === "object" && !Array.isArray(x) && [Object.prototype, null].includes(Object.getPrototypeOf(x));
 function ownCopy(o, keepUnsafe) {
@@ -93,7 +111,7 @@ function pin(collection, id, ex) {
   if (!Number.isInteger(ex.version) || ex.version < 1) fail(`${collection}/${id}: the dump has no whole-number version. Save the document lines of the dump replies to versions.txt in the dump folder, or dump again; write nothing until then`);
   return ex.version;
 }
-export function readDump(dir) {
+export function readDump(dir, only) {
   if (!dir) fail("--dump <dir> is required");
   const cols = new Map(), listed = new Map(), vt = path.join(dir, "versions.txt");
   // The quoted path of a reply line, absolute or relative to the cwd, names the file.
@@ -103,7 +121,7 @@ export function readDump(dir) {
   }
   for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
     const sub = path.join(dir, name);
-    if (name === "out" || !fs.statSync(sub).isDirectory()) continue;
+    if (name === "out" || (only && name !== only) || !fs.statSync(sub).isDirectory()) continue;
     const docs = new Map();
     for (const f of fs.readdirSync(sub).filter((x) => x.endsWith(".json"))) {
       let raw;
@@ -118,33 +136,40 @@ export function readDump(dir) {
   return { dir, col: (n) => cols.get(n) || new Map() };
 }
 
-// ---- the state: {agent, cards, next, pending, refreshed, purge, unlogged}. next maps "cards", "guides/<id>"
-// and "meta/config" to the version that the next write pins (1 after a create, N + 1 after a write pinned to N);
-// absent means create. pending holds the last write printed for each, for "acks/<id>" (with the cards write of
-// --close), and the deletes of "purge/<stamp>". refreshed is the time of the last sync that wrote. purge lists
-// the cards a purge took off the board, kept until adopt sees them gone. held lists the cards that close or
-// ack --close closed. unlogged holds the decisions.md lines of an ack that the board does not show yet.
+// ---- the state: {cards, next, pending, refreshed, purge, held, unlogged}. next maps "cards" (cards/main),
+// "guides/<id>" and "meta/config" to the version that the next write pins (1 after a create, N + 1 after a write
+// pinned to N); absent means create. pending holds the last write printed for each, for "batches/<id>" (an ack,
+// with the cards write of --close), and the deletes of "purge/<stamp>". refreshed is the time of the last sync
+// that wrote. purge lists the cards a purge took off the board, kept until adopt sees them gone. held lists the
+// cards that close or ack --close closed. unlogged holds the decisions.md lines of an ack whose batch still waits
+// in the last dump. Keys that later versions add are kept as they are.
 function readJson(file) {
   if (!fs.existsSync(file)) return null;
   try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { fail("cannot read " + file + ": " + e.message); }
 }
+// A state of the older board model (one state per agent, acks): an agent field, an acks key or write, or a cards
+// write to another document than cards/main. Only these markers count; a key this script does not know is kept.
+function olderModel(s) {
+  if (Object.prototype.hasOwnProperty.call(s, "agent")) return true;
+  if (["next", "pending", "unlogged"].some((k) => isPlain(s[k]) && Object.keys(s[k]).some((x) => x.startsWith("acks/")))) return true;
+  const pend = isPlain(s.pending) ? s.pending : {}, writes = (v) => [].concat(v).filter(isPlain);
+  if (writes(pend.cards || []).some((w) => w.collection === "cards" && w.doc_id !== S.cardsDoc)) return true;
+  return Object.values(pend).some((v) => writes(v).some((w) => w.collection === "acks"));
+}
 class Run {
-  // o.create: the command may make the state (check). o.write: the command writes, so --agent is required.
+  // o.create: the command may make the state (check).
   constructor(a, o = {}) {
+    this.a = a;
     this.file = path.resolve(one(a, "state") || path.join("board", "state.json"));
     this.dir = path.dirname(this.file);
     const saved = readJson(this.file);
-    if (saved && (!isPlain(saved) || typeof saved.agent !== "string" || !Array.isArray(saved.cards) || !saved.cards.every(isPlain) || !isPlain(saved.next)))
-      fail(this.file + ": not a state file {agent, cards, next}");
-    const flag = lower(one(a, "agent"));
-    if (o.write && !flag) fail(`name the agent: --agent ${saved ? saved.agent : "<name>"}`);
-    if (saved && flag && flag !== saved.agent) fail(`${this.file} is the state of the agent ${q(saved.agent)}, not ${q(flag)}. One state file per agent key: name another --state`);
-    if (!saved && !o.create) fail(`no state ${this.file}. Run \`node ${SELF} check --agent <name>\` once to make it`);
-    if (!saved && !S.agentRe.test(flag)) fail(`agent key ${q(flag)}: use 1 to 40 of a-z 0-9 _ - ~ @ +`);
+    if (saved && (!isPlain(saved) || !Array.isArray(saved.cards) || !saved.cards.every(isPlain) || !isPlain(saved.next)))
+      fail(this.file + ": not a state file {cards, next}");
+    if (saved && olderModel(saved)) fail(`${this.file}: a state file of an older board model. Delete it and run \`node ${SELF} check\``);
+    if (!saved && !o.create) fail(`no state ${this.file}. Run \`node ${SELF} check\` once to make it`);
     this.saved = saved;
-    this.st = saved ? plain(saved) : { agent: flag, cards: [], next: {} };
+    this.st = saved ? plain(saved) : { cards: [], next: {} };
     for (const k of ["pending", "unlogged"]) this.st[k] = isPlain(this.st[k]) ? this.st[k] : {};
-    this.agent = this.st.agent;
     this.configFile = path.join(this.dir, "config.json");
     this.config = readJson(this.configFile);
     P.applyConfig(isPlain(this.config) ? this.config : null);
@@ -168,7 +193,7 @@ class Run {
   }
   // The cards document: the cards that a purge did not take off the board, and the time of the last sync.
   cardsDoc() { const gone = new Set(this.st.purge || []); return { cards: this.st.cards.filter((c) => !gone.has(c.id)), refreshed: this.st.refreshed || "" }; }
-  putCards() { this.pinned("set", "cards", this.agent, this.cardsDoc()); }
+  putCards() { this.pinned("set", "cards", CARDS, this.cardsDoc()); }
   // close and ack --close: the cards stay closed through sync (held) until their content changes.
   closeCards(ids, t) {
     let k = 0;
@@ -177,19 +202,22 @@ class Run {
     return k;
   }
   put(op, collection, doc_id, data, if_version, key, also) { this.writes.push({ w: { op, collection, doc_id, if_version }, data, key, also }); }
-  // decisions.md: the lines of every ack that the board shows, once.
-  logAcks(acks, log) {
-    const done = Object.keys(this.st.unlogged).filter((bid) => acks.has(bid));
+  // decisions.md: the lines of every acked batch that the dump no longer lists as waiting, once. Absence counts as
+  // handled, so a failed dump must never reach this: its callers, read and adopt, run only with --dumped.
+  logHandled(dump, log) {
+    const sent = new Set(waiting(dump).map((b) => b.id));
+    const done = Object.keys(this.st.unlogged).filter((bid) => !sent.has(bid));
     if (!done.length) return;
     const file = path.join(this.dir, "decisions.md"), head = fs.existsSync(file) ? "" : "| Card | Answer | Note | Date |\n|---|---|---|---|\n";
     fs.appendFileSync(file, head + done.map((bid) => this.st.unlogged[bid]).flat().map((x) => "| " + x.map(cell).join(" | ") + " |\n").join(""));
-    done.forEach((bid) => { delete this.st.unlogged[bid]; delete this.st.pending["acks/" + bid]; });
+    done.forEach((bid) => { delete this.st.unlogged[bid]; delete this.st.pending["batches/" + bid]; });
     log(`decisions.md: the answers of ${done.join(", ")}`);
   }
   // The out files, the state, then the writes arrays. At most 50 writes and about 1 MiB per batch call.
   // An out file is named by a hash of its content, so a printed array always uploads what it was printed
-  // with; the older out files of the same document go (meta/config, which every agent writes, stays).
-  // also: the pending key of a group of writes (an ack with its close, a purge's deletes).
+  // with; the older out files of the same document go.
+  // also: the pending key of a group of writes (an ack with its close, a purge's deletes). The group of a write
+  // (also, else its key) names the adopt and push lines printed under the array.
   finish(log) {
     const list = this.writes.map(({ w, data, key, also }) => {
       const { if_version, ...out } = w;
@@ -197,14 +225,14 @@ class Run {
         const body = JSON.stringify(data, null, 1) + "\n", sub = path.join(this.dir, "out", w.collection), base = fname(w.doc_id) + ".";
         const f = path.join(sub, base + createHash("sha256").update(body).digest("hex").slice(0, 8) + ".json");
         fs.mkdirSync(sub, { recursive: true });
-        if (w.collection !== "meta") for (const x of fs.readdirSync(sub)) if (x.startsWith(base) && /^[0-9a-f]{8}\.json$/.test(x.slice(base.length)) && path.join(sub, x) !== f) fs.rmSync(path.join(sub, x));
+        for (const x of fs.readdirSync(sub)) if (x.startsWith(base) && /^[0-9a-f]{8}\.json$/.test(x.slice(base.length)) && path.join(sub, x) !== f) fs.rmSync(path.join(sub, x));
         fs.writeFileSync(f, body);
         out.file_path = f;
       }
       if (if_version !== undefined) out.if_version = if_version;
       if (key) this.st.pending[key] = out;
       if (also) this.st.pending[also] = [].concat(this.st.pending[also] || [], out);
-      return { out, size: data ? JSON.stringify(data).length : 0 };
+      return { out, size: data ? JSON.stringify(data).length : 0, group: also || key };
     });
     for (const k of ["pending", "unlogged"]) if (!Object.keys(this.st[k]).length) delete this.st[k];
     if (this.st.purge && !this.st.purge.length) delete this.st.purge;
@@ -215,21 +243,40 @@ class Run {
       fs.writeFileSync(this.file + ".tmp", JSON.stringify(this.st, null, 1) + "\n");
       fs.renameSync(this.file + ".tmp", this.file);
     }
-    printWrites(list, log);
+    printWrites(list, log, this.ctx());
+  }
+  // Where the printed next steps point: the --dump folder of the command, else dump/ beside the state; and --state.
+  ctx() {
+    const a = this.a;
+    return { dump: a.dump ? one(a, "dump") : path.relative(process.cwd(), path.join(this.dir, "dump")) || "dump",
+      state: a.state ? " --state " + q(one(a, "state")) : "" };
   }
 }
-function printWrites(list, log) {
+// The calls that dump what adopt needs for a group: the agent never picks the collections itself.
+function dumpCalls(group) {
+  if (group === "cards") return "P2 cards with versions";
+  if (group.startsWith("guides/")) return "P2 guides with versions";
+  if (group === "meta/config") return "P2 meta with versions";
+  if (group.startsWith("batches/")) return "P4 and P2 cards";
+  return "P2 responses, batches and cards with versions";
+}
+// Each array, then for each group of its writes the line for a refused write and the line for a lost reply.
+function printWrites(list, log, ctx) {
   const chunks = [];
   let cur = [], bytes = 0;
   for (const w of list) {
     if (cur.length && (cur.length === 50 || bytes + w.size > MAX_DOC)) { chunks.push(cur); cur = []; bytes = 0; }
-    cur.push(w.out); bytes += w.size + 200;
+    cur.push(w); bytes += w.size + 200;
   }
   if (cur.length) chunks.push(cur);
   if (!chunks.length) { log("no writes"); return; }
   chunks.forEach((c, i) => {
     log(`batch ${i + 1} of ${chunks.length}: ${c.length} writes. Pass this array as "writes" to one ArtifactData batch call:`);
-    log(JSON.stringify(c));
+    log(JSON.stringify(c.map((w) => w.out)));
+    for (const g of Array.from(new Set(c.map((w) => w.group).filter(Boolean)))) {
+      log(`if refused: rm -rf ${ctx.dump}, then ${dumpCalls(g)}, then node ${SELF} adopt ${g} --dump ${ctx.dump} --dumped${ctx.state}`);
+      log(`if the reply is lost: node ${SELF} push ${g}${ctx.state}`);
+    }
   });
 }
 const cell = (s) => String(s).replace(/\s*\n\s*/g, " ").replace(/\|/g, "\\|");
@@ -268,7 +315,7 @@ function cardProblems(c, name, ids, qk) {
   out.push(...linkProblems(c.links), ...tagProblems(c.tags));
   if (c.first_asked === undefined) { if (P.needsAsked(c)) out.push('first_asked: required on an open card whose kind is not info: {"date": "YYYY-MM-DD", "who": "..."}'); }
   else if (P.isObj(c.first_asked)) {
-    const fa = c.first_asked, tomorrow = new Date(Date.parse(now()) + 86400000).toISOString().slice(0, 10);
+    const fa = c.first_asked, tomorrow = P.addDays(P.dayIn(nowMs(), P.cfg.tz), 1);
     if (!P.realDate(fa.date)) out.push("first_asked.date: not a real calendar date written YYYY-MM-DD");
     else if (fa.date > tomorrow) out.push("first_asked.date: later than tomorrow");
     if (fa.who !== undefined && !P.whoOk(fa.who)) out.push("first_asked.who: empty, or at most 40 of A-Z a-z 0-9 _ - . ~ : @ +");
@@ -308,12 +355,12 @@ function syncFiles(raw) {
   return files;
 }
 function cmdSync(a, log) {
-  const r = new Run(a, { write: true }), files = syncFiles(a.raw), ids = new Set(), errs = [], cards = [], allow = !!a["allow-close"];
+  const r = new Run(a), files = syncFiles(a.raw), ids = new Set(), errs = [], cards = [], allow = !!a["allow-close"];
   r.needConfig();
   for (const f of files) {
     const list = parseCardFile(f.file);
     // A source file without an open card would close every card of that source.
-    if (f.source && !allow && !list.some((c) => P.isObj(c) && c.status !== "closed")) fail(`${f.file}: no open cards. With --source ${f.source} it would close every card of that source; add --allow-close if that is right`);
+    if (f.source && !allow && !list.some((c) => P.isObj(c) && c.status !== "closed")) fail(`${f.file}: no open cards. With --source ${f.source} it would close every card of that source. If the fetch held every row, rerun with --allow-close; else fetch again`);
     list.forEach((c) => {
       if (!P.isObj(c)) { cards.push({ c, f }); return; }
       // A card posted again keeps the first ask that is stored. With --source, every card has that source.
@@ -328,7 +375,7 @@ function cmdSync(a, log) {
   // A source may lose at most half of its open cards in one run, unless --allow-close.
   for (const s of new Set(files.map((f) => f.source).filter(Boolean))) {
     const open = r.st.cards.filter((c) => lower(c.source) === s && c.status !== "closed"), gone = open.filter((c) => !ids.has(c.id));
-    if (!allow && gone.length * 2 > open.length) errs.push(`sync: --source ${s} would close ${gone.length} of ${open.length} open cards (${gone.map((c) => c.id).join(", ")}); add --allow-close if that is right`);
+    if (!allow && gone.length * 2 > open.length) errs.push(`sync: --source ${s} would close ${gone.length} of ${open.length} open cards (${gone.map((c) => c.id).join(", ")}). If the fetch held every row, rerun with --allow-close; else fetch again`);
   }
   if (errs.length) fail(errs);
   const t = now(), n = { new: 0, rev: 0, changed: 0, same: 0 }, closed = [], reopened = [], held = new Set(r.st.held || []);
@@ -365,7 +412,7 @@ function cmdSync(a, log) {
   r.finish(log);
 }
 function cmdClose(a, log) {
-  const r = new Run(a, { write: true }), ids = a._.slice(1), t = now();
+  const r = new Run(a), ids = a._.slice(1), t = now();
   if (!ids.length) fail("close: name the card ids");
   r.needCards(ids, "close");
   const k = r.closeCards(ids, t);
@@ -375,27 +422,38 @@ function cmdClose(a, log) {
 }
 
 // ---- read. Every database text goes through q(), and an id that is not a plain id too, so no value can forge a line.
-// The answers of a batch are keyed "<agent>:<card id>"; the line shows the card id. A batch waits for this agent
-// when its "for" is the agent and no acks/<batch id> is in the dump.
+// The answers of a batch are keyed by card id. A batch waits while its status is "sent"; the order is by instant, then id.
 const qid = (s) => (S.idRe.test(s) ? s : q(s));
-function waiting(r, dump) {
-  const acks = dump.col("acks");
-  return Array.from(dump.col("batches").entries()).map(([id, d]) => Object.assign(P.coerce("batch", d.data), { id }))
-    .filter((b) => !P.isHandled(b, acks) && P.agentKey(b.for) === r.agent).sort((x, y) => (x.created < y.created ? -1 : x.created > y.created ? 1 : x.id < y.id ? -1 : 1));
-}
-const mine = (r, key) => (typeof key === "string" && key.startsWith(r.agent + ":") ? key.slice(r.agent.length + 1) : null);
+const byTime = (x, y) => P.cmpStamp(x.created, y.created) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0);
+const batchesOf = (dump) => Array.from(dump.col("batches").entries()).map(([id, d]) => Object.assign(P.coerce("batch", d.data), { id })).sort(byTime);
+const waiting = (dump) => batchesOf(dump).filter((b) => b.status === "sent");
+// A stamp as read prints it: in the config tz, or as it is when it is unreadable.
+const shown = (s) => P.localStamp(s, P.cfg.tz) || s;
+// waiting needs no state: it reads only <dump>/batches.
 function cmdWaiting(a, log) {
-  const r = new Run(a), list = waiting(r, readDump(one(a, "dump")));
+  const list = waiting(readDump(one(a, "dump"), "batches"));
   log(list.length ? list.map((b) => qid(b.id)).join("\n") : "none");
 }
+// read: what the agent does with one answer or note line of a sent batch, printed in brackets at its end.
+// flags: the line's flags, a list. The script decides, the agent follows.
+function lineHint(flags, a) {
+  const dir = one(a, "dump"), st = a.state ? " --state " + q(one(a, "state")) : "";
+  if (flags.includes("[stale-rev]") || flags.includes("[missing]")) return "(skip)";
+  if (flags.includes("[other-rev]")) return `(skip; after the ack: rm -rf ${dir}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${dir} --dumped${st})`;
+  if (flags.includes("[question]")) return "(answer the note in the card text and post the card again)";
+  return "(act on it)";
+}
 function cmdRead(a, log) {
-  const dump = readDump(one(a, "dump")), r = new Run(a), list = waiting(r, dump);
-  r.logAcks(dump.col("acks"), log);
-  if (!list.length) log("no new batches for " + r.agent);
+  const dir = one(a, "dump");
+  if (!a.dumped) fail(`read: no --dumped. Run rm -rf ${dir}, then P4; once P4 succeeded, run node ${SELF} read --dump ${dir} --dumped`);
+  const dump = readDump(dir), r = new Run(a), list = a.all ? batchesOf(dump) : waiting(dump);
+  r.logHandled(dump, log);
+  if (!list.length) log(a.all ? "no batches in the dump" : "no batches waiting");
   for (const b of list) {
-    log(`batch ${qid(b.id)}  ${q(b.created)}  ${b.itemIds.length} answers  ${b.noteIds.length} notes`);
+    const sent = b.status === "sent";
+    log(`batch ${qid(b.id)}  ${q(shown(b.created))}  ${b.itemIds.length} answers  ${b.noteIds.length} notes${b.status === "handled" ? `  handled ${q(shown(b.handled_at))}` : ""}`);
     for (const key of b.itemIds) {
-      const x = b.answers[key], flags = [], cid = mine(r, key), it = x && cid !== null && r.card(cid);
+      const x = b.answers[key], flags = [], it = x && r.card(key);
       if (!it) flags.push("[missing]");
       else {
         const c = P.coerce("item", it);
@@ -403,34 +461,35 @@ function cmdRead(a, log) {
         else if (x.rev !== c.rev) flags.push("[other-rev]");
         if (x.note && !x.answer && P.optionsOf(c).length) flags.push("[question]");
       }
-      log(`  ${qid(cid !== null ? cid : key)}  ${q(x ? x.answer : "")}  ${q(x ? x.note : "")}${flags.length ? "  " + flags.join(" ") : ""}`);
+      log(`  ${qid(key)}  ${q(x ? x.answer : "")}  ${q(x ? x.note : "")}${flags.length ? "  " + flags.join(" ") : ""}${sent ? "  " + lineHint(flags, a) : ""}`);
     }
     for (const id of b.noteIds) {
-      const nb = b.notes[id] || { text: "", item: "" }, item = mine(r, nb.item) !== null ? mine(r, nb.item) : nb.item;
-      log(`  note ${qid(id)}${item ? "  item " + q(item) : ""}  ${q(nb.text)}`);
+      const nb = b.notes[id] || { text: "", item: "" }, nflags = [];
+      log(`  note ${qid(id)}${nb.item ? "  item " + q(nb.item) : ""}  ${q(nb.text)}${nflags.length ? "  " + nflags.join(" ") : ""}${sent ? "  " + lineHint(nflags, a) : ""}`);
     }
-    log(`  when handled: node ${SELF} ack ${qid(b.id)} --agent ${r.agent} --dump ${one(a, "dump")}${a.state ? " --state " + q(one(a, "state")) : ""}`);
+    if (sent) log(`  when handled: node ${SELF} ack ${qid(b.id)} --dump ${one(a, "dump")}${a.state ? " --state " + q(one(a, "state")) : ""}`);
   }
   r.finish(() => {});
 }
 
-// ---- ack. Only a batch for this agent that the dump shows without an ack. Its answers go to decisions.md
-// once the board shows the ack (read or adopt).
+// ---- ack: an update of batches/<id> to status "handled", pinned to version 1 (the page writes a batch once, with
+// set, and never again), with the cards write of --close. Its answers go to decisions.md once a read no longer
+// lists the batch as waiting.
 function cmdAck(a, log) {
-  const bid = a._[1], dump = readDump(one(a, "dump")), r = new Run(a, { write: true }), b = bid && dump.col("batches").get(bid);
+  const bid = a._[1], dump = readDump(one(a, "dump")), r = new Run(a), b = bid && dump.col("batches").get(bid);
   if (!b) fail("ack: no batch " + (bid || "named") + " in the dump");
   const batch = Object.assign(P.coerce("batch", b.data), { id: bid });
-  if (P.agentKey(batch.for) !== r.agent) fail(`ack: batch ${bid} is for ${q(P.agentKey(batch.for))}, not for ${q(r.agent)}. Nothing written`);
-  if (dump.col("acks").has(bid)) { r.logAcks(dump.col("acks"), log); log(`ack ${bid}: already acked`); return r.finish(log); }
+  if (batch.status === "handled") { log(`ack ${bid}: already handled`); return r.finish(log); }
+  if (batch.status !== "sent") fail(`ack: batch ${bid} has status ${q(batch.status)}, not "sent". Nothing written`);
   const close = a.close || [], t = now();
   r.needCards(close, "ack");
-  r.put("set", "acks", bid, { at: t, items: batch.itemIds }, undefined, "acks/" + bid);
+  r.put("update", "batches", bid, { status: "handled", handled_at: t }, 1, "batches/" + bid);
   const k = r.closeCards(close, t);
-  if (k) r.pinned("set", "cards", r.agent, r.cardsDoc(), undefined, "acks/" + bid);
-  const day = batch.created.slice(0, 10), shown = (key) => (mine(r, key) !== null ? mine(r, key) : key || "");
-  r.st.unlogged[bid] = batch.itemIds.map((key) => { const x = batch.answers[key] || { answer: "", note: "" }; return [shown(key), x.answer, x.note, day]; })
-    .concat(batch.noteIds.map((id) => { const x = batch.notes[id] || { text: "", item: "" }; return [shown(x.item), "", x.text, day]; }));
-  log(`ack ${bid}: ack, ${k} cards closed. The answers go to decisions.md when the next read sees the ack`);
+  if (k) r.pinned("set", "cards", CARDS, r.cardsDoc(), undefined, "batches/" + bid);
+  const day = P.stampMs(batch.created) === -Infinity ? "" : P.dayIn(P.stampMs(batch.created), P.cfg.tz);
+  r.st.unlogged[bid] = batch.itemIds.map((key) => { const x = batch.answers[key] || { answer: "", note: "" }; return [key, x.answer, x.note, day]; })
+    .concat(batch.noteIds.map((id) => { const x = batch.notes[id] || { text: "", item: "" }; return [x.item || "", "", x.text, day]; }));
+  log(`ack ${bid}: handled, ${k} cards closed. The answers go to decisions.md when the next read no longer lists the batch`);
   r.finish(log);
 }
 
@@ -459,17 +518,11 @@ function parseGuide(text) {
   end();
   return { title, secs };
 }
-// The guide document of this agent: "<agent>.<id>". An id with a "." names another agent's guide.
-function guideId(r, id) {
-  if (id.startsWith(r.agent + ".")) id = id.slice(r.agent.length + 1);
-  if (id.includes(".")) fail(`guide: ${q(id)} names another agent's guide. Your guide ids are ${r.agent}.<id>; give --id without a "."`);
-  const doc = r.agent + "." + id;
-  if (!id || !S.idRe.test(doc)) fail("guide: --id <id> with 1 to " + (99 - r.agent.length) + " of A-Z a-z 0-9 _ - ~ : @ +");
-  return doc;
-}
+// The guide document: the --id itself.
+function guideId(id) { if (!S.idRe.test(id)) fail("guide: --id <id> with 1 to 100 of A-Z a-z 0-9 _ - . ~ : @ +"); return id; }
 // The dump gives the old content (the status that the page sets, the section times); the version comes from the state.
 function cmdGuide(a, log) {
-  const dump = readDump(one(a, "dump")), r = new Run(a, { write: true }), id = guideId(r, one(a, "id")), ex = dump.col("guides").get(id), t = now();
+  const dump = readDump(one(a, "dump")), r = new Run(a), id = guideId(one(a, "id")), ex = dump.col("guides").get(id), t = now();
   const old = ex ? plain(P.coerce("guide", ex.data)) : null, dumped = ex ? pin("guides", id, ex) : undefined;
   if (a.delete || a.archive) {
     if (!ex) fail("guide: no guide " + id + " in the dump");
@@ -482,7 +535,7 @@ function cmdGuide(a, log) {
   if (!file) fail("guide: name the Markdown file, or use --archive or --delete");
   const kind = one(a, "kind") || (old && old.kind) || "text";
   if (!S.guideKinds.includes(kind)) fail("guide: --kind is one of " + S.guideKinds.join(", "));
-  const item = a.item ? r.agent + ":" + one(a, "item") : (old ? old.item : "");
+  const item = a.item ? one(a, "item") : (old ? old.item : "");
   let text;
   try { text = fs.readFileSync(file, "utf8"); } catch (e) { fail("guide: cannot read " + file); }
   const g = parseGuide(text), prev = new Map((old ? old.sections : []).map((s) => [s.id, s]));
@@ -507,31 +560,31 @@ function cmdGuide(a, log) {
 // the handled batches that hold only purged cards, except the newest batch. The cards stay in the state,
 // listed in purge, until adopt sees them gone from the board.
 function cmdPurge(a, log) {
-  const dump = readDump(one(a, "dump")), r = new Run(a, { write: true }), resps = dump.col("responses"), batches = dump.col("batches"), acks = dump.col("acks");
+  const dump = readDump(one(a, "dump")), r = new Run(a), resps = dump.col("responses"), batches = dump.col("batches");
   const already = new Set(r.st.purge || []);
   // An earlier purge whose rows the board still holds is adopted first; one the board holds is forgotten.
   for (const k of purgeKeys(r)) {
-    if (r.st.pending[k].some((w) => dump.col(w.collection).has(w.doc_id))) fail(`purge: ${k} has not landed yet. Run \`node ${SELF} adopt ${k} --agent ${r.agent} --dump ${one(a, "dump")}\` first`);
+    if (r.st.pending[k].some((w) => dump.col(w.collection).has(w.doc_id))) fail(`purge: ${k} has not landed yet. Run \`node ${SELF} adopt ${k} --dump ${one(a, "dump")} --dumped\` first`);
     delete r.st.pending[k];
   }
   let ids = a.ids || [];
   const before = one(a, "closed-before");
   if (!ids.length && !before) fail("purge: give --ids <id>... or --closed-before <YYYY-MM-DD>");
   if (before) {
-    if (!/^\d{4}-\d{2}-\d{2}/.test(before)) fail("purge: --closed-before takes a date such as 2026-01-31");
-    ids = ids.concat(r.st.cards.filter((c) => c.status === "closed" && String(c.updated) < before).map((c) => c.id));
+    if (!P.realDate(before)) fail("purge: --closed-before takes a date such as 2026-01-31");
+    // A card closed before that day in the config tz.
+    ids = ids.concat(r.st.cards.filter((c) => c.status === "closed" && P.stampMs(c.updated) !== -Infinity && P.dayIn(P.stampMs(c.updated), P.cfg.tz) < before).map((c) => c.id));
   }
   ids = Array.from(new Set(ids)).filter((id) => !already.has(id));
   r.needCards(ids, "purge");
   if (!ids.length) { log("purge: nothing to delete"); return; }
-  const key = (id) => r.agent + ":" + id, gone = new Set(ids.map(key)), rows = [];
-  ids.forEach((id) => { if (resps.has(key(id))) rows.push(["responses", key(id), resps.get(key(id))]); });
-  const all = Array.from(batches.entries()).map(([id, d]) => Object.assign(P.coerce("batch", d.data), { id }));
-  const newest = all.slice().sort((x, y) => (x.created < y.created ? 1 : -1))[0];
-  all.filter((b) => b !== newest && b.itemIds.length && !b.noteIds.length && b.itemIds.every((x) => gone.has(x)) && P.isHandled(b, acks))
-    .forEach((b) => { rows.push(["batches", b.id, batches.get(b.id)]); if (acks.has(b.id)) rows.push(["acks", b.id, acks.get(b.id)]); });
+  const gone = new Set(ids), rows = [];
+  ids.forEach((id) => { if (resps.has(id)) rows.push(["responses", id, resps.get(id)]); });
+  const all = batchesOf(dump), newest = all[all.length - 1];
+  all.filter((b) => b !== newest && b.itemIds.length && !b.noteIds.length && b.itemIds.every((x) => gone.has(x)) && P.isHandled(b))
+    .forEach((b) => rows.push(["batches", b.id, batches.get(b.id)]));
   rows.forEach(([c, id, d]) => pin(c, id, d));
-  const stamp = now().replace(/[-:]/g, ""), keep = path.join(r.dir, "purged", stamp);
+  const stamp = P.compactStamp(now()), keep = path.join(r.dir, "purged", stamp);
   const copy = (c, id, raw) => { fs.mkdirSync(path.join(keep, c), { recursive: true }); fs.writeFileSync(path.join(keep, c, fname(id) + ".json"), JSON.stringify(raw, null, 1) + "\n"); };
   ids.forEach((id) => copy("cards", id, r.card(id)));
   rows.forEach(([c, id, d]) => copy(c, id, { version: d.version, data: d.data }));
@@ -539,18 +592,20 @@ function cmdPurge(a, log) {
   r.st.purge = Array.from(already).concat(ids);
   r.putCards();
   const by = (c) => rows.filter((x) => x[0] === c).length;
-  log(`purge/${stamp}: ${ids.length} cards, ${by("responses")} responses, ${by("batches")} batches, ${by("acks")} acks. Copies: ${path.relative(process.cwd(), keep) || keep}`);
+  log(`purge/${stamp}: ${ids.length} cards, ${by("responses")} responses, ${by("batches")} batches. Copies: ${path.relative(process.cwd(), keep) || keep}`);
   r.finish(log);
 }
 
 // ---- adopt: after a refused write of one document. Missing from the dump means gone from the board.
-// For cards/<agent>: add every card that the board has and the state lacks, keep the newer "updated" of a
+// For cards/main: add every card that the board has and the state lacks, keep the later "updated" of a
 // card in both, say what changed, and write the merged list pinned to the board's version. For another
 // document: if the board holds the last write, take its version; else print the write again on it.
+// Every adopt reads absence from the dump, so it runs only with --dumped.
 function holds(d, w) {
+  // A batch missing from a status == "sent" dump is handled or purged.
+  if (w.collection === "batches" && w.op === "update") return !d || P.coerce("batch", d.data).status === "handled";
   if (w.op === "delete") return !d;
   if (!d) return false;
-  if (w.collection === "acks") return true;
   const want = JSON.parse(fs.readFileSync(w.file_path, "utf8"));
   return w.op === "set" ? stable(d.data) === stable(want) : Object.keys(want).every((k) => stable(d.data[k]) === stable(want[k]));
 }
@@ -565,7 +620,7 @@ function purgeGuard(r, dump) {
     r.st.pending[k] = r.st.pending[k].filter((w) => {
       const d = dump.col(w.collection).get(w.doc_id), old = copies.col(w.collection).get(w.doc_id);
       if (w.collection !== "responses" || !d || (old && d.version === old.version && stable(d.data) === stable(old.data))) return true;
-      changed.push(mine(r, w.doc_id) ?? w.doc_id);
+      changed.push(w.doc_id);
       return false;
     });
     if (!r.st.pending[k].length) delete r.st.pending[k];
@@ -576,7 +631,9 @@ function purgeGuard(r, dump) {
   fail(`adopt: the answer to ${changed.map(qid).join(", ")} changed after the purge. Nothing written: the card stays on the board, out of the purge. Run adopt again`);
 }
 function cmdAdopt(a, log) {
-  const dump = readDump(one(a, "dump")), r = new Run(a, { write: true }), key = a._[1] || "cards", w = r.st.pending[key];
+  const key = a._[1] || "cards";
+  if (!a.dumped) fail(`adopt: no --dumped. Dump again as the "if refused" line says; once every call succeeded, run node ${SELF} adopt ${key} --dump ${one(a, "dump")} --dumped`);
+  const dump = readDump(one(a, "dump")), r = new Run(a), w = r.st.pending[key], ctx = r.ctx(), again = (ws) => ws.map((out) => ({ out, size: 0, group: key }));
   if (!w && key !== "cards") fail(`adopt: no write of ${key} in ${r.file}`);
   purgeGuard(r, dump);
   // purge/<stamp>: the deletes that the board has not taken yet, pinned to the dumped versions.
@@ -587,9 +644,11 @@ function cmdAdopt(a, log) {
     r.st.pending[key] = left;
     log(`${key}: ${left.length} deletes again, pinned to the board's versions. Then adopt cards`);
     r.finish(() => {});
-    return printWrites(left.map((out) => ({ out, size: 0 })), log);
+    return printWrites(again(left), log, ctx);
   }
-  const [c, id] = key === "cards" ? ["cards", r.agent] : key.split(/\/(.*)/s), d = dump.col(c).get(id), v = d ? pin(c, id, d) : undefined;
+  const [c, id] = key === "cards" ? ["cards", CARDS] : key.split(/\/(.*)/s), d = dump.col(c).get(id);
+  // A batch is dumped by P4, without versions: its write keeps the version it was printed with, unless the dump has one.
+  const v = c === "batches" ? (d && Number.isInteger(d.version) && d.version >= 1 ? d.version : undefined) : d ? pin(c, id, d) : undefined;
   if (key === "cards") {
     const purge = new Set(r.st.purge || []), add = [], took = [], kept = [];
     for (const bc of d && Array.isArray(d.data.cards) ? d.data.cards.filter(P.isObj) : []) {
@@ -597,59 +656,59 @@ function cmdAdopt(a, log) {
       const sc = r.card(bc.id);
       if (!sc) { r.st.cards.push(bc); add.push(bc.id); }
       else if (stable(sc) !== stable(bc)) {
-        if (String(bc.updated) > String(sc.updated)) { r.st.cards[r.st.cards.indexOf(sc)] = bc; took.push(bc.id); } else kept.push(bc.id);
+        if (P.cmpStamp(bc.updated, sc.updated) > 0) { r.st.cards[r.st.cards.indexOf(sc)] = bc; took.push(bc.id); } else kept.push(bc.id);
       }
     }
     const ids = (x) => x.map(qid).join(", ");
-    if (add.length) log(`cards/${r.agent}: added from the board ${ids(add)}`);
-    if (took.length) log(`cards/${r.agent}: took the board's newer copy of ${ids(took)}`);
-    if (kept.length) log(`cards/${r.agent}: kept this state's newer copy of ${ids(kept)}`);
+    if (add.length) log(`cards: added from the board ${ids(add)}`);
+    if (took.length) log(`cards: took the board's newer copy of ${ids(took)}`);
+    if (kept.length) log(`cards: kept this state's newer copy of ${ids(kept)}`);
     // The purge is done when the board holds none of its cards.
-    if (purge.size && !(d && d.data.cards || []).some((x) => P.isObj(x) && purge.has(x.id))) { r.st.cards = r.st.cards.filter((x) => !purge.has(x.id)); delete r.st.purge; log(`cards/${r.agent}: the purge of ${ids(Array.from(purge))} is done`); }
+    if (purge.size && !(d && d.data.cards || []).some((x) => P.isObj(x) && purge.has(x.id))) { r.st.cards = r.st.cards.filter((x) => !purge.has(x.id)); delete r.st.purge; log(`cards: the purge of ${ids(Array.from(purge))} is done`); }
     if (v === undefined) delete r.st.next.cards; else r.st.next.cards = v;
     const byId = (l) => stable((Array.isArray(l) ? l : []).slice().sort((x, y) => (String(x.id) < String(y.id) ? -1 : 1)));
     if (d && byId(d.data.cards) === byId(r.cardsDoc().cards)) log(`cards: the board holds this state's cards, version ${v}`);
     else { log(`cards: write again, pinned to ${v === undefined ? "a create" : "version " + v}`); r.putCards(); }
     return r.finish(log);
   }
-  // An ack --close also wrote cards in its batch: that write goes again while it is this state's last cards
+  // An ack --close also wrote cards in its batch call: that write goes again while it is this state's last cards
   // write and the dumped board lacks it.
   const aw = [].concat(w)[0], cw = [].concat(w).find((x) => x.collection === "cards");
-  const also = cw && stable(cw) === stable(r.st.pending.cards) && !holds(dump.col("cards").get(r.agent), cw) ? [cw] : [];
+  const also = cw && stable(cw) === stable(r.st.pending.cards) && !holds(dump.col("cards").get(CARDS), cw) ? [cw] : [];
   if (holds(d, aw)) {
-    log(`${key}: the board holds the last write${v === undefined ? "" : ", version " + v}`);
-    if (c === "acks") r.logAcks(dump.col("acks"), log);
+    log(`${key}: the board holds the last write${v === undefined || c === "batches" ? "" : ", version " + v}`);
+    if (c === "batches") r.logHandled(dump, log);
     else if (v === undefined) delete r.st.next[key]; else r.st.next[key] = v;
     if (!also.length) return r.finish(log);
     log(`${key}: the cards write of this ack is not on the board: write it again`);
     r.finish(() => {});
-    return printWrites(also.map((out) => ({ out, size: 0 })), log);
+    return printWrites(again(also), log, ctx);
   }
   const out = Object.assign({}, aw);
-  if (v === undefined) delete out.if_version; else out.if_version = v;
+  if (c === "batches") { if (v !== undefined) out.if_version = v; } else if (v === undefined) delete out.if_version; else out.if_version = v;
   r.st.pending[key] = also.length ? [out].concat(also) : out;
-  if (c !== "acks") { if (aw.op === "delete") delete r.st.next[key]; else r.st.next[key] = v === undefined ? 1 : v + 1; }
-  log(`${key}: write again, pinned to ${v === undefined ? "a create" : "version " + v}${also.length ? ", with its cards write" : ""}`);
+  if (c !== "batches") { if (aw.op === "delete") delete r.st.next[key]; else r.st.next[key] = v === undefined ? 1 : v + 1; }
+  log(`${key}: write again, pinned to ${out.if_version === undefined ? "a create" : "version " + out.if_version}${also.length ? ", with its cards write" : ""}`);
   r.finish(() => {});
-  printWrites([out].concat(also).map((x) => ({ out: x, size: 0 })), log);
+  printWrites(again([out].concat(also)), log, ctx);
 }
 // push: the last write of a document again, as it was printed; for an ack with --close and a purge, the group.
 function cmdPush(a, log) {
-  const r = new Run(a, { write: true }), key = a._[1] || "cards", w = r.st.pending[key];
+  const r = new Run(a), key = a._[1] || "cards", w = r.st.pending[key];
   if (!w) fail(`push: no write of ${key} in ${r.file}`);
-  printWrites([].concat(w).map((out) => ({ out, size: 0 })), log);
+  printWrites([].concat(w).map((out) => ({ out, size: 0, group: key })), log, r.ctx());
 }
 
 // ---- check: config.json and the state, locally. Prints the meta/config write when config.json changed.
-const CONFIG_KEYS = ["title", "agent", "tabs", "priorities", "domains", "link_hosts", "tags"];
+const CONFIG_KEYS = ["title", "agent", "tabs", "priorities", "domains", "link_hosts", "tags", "tz"];
 function cmdCheck(a, log) {
-  const r = new Run(a, { create: true, write: true }), errs = [];
-  // Two state files of one agent key in one folder would share the out files and drop cards.
+  const r = new Run(a, { create: true }), errs = [];
+  // Two state files in one folder would share the out files and drop cards.
   for (const f of (fs.existsSync(r.dir) ? fs.readdirSync(r.dir) : []).filter((x) => x.endsWith(".json")).map((x) => path.join(r.dir, x))) {
     let o;
     try { o = JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { continue; }
-    if (f !== r.file && isPlain(o) && o.agent === r.agent && Array.isArray(o.cards) && isPlain(o.next))
-      fail(`check: ${f} is already the state of the agent ${q(r.agent)}. One state file per agent key in a folder: use it, or another folder`);
+    if (f !== r.file && isPlain(o) && Array.isArray(o.cards) && isPlain(o.next))
+      fail(`check: ${f} is already a state file in this folder. One state file per board folder: use it, or another folder`);
   }
   r.needConfig();
   const raw = r.config, c = P.cfg;
@@ -660,6 +719,7 @@ function cmdCheck(a, log) {
   }
   Object.keys(raw).filter((k) => !CONFIG_KEYS.includes(k)).forEach((k) => errs.push("config: unknown field " + q(k)));
   if (!c.link_hosts.length) errs.push("config link_hosts: none. Every card needs a link to one of them");
+  if (raw.tz !== undefined && !P.tzOk(raw.tz)) errs.push(`config tz: ${q(raw.tz)} is not a time zone name such as "Europe/Warsaw" or "UTC"`);
   const ids = new Set(), count = {};
   r.st.cards.forEach((x, i) => {
     const name = "card " + (P.isObj(x) && typeof x.id === "string" ? qid(x.id) : "#" + (i + 1));
@@ -671,8 +731,7 @@ function cmdCheck(a, log) {
     const st = P.coerce("item", x).status || "open";
     count[st] = (count[st] || 0) + 1;
   });
-  log(`state ${path.relative(process.cwd(), r.file) || r.file}: agent ${r.agent}, cards ${r.st.cards.length} (${Object.entries(count).map(([k, v]) => k + " " + v).join(", ") || "none"})`);
-  if (c.agent.toLowerCase() !== r.agent) log(`note: the config agent ${q(c.agent)} is not ${q(r.agent)}: free notes go to ${q(c.agent.toLowerCase())}`);
+  log(`state ${path.relative(process.cwd(), r.file) || r.file}: cards ${r.st.cards.length} (${Object.entries(count).map(([k, v]) => k + " " + v).join(", ") || "none"}); times in ${P.cfg.tz}`);
   errs.forEach((e) => log("problem: " + e));
   if (errs.length) throw new Stop(errs.length + " problems");
   const w = r.st.pending["meta/config"];
@@ -682,10 +741,12 @@ function cmdCheck(a, log) {
   r.finish(log);
 }
 
-const COMMANDS = { check: cmdCheck, sync: cmdSync, close: cmdClose, read: cmdRead, waiting: cmdWaiting, ack: cmdAck, guide: cmdGuide, purge: cmdPurge, adopt: cmdAdopt, push: cmdPush };
+export const COMMANDS = { check: cmdCheck, sync: cmdSync, close: cmdClose, read: cmdRead, waiting: cmdWaiting, ack: cmdAck, guide: cmdGuide, purge: cmdPurge, adopt: cmdAdopt, push: cmdPush };
 export function run(argv, log = console.log) {
   const a = parseArgs(argv), cmd = COMMANDS[a._[0]];
   if (!cmd) { log(USAGE); return 2; }
+  if (!FLAGS[a._[0]]) { log(`${a._[0]}: no FLAGS line for this command in board.mjs`); return 1; }
+  for (const key of Object.keys(a)) if (key !== "_" && key !== "raw" && !FLAGS[a._[0]].includes(key)) { log(`${a._[0]}: unknown flag --${key}`); return 1; }
   try { cmd(a, log); return 0; } catch (e) { if (e instanceof Stop) { log(e.message); return 1; } throw e; }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = run(process.argv.slice(2));
