@@ -459,7 +459,7 @@ ok("two batches: the first ack (a dismiss) lost, the second (--close) as the boa
   fs.writeFileSync(path.join(b.db, "batches", B1 + ".json"), JSON.stringify({ version: 1, data: { id: B1, created: "2026-01-06T00:00:00+00:00", itemIds: [], noteIds: [],
     answers: {}, notes: {}, controlIds: ["t2"], controls: { t2: { rev: 1, dismiss: "on", keep: { assign: "", done: "off" } } }, status: "sent" } }));
   const r1 = dumped(b, "ack", B1);                              // lost
-  assert.match(r1.lines[0], /^ack \S+: handled, 1 cards closed, /);
+  assert.match(r1.lines[0], /^ack \S+: handled, 1 cards closed\. /);
   bumpOther(b);
   follow(b, dumped(b, "ack", ACKED, "--close", "disk-size"));
   recover(b);
