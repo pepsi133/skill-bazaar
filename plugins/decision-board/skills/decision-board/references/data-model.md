@@ -17,7 +17,7 @@ owner. A viewer reads the board and writes nothing.
 
 `check` merges four layers, later ones win: the defaults in the table below; the user file
 `~/.config/decision-board/config.json` (`$XDG_CONFIG_HOME/decision-board/config.json` when that is set;
-`BOARD_USER_CONFIG` names another file, as an absolute path or one that starts with `~/`, `""` turns it off); `board/config.json`; `board/config.local.json`.
+`BOARD_USER_CONFIG` names another file, as an absolute path or one that starts with `~/`, `""` turns it off); `.board/config.json`; `.board/config.local.json`.
 Keep private values that hold for every board on the machine (the time zone, the week start, hosts, tags, checks, names of
 people) in the user file, outside every repository. Each layer is optional, but one must exist.
 
@@ -26,7 +26,7 @@ people) in the user file, outside every repository. Each layer is optional, but 
   that starts with `_` is a comment.
 - `check` prints the layer of each key and the tag and priority ids. It writes the merged keys to `meta/config`
   (script-only keys stay off; `settings`, the footer line that names the layer files, is added) and the full
-  merged config with its defaults to `board/config.merged.json` (`checks` stay off), which
+  merged config with its defaults to `.board/config.merged.json` (`checks` stay off), which
   `refresh.mjs map --config` reads. That file is a derived copy: never edit or commit it. `sync` merges the layers
   itself. Every field is optional; a missing or invalid field keeps its default.
   Lists keep their first 50 entries. The page reads `meta/config` live: a change shows without a republish.

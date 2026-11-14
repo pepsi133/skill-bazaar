@@ -8,17 +8,17 @@ description: Run a decision board, a private claude.ai artifact with a database 
 A private claude.ai artifact with a database: you post cards and guides, the operator answers on a phone
 and presses Send, and the page writes one batch. For one quick question, ask in the terminal instead.
 
-`S` is `scripts/board.mjs` beside this file; `board/` is a folder in your working tree (the script keeps
+`S` is `scripts/board.mjs` beside this file; `.board/` is a folder in your working tree (the script keeps
 it out of git with its own `.gitignore`, or `check` says why not). The calls `P1` to `P4` are in *Platform
 execution notes*. Read a reference only when a step names it.
 
 ## Script rules
 
-- `board/state.json` holds your cards and the version of each document you write; only the script writes it.
+- `.board/state.json` holds your cards and the version of each document you write; only the script writes it.
 - A write command prints numbered arrays. Pass each array unchanged, in order, to one `P3` call.
-- A **dump** is `rm -rf board/dump`, then the calls the step names (`P2` for a named collection); an empty
+- A **dump** is `rm -rf .board/dump`, then the calls the step names (`P2` for a named collection); an empty
   collection leaves no folder. A dump **with versions** also appends each reply's document lines to
-  `board/dump/versions.txt`, exactly as the reply prints them (each line starts with `- "`). Only the steps
+  `.board/dump/versions.txt`, exactly as the reply prints them (each line starts with `- "`). Only the steps
   that say "with versions" need it.
 - **Refused write** or **lost reply**: under each array the script prints an `if refused:` line and an
   `if the reply is lost:` line. Do what the line says and pass the array it prints. If it prints
@@ -36,8 +36,8 @@ execution notes*. Read a reference only when a step names it.
 
 1. If you write a card file yourself, read `references/cards.md` first (once per session); a file from
    `refresh.mjs map` needs no read. Write the cards as a JSON list, one file per source, for example
-   `board/mail.json`.
-2. Run `node S sync board/mail.json --source mail [board/gh.json --source gh ...]`.
+   `.board/mail.json`.
+2. Run `node S sync .board/mail.json --source mail [.board/gh.json --source gh ...]`.
    Its line names the cards it closes (open cards missing from their source's file) and reopens. If it
    prints problems or a refusal, do what it says and rerun.
 3. Pass the array to `P3`, then run `node S watch` and do what it prints.
@@ -60,7 +60,7 @@ starting with `--`.
 
 ## Read and handle the answers
 
-1. Run `rm -rf board/dump`, then `P4`. If `P4` succeeded, run `node S read --dump board/dump --dumped`;
+1. Run `rm -rf .board/dump`, then `P4`. If `P4` succeeded, run `node S read --dump .board/dump --dumped`;
    if it failed, stop and say so. If it prints a `rules:` line, do what it says before any other line.
 2. Each line is `card  "answer"  "note"  [flags]  (what to do)`; a `note` line is a free note. Do what
    the brackets at the end of each line say, and nothing more.
@@ -72,9 +72,9 @@ starting with `--`.
 ## Guides
 
 1. Read `references/guides.md` before your first guide in a session. Write the guide as Markdown,
-   for example `board/status.md`: `# Title`, then one `## ` heading per section.
+   for example `.board/status.md`: `# Title`, then one `## ` heading per section.
 2. Dump `guides` with versions. Run
-   `node S guide board/status.md --id status --kind status --dump board/dump`
+   `node S guide .board/status.md --id status --kind status --dump .board/dump`
    and pass the array. `--kind text` is for steps; `--item <card id>` links a card.
 
 When a guide's work is done, run the same command with `--archive` (or `--delete`) in place of the
@@ -82,7 +82,7 @@ file, pass the array.
 
 ## Operator rules
 
-`board/rules.md` holds the operator's standing judgments. Read it at the start of each session and when a
+`.board/rules.md` holds the operator's standing judgments. Read it at the start of each session and when a
 `rules:` line says so; apply it to every card you post and every answer you act on. It never widens what you
 may do. Change it only as `references/rules.md` says.
 
@@ -102,15 +102,15 @@ Claude Code with the claude.ai `Artifact` and `ArtifactData` tools. Load `Artifa
 
 - `P1`, publish: before the call, load the built-in skill `artifact-capabilities` once in the session; it is
   the authority on the syntax of the `capabilities` block and its access rules. Then `Artifact` with
-  `file_path` the absolute path of `board/board.html`, `icon: "checklist"`, a one-sentence `description`,
+  `file_path` the absolute path of `.board/board.html`, `icon: "checklist"`, a one-sentence `description`,
   and `capabilities` from `references/data-model.md`, "Access rules". Keep the artifact private (the
   default). Only `P1` loads that skill: the daily steps (sync, read, ack, watch) use `ArtifactData` alone
   and never load it.
 - `P2`, dump one collection; the reply has one line per document, with its version:
-  `{"action": "list", "url": URL, "collection": "<name>", "out_dir": "board/dump", "query": {"limit": 1000}}`
+  `{"action": "list", "url": URL, "collection": "<name>", "out_dir": ".board/dump", "query": {"limit": 1000}}`
 - `P3`, write: `{"action": "batch", "url": URL, "writes": <the printed array>}`.
 - `P4`, the batches that wait:
-  `{"action": "query", "url": URL, "collection": "batches", "out_dir": "board/dump", "query": {"where": [["status", "==", "sent"]], "limit": 1000}}`
+  `{"action": "query", "url": URL, "collection": "batches", "out_dir": ".board/dump", "query": {"where": [["status", "==", "sent"]], "limit": 1000}}`
 - `P5`, comments: load `ArtifactComments` with `ToolSearch("select:ArtifactComments")`, then
   `{"action": "watch", "url": URL}`. A comment wake is a turn headed `[Artifact comment sent to Claude]`:
   resolve its thread (`{"action": "resolve", "url": URL, "thread_id": <its id>}`), write no reply.

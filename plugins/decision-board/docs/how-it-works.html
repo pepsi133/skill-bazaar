@@ -172,7 +172,7 @@
         <div class="actor"><div class="who"><span class="dot thing"></span>The page</div><p><code>skills/decision-board/assets/board.html</code>, published once as the artifact. It never changes per board. It shows what is in the database.</p></div>
         <div class="actor"><div class="who"><span class="dot thing"></span>The database</div><p>Belongs to the artifact. Holds collections of small JSON documents: cards, your answers, batches, guides, the config.</p></div>
         <div class="actor"><div class="who"><span class="dot thing"></span>The script</div><p><code>skills/decision-board/scripts/board.mjs</code>. Runs on the agent's machine with Node. Turns files into exact database writes, so the agent does not type them.</p></div>
-        <div class="actor"><div class="who"><span class="dot signal"></span>The state file</div><p><code>board/state.json</code> on the agent's machine. The truth for the board's cards, and the version of each document the agent writes. One state file per board folder.</p></div>
+        <div class="actor"><div class="who"><span class="dot signal"></span>The state file</div><p><code>.board/state.json</code> on the agent's machine (<code>.board</code> is a hidden folder; <code>ls -a</code> shows it). The truth for the board's cards, and the version of each document the agent writes. One state file per board folder.</p></div>
       </div>
     </section>
 
@@ -237,7 +237,7 @@
           <tr><td><code>responses</code></td><td>Your draft answer per card, with its history</td><td class="who-you">the page, as you</td></tr>
           <tr><td><code>notes</code></td><td>Your free notes</td><td class="who-you">the page, as you</td></tr>
           <tr><td><code>batches</code></td><td>What you sent, with a copy of each answer. Status <code>sent</code>, until the agent's <code>ack</code> sets <code>handled</code></td><td class="who-you">the page, as you; the agent's ack</td></tr>
-          <tr><td><code>meta</code></td><td><code>config</code>: link hosts, title, time zone, tabs, priorities, tags, agent name, the hosts a reference guide may load from. The agent keeps it in <code>board/config.json</code>, you may keep private values in a user file outside any repository, and <code>check</code> merges the layers and writes the result; the page footer names the files</td><td class="who-you">you</td></tr>
+          <tr><td><code>meta</code></td><td><code>config</code>: link hosts, title, time zone, tabs, priorities, tags, agent name, the hosts a reference guide may load from. The agent keeps it in <code>.board/config.json</code>, you may keep private values in a user file outside any repository, and <code>check</code> merges the layers and writes the result; the page footer names the files</td><td class="who-you">you</td></tr>
         </tbody>
       </table></div>
       <p class="muted" style="font-size:14px">Every time the script and the page write carries the offset of the config <code>tz</code>, such as <code>2026-11-13T13:31:08+01:00</code>, and every compare goes through the instant, so a daylight saving change cannot reorder two times.</p>
@@ -249,14 +249,14 @@
       <p>Every word that passes through the agent's conversation costs tokens and adds a chance of a typing error. A board with fifty cards would cost a lot if the agent read and retyped them. So the agent never handles card text directly. It moves files, and the script does the work.</p>
       <div class="diagram">
         <div class="flow" style="--n: 4">
-          <div class="step agent"><b>Card file</b>The agent writes its cards as JSON. To read answers, it first saves the batches as files in <code>board/dump/</code>.</div>
-          <div class="step"><b>Run</b><code>node board.mjs sync board/cards.json</code>. The script checks the cards and applies them to <code>board/state.json</code>.</div>
-          <div class="step"><b>Print</b>It prints a short summary line, and a <code>writes</code> array. Each write points at a file in <code>board/out/</code>.</div>
+          <div class="step agent"><b>Card file</b>The agent writes its cards as JSON. To read answers, it first saves the batches as files in <code>.board/dump/</code>.</div>
+          <div class="step"><b>Run</b><code>node board.mjs sync .board/cards.json</code>. The script checks the cards and applies them to <code>.board/state.json</code>.</div>
+          <div class="step"><b>Print</b>It prints a short summary line, and a <code>writes</code> array. Each write points at a file in <code>.board/out/</code>.</div>
           <div class="step agent"><b>Write</b>The agent passes that array, unchanged, to one batch call of the database tool.</div>
         </div>
         <p class="caption">The agent sees short summary lines, never the card JSON. The script and the page read one shared definition of every field (<code>SCHEMA</code> in the page), so they cannot drift apart.</p>
       </div>
-      <p>The commands: <code>sync</code> posts or changes cards, <code>close</code> ends them, <code>read</code> lists new answers, <code>ack</code> marks a batch handled (the next <code>read</code> logs its answers to <code>board/decisions.md</code>), <code>guide</code> posts a guide, <code>purge</code> deletes old closed cards after it copies them to disk, <code>check</code> looks for bad data and writes the config, and <code>adopt</code> and <code>push</code> repair a refused or lost write. Posting needs no dump: one script run and one write. Reading needs one call: the batches whose status is <code>sent</code>. <code>waiting</code> gives a watcher only the ids of the batches that wait.</p>
+      <p>The commands: <code>sync</code> posts or changes cards, <code>close</code> ends them, <code>read</code> lists new answers, <code>ack</code> marks a batch handled (the next <code>read</code> logs its answers to <code>.board/decisions.md</code>), <code>guide</code> posts a guide, <code>purge</code> deletes old closed cards after it copies them to disk, <code>check</code> looks for bad data and writes the config, and <code>adopt</code> and <code>push</code> repair a refused or lost write. Posting needs no dump: one script run and one write. Reading needs one call: the batches whose status is <code>sent</code>. <code>waiting</code> gives a watcher only the ids of the batches that wait.</p>
     </section>
 
     <section id="guides">

@@ -136,8 +136,8 @@ ok("the footer names where the settings live", () => {
   assert.ok(src.includes('<footer id="foot" class="page-foot"><span id="zone" class="small muted"></span><span id="settings" class="small muted" hidden></span></footer>'));
   assert.ok(src.includes('$("settings").textContent = cfg.settings; $("settings").hidden = !cfg.settings;'));
   const Q = load();
-  Q.applyConfig({ tz: "UTC", settings: "Settings: board/config.json" });
-  assert.equal(Q.cfg.settings, "Settings: board/config.json");
+  Q.applyConfig({ tz: "UTC", settings: "Settings: .board/config.json" });
+  assert.equal(Q.cfg.settings, "Settings: .board/config.json");
   Q.applyConfig({ tz: "UTC", settings: 5 });
   assert.equal(Q.cfg.settings, "");
   Q.applyConfig({ tz: "UTC" });
