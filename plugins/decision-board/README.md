@@ -5,7 +5,7 @@ question with options, or an action) and guides (steps, status, reference pages)
 answers on a phone or in a browser and presses Send. The agent reads the answers, acts, and marks
 the batch handled.
 
-One unchanged page serves many uses. A config, kept in `board/config.json` and optional layers
+One unchanged page serves many uses. A config, kept in `.board/config.json` and optional layers
 around it, merged by `check` and written to the database, sets the title, the tabs, the groups and
 their order, the priorities and the tags. Cards due today show in a strip at the top.
 
@@ -22,12 +22,12 @@ their order, the priorities and the tags. Cards due today show in a strip at the
 ## How the agent works with it
 
 The agent never reads or types card JSON in the conversation. Its cards live in a local state file,
-`board/state.json`. `skills/decision-board/scripts/board.mjs sync` applies a card file to it and
-prints one write: the whole card list as one document, `cards/main`, pinned to the version that
-the state keeps. Answers come back as batches. A watcher queries only the batches whose status is
+`.board/state.json` (`.board` is a hidden folder; `ls -a` shows it). `skills/decision-board/scripts/board.mjs sync`
+applies a card file to it and prints one write: the whole card list as one document, `cards/main`,
+pinned to the version that the state keeps. Answers come back as batches. A watcher queries only the batches whose status is
 `sent`, and `read` prints one short line per answer. Every time is written with the offset of the
 config `tz`. The script has no network access. The operator's standing judgments live in
-`board/rules.md`; every new rule reaches it through a card the operator answers, and `check` posts the
+`.board/rules.md`; every new rule reaches it through a card the operator answers, and `check` posts the
 file as the Rules tab.
 
 Quick controls on a card (assign, snooze, dismiss, close in the source, done, tags) are off until

@@ -20,14 +20,14 @@ function ok(name, fn) {
   try { fn(); console.log("ok " + n + " " + name); } catch (e) { failed++; console.log("not ok " + n + " " + name + "\n  " + String(e.message).split("\n")[0]); }
 }
 function fresh(withState = true) {
-  const d = fs.mkdtempSync(path.join(tmp, "b-")), state = path.join(d, "board", "state.json"), db = path.join(d, "db");
+  const d = fs.mkdtempSync(path.join(tmp, "b-")), state = path.join(d, ".board", "state.json"), db = path.join(d, "db");
   fs.cpSync(path.join(FIX, "dump"), db, { recursive: true });
   fs.mkdirSync(path.dirname(state));
   const config = JSON.parse(fs.readFileSync(path.join(FIX, "config.json"), "utf8"));
   config.tz = "UTC";
-  fs.writeFileSync(path.join(d, "board", "config.json"), JSON.stringify(config, null, 1) + "\n");
+  fs.writeFileSync(path.join(d, ".board", "config.json"), JSON.stringify(config, null, 1) + "\n");
   if (withState) fs.copyFileSync(path.join(FIX, "state.json"), state);
-  return { db, state, board: path.dirname(state), dump: path.join(d, "board", "dump") };
+  return { db, state, board: path.dirname(state), dump: path.join(d, ".board", "dump") };
 }
 function sh(...argv) { const lines = []; const code = run(argv, (l) => lines.push(...String(l).split("\n"))); return { code, lines, text: lines.join("\n") }; }
 const cmd = (b, ...argv) => sh(...argv, "--state", b.state);

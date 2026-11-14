@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The script layer of the decision board. Node 18 or later, no dependencies, no network access.
-// A write command changes the state, writes one JSON file per document into board/out/, and prints
+// A write command changes the state, writes one JSON file per document into .board/out/, and prints
 // the `writes` array of one ArtifactData batch call. Reads take the files that ArtifactData saved with out_dir.
 // Fields, kinds and limits come from the "pure" part of assets/board.html, so page and script cannot drift.
 import { createHash, randomBytes } from "node:crypto";
@@ -36,7 +36,7 @@ const USAGE = `Usage: node ${SELF} <command> ... [--state <file>]
   purge (--ids <id>... | --closed-before <YYYY-MM-DD>) --dump <dir>
   adopt [cards | guides/<id> | meta/config | meta/status | batches/<id> | purge/<stamp>] --dump <dir> --dumped   after a refused write: merge the board copy, print the write again
   push [cards | guides/<id> | meta/config | meta/status | batches/<id> | purge/<stamp>]   print the last write of a document again
---state defaults to board/state.json; config.json, config.local.json, config.merged.json, rules.md, out/, purged/ and decisions.md sit beside it.
+--state defaults to .board/state.json; config.json, config.local.json, config.merged.json, rules.md, out/, purged/ and decisions.md sit beside it.
 The user config is $BOARD_USER_CONFIG, else $XDG_CONFIG_HOME/decision-board/config.json, else ~/.config/decision-board/config.json. <dir> holds the ArtifactData
 dumps: <dir>/<collection>/<doc id>.json; a missing folder is an empty collection. Every time written or printed is
 ISO 8601 with the offset of the config tz. Under every printed array, an "if refused" and an "if the reply is lost"
@@ -56,6 +56,8 @@ const P = loadPage();
 const S = P.SCHEMA;
 const CARDS = S.cardsDoc;
 const plain = (x) => JSON.parse(JSON.stringify(x));
+// The default board folder, under the working directory; --state names another place.
+const BOARD_DIR = ".board";
 // The clock: BOARD_NOW (any instant Date.parse reads) is the test hook. now() is a stamp in the config tz, so it
 // runs only after new Run(...) applied the config.
 const nowMs = () => { const v = process.env.BOARD_NOW; if (!v) return Date.now(); const t = Date.parse(v); if (isNaN(t)) fail("BOARD_NOW: not a time: " + q(v)); return t; };
@@ -213,7 +215,7 @@ function ackEntry(v) {
 }
 const ackValue = (e) => (e.cards ? Object.assign(e.write ? { write: e.write } : {}, { cards: true }) : e.write);
 
-// ---- config layers: the defaults, the user file, board/config.json and board/config.local.json, later ones win.
+// ---- config layers: the defaults, the user file, .board/config.json and .board/config.local.json, later ones win.
 // A page key is a key of DEFAULTS in the page; a script-only key is a key of SCRIPT_DEFAULTS. check writes the
 // keys of WRITTEN_KEYS itself; config.merged.json leaves out the keys of MERGED_OMIT.
 const WRITTEN_KEYS = ["settings"];
@@ -385,7 +387,7 @@ class Run {
   // o.create: the command may make the state (check).
   constructor(a, o = {}) {
     this.a = a;
-    this.file = path.resolve(one(a, "state") || path.join("board", "state.json"));
+    this.file = path.resolve(one(a, "state") || path.join(BOARD_DIR, "state.json"));
     this.dir = path.dirname(this.file);
     if (badPath(this.file)) fail(pathRefusal(a._[0], this.file));
     const saved = readJson(this.file);
@@ -405,6 +407,23 @@ class Run {
       const v = ackValue(ackEntry(this.st.pending[k]));
       if (v) this.st.pending[k] = v; else delete this.st.pending[k];
     }
+    // A write that names a file outside this board folder's out folder (the folder was renamed, moved or copied): the
+    // regular file of the same collection and name under this out folder, if there is one. Nothing else is ever named.
+    const outDir = path.join(this.dir, "out"), bad = (x) => !x || x === "." || x === "..";
+    const mend = (v) => {
+      if (Array.isArray(v)) v.forEach(mend);
+      else if (isPlain(v)) {
+        if (typeof v.file_path === "string" && typeof v.collection === "string" && !path.resolve(v.file_path).startsWith(outDir + path.sep)) {
+          const c = path.basename(v.collection), n = path.basename(v.file_path);
+          if (!bad(c) && !bad(n) && plainId(c)) {
+            const f = path.join(outDir, c, n), x = fs.lstatSync(f, { throwIfNoEntry: false });
+            if (x && x.isFile()) v.file_path = f;
+          }
+        }
+        Object.values(v).forEach((x) => { if (typeof x === "object") mend(x); });
+      }
+    };
+    mend(this.st.pending);
     // cards_wait, a key of an older script: the batches whose cards write was still owed. Each plain id gets the
     // cards flag on its pending ack, then the key goes.
     for (const id of isPlain(this.st.cards_wait) ? Object.keys(this.st.cards_wait) : []) {
@@ -1186,7 +1205,7 @@ function cmdAck(a, log) {
 // The status guide line of ack and guide.
 function statusGuideLine(r, a, what) {
   const f = rel(path.join(r.dir, "status.md"));
-  return `status guide: on in the config. ${what} in ${f}, dump guides with versions, then run node ${SELF} guide ${shq(f)} --id status --kind status --dump ${shq(one(a, "dump") || "board/dump")}${stateArg(a)} and pass its array`;
+  return `status guide: on in the config. ${what} in ${f}, dump guides with versions, then run node ${SELF} guide ${shq(f)} --id status --kind status --dump ${shq(one(a, "dump") || rel(path.join(r.dir, "dump")))}${stateArg(a)} and pass its array`;
 }
 
 // ---- guide
@@ -1234,7 +1253,7 @@ function guideId(id) { if (!S.idRe.test(id)) fail("guide: --id <id> with 1 to 10
 function cmdGuide(a, log) {
   const dump = readDump(one(a, "dump")), r = new Run(a), id = guideId(one(a, "id")), ex = dump.col("guides").get(id), t = now();
   r.clearCardsOnly(dump);
-  if (id.toLowerCase() === RULES_ID) fail(`guide: the guide rules is posted by check from board/rules.md. Run node ${SELF} check${stateArg(a)}`);
+  if (id.toLowerCase() === RULES_ID) fail(`guide: the guide rules is posted by check from ${shownPath(boardName(path.join(r.dir, "rules.md")))}. Run node ${SELF} check${stateArg(a)}`);
   const old = ex ? plain(P.coerce("guide", ex.data)) : null, dumped = ex ? pin("guides", id, ex) : undefined;
   if (a.delete || a.archive) {
     if (!ex) fail("guide: no guide " + id + " in the dump");
@@ -1550,8 +1569,8 @@ function ignoreBoard(dir, log, errs) {
   } catch (e) { errs.push(`${giShown}: ${e.code || e.message}: the board folder is not ignored. Fix the folder, then run check`); }
 }
 // The folders the script makes in the board folder: the dump of the agent, the out files, the purge copies, the
-// dump of the watcher.
-const BOARD_DIRS = ["dump", "out", "purged", "watch-dump"];
+// dump of the watcher, and the folders of the board-refresh skill.
+const BOARD_DIRS = ["dump", "out", "purged", "watch-dump", "rows", "maps", "overrides"];
 // A config value in one short text.
 function valueText(v) {
   if (typeof v === "string") return v.length > 60 ? js(v.slice(0, 57)) + "..." : js(v);
@@ -1654,6 +1673,7 @@ function cmdCheck(a, log) {
   configLines(r.load).forEach((l) => log(l));
   const uf = r.load.files[0], ut = uf.exists ? inGitTree(uf.file) : "";
   if (ut) log(`note: the user config ${tilde(uf.file)} is inside the git work tree ${ut}: keep it out of every repository`);
+  if (oldBoard(a)) log(`note: ${shq("board/")} is an old board folder and is not read; remove it or pass --state ${shq("board/state.json")}`);
   if (!P.cfg.link_hosts.length) log("note: config link_hosts: none, so sync refuses every card link. A card needs no link");
   const rl = rulesLine(rs, "check", a);
   if (rl) log(rl);
@@ -1822,6 +1842,8 @@ function cmdWatch(a, log) {
   r.finish(log);
 }
 
+// Both default folders hold a state file and no --state was given: .board is read, board is not.
+const oldBoard = (a) => !a.state && fs.existsSync(path.join(BOARD_DIR, "state.json")) && fs.existsSync(path.join("board", "state.json"));
 export const COMMANDS = { check: cmdCheck, sync: cmdSync, close: cmdClose, read: cmdRead, waiting: cmdWaiting, ack: cmdAck, status: cmdStatus, watch: cmdWatch, guide: cmdGuide, purge: cmdPurge, adopt: cmdAdopt, push: cmdPush };
 export function run(argv, log = console.log) {
   const a = parseArgs(argv), cmd = COMMANDS[a._[0]];
@@ -1832,6 +1854,13 @@ export function run(argv, log = console.log) {
   for (const k of ["state", "dump", "count"]) for (const v of a[k] || []) if (badPath(v)) { log(pathRefusal(a._[0], v)); return 1; }
   // The user file and the script itself are printed too: the same refusal.
   for (const v of [process.env.BOARD_USER_CONFIG || "", fileURLToPath(import.meta.url)]) if (badPath(v)) { log(pathRefusal(a._[0], v)); return 1; }
+  // A board folder from before the rename: do not start a new empty board beside it.
+  // waiting works on the paths it is given and never reads a state file.
+  const dotBoard = a._[0] !== "waiting" && !a.state && fs.statSync(BOARD_DIR, { throwIfNoEntry: false });
+  if (dotBoard && !dotBoard.isDirectory()) { log(`${a._[0]}: ${shq(BOARD_DIR)} is not a folder; move it away`); return 1; }
+  if (a._[0] !== "waiting" && !a.state && !fs.existsSync(path.join(BOARD_DIR, "state.json")) && fs.existsSync(path.join("board", "state.json"))) {
+    log(`${a._[0]}: the board folder is now ${shq(BOARD_DIR)}. Rename ${shq("board")} to ${shq(BOARD_DIR)}, or pass --state ${shq("board/state.json")}`); return 1;
+  }
   try { cmd(a, log); return 0; } catch (e) { if (e instanceof Stop) { log(e.message); return 1; } throw e; }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = run(process.argv.slice(2));

@@ -1,5 +1,5 @@
 {
- "_about": "An example board config. Keys that start with _ are comments. Copy what you need into board/config.json or the user file; to use the checks, rename _examples.checks to checks at the top level.",
+ "_about": "An example board config. Keys that start with _ are comments. Copy what you need into .board/config.json or the user file; to use the checks, rename _examples.checks to checks at the top level.",
  "title": "Lab network",
  "link_hosts": ["wiki.example.com", "tracker.example.com"],
  "tags": [{"id": "cost", "label": "Costs money"}, {"id": "ops", "label": "Operations"}],

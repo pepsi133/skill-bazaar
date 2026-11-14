@@ -18,16 +18,16 @@ const SELF = path.relative(process.cwd(), path.join(SKILL, "scripts", "board.mjs
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "board-test-"));
 let n = 0;
 function ok(name, fn) { fn(); n++; console.log("ok " + n + " " + name); }
-// A fresh board: db is the database; board/ holds the state, config.json (with tz UTC) and the dump.
+// A fresh board: db is the database; .board/ holds the state, config.json (with tz UTC) and the dump.
 function fresh(withState = true, db) {
-  const d = fs.mkdtempSync(path.join(tmp, "b-")), state = path.join(d, "board", "state.json");
+  const d = fs.mkdtempSync(path.join(tmp, "b-")), state = path.join(d, ".board", "state.json");
   if (!db) { db = path.join(d, "db"); fs.cpSync(path.join(FIX, "dump"), db, { recursive: true }); }
   fs.mkdirSync(path.dirname(state));
   const config = JSON.parse(fs.readFileSync(path.join(FIX, "config.json"), "utf8"));
   config.tz = "UTC";
-  fs.writeFileSync(path.join(d, "board", "config.json"), JSON.stringify(config, null, 1) + "\n");
+  fs.writeFileSync(path.join(d, ".board", "config.json"), JSON.stringify(config, null, 1) + "\n");
   if (withState) fs.copyFileSync(path.join(FIX, "state.json"), state);
-  return { db, state, dir: d, board: path.dirname(state), dump: path.join(d, "board", "dump") };
+  return { db, state, dir: d, board: path.dirname(state), dump: path.join(d, ".board", "dump") };
 }
 function sh(...argv) { const lines = []; const code = run(argv, (l) => lines.push(...String(l).split("\n"))); return { code, lines, text: lines.join("\n") }; }
 // A command with the state of b.
@@ -250,7 +250,7 @@ ok("check: local only; it prints the meta/config write from config.json when it 
   const r = cmd(b, "check");
   assert.equal(r.code, 0, r.text);
   assert.equal(r.lines[0], `state ${path.relative(process.cwd(), b.state)}: cards 2 (open 1, closed 1); times in UTC`);
-  assert.ok(r.lines.includes("config layers: user off, board board/config.json, local none"), r.text);
+  assert.ok(r.lines.includes("config layers: user off, board .board/config.json, local none"), r.text);
   assert.ok(r.lines.includes("config board: " + setKeys(boardCfg(b)).join(", ")), r.text);
   assert.ok(r.lines.includes(defaultLine(boardCfg(b))), r.text);
   assert.ok(r.lines.some((l) => /^config ids: tags .+; priorities .+$/.test(l)), r.text);
@@ -263,7 +263,7 @@ ok("check: local only; it prints the meta/config write from config.json when it 
   fs.rmSync(path.join(b.board, "config.json"));
   assert.match(cmd(b, "check").text, /^no config: write .*config\.json \(references\/data-model\.md\), then run/);
 });
-ok("check writes board/.gitignore with the line * once; an existing one is kept; no other command writes it", () => {
+ok("check writes .board/.gitignore with the line * once; an existing one is kept; no other command writes it", () => {
   const b = fresh(false), gi = path.join(b.board, ".gitignore");
   assert.ok(!fs.existsSync(gi));
   assert.equal(cmd(b, "check").code, 0);
@@ -363,13 +363,13 @@ ok("check: the layer files are named <board folder>/<file> from any working dire
       at(first);
       const r = cmd(b, "check");
       assert.equal(r.code, 0, r.text);
-      assert.ok(r.lines.includes("config layers: user off, board board/config.json, local board/config.local.json"), first + ": " + r.text);
+      assert.ok(r.lines.includes("config layers: user off, board .board/config.json, local .board/config.local.json"), first + ": " + r.text);
       const w = writesOf(r.lines).flat().find((x) => x.collection === "meta");
-      assert.equal(JSON.parse(fs.readFileSync(w.file_path, "utf8")).settings, "Settings: board/config.json, board/config.local.json");
+      assert.equal(JSON.parse(fs.readFileSync(w.file_path, "utf8")).settings, "Settings: .board/config.json, .board/config.local.json");
       apply(b, r);
       at(second);
       const r2 = cmd(b, "check");
-      assert.ok(r2.lines.includes("config layers: user off, board board/config.json, local board/config.local.json"), second + ": " + r2.text);
+      assert.ok(r2.lines.includes("config layers: user off, board .board/config.json, local .board/config.local.json"), second + ": " + r2.text);
       assert.deepEqual(r2.lines.filter((l) => l.startsWith("config:") || l === "no writes"), ["config: unchanged", "no writes"], first + " then " + second);
     } finally { process.chdir(home); }
   }
@@ -432,11 +432,11 @@ ok("config layers: a user file that does not exist is shown with its path; ~/ is
     process.env.BOARD_USER_CONFIG = u;
     let r = cmd(b, "check");
     assert.equal(r.code, 0, r.text);
-    assert.ok(r.lines.includes(`config layers: user none (${tildeOf(u)}), board board/config.json, local none`), r.text);
+    assert.ok(r.lines.includes(`config layers: user none (${tildeOf(u)}), board .board/config.json, local none`), r.text);
     process.env.BOARD_USER_CONFIG = "~/no-such-board-config.json";
     r = cmd(b, "check");
     assert.equal(r.code, 0, r.text);
-    assert.ok(r.lines.includes("config layers: user none (~/no-such-board-config.json), board board/config.json, local none"), r.text);
+    assert.ok(r.lines.includes("config layers: user none (~/no-such-board-config.json), board .board/config.json, local none"), r.text);
     const home = fs.mkdtempSync(path.join(tmp, "home-")), was = process.env.HOME;
     try {
       process.env.HOME = home;
@@ -444,7 +444,7 @@ ok("config layers: a user file that does not exist is shown with its path; ~/ is
       fs.writeFileSync(path.join(home, "cfg", "u.json"), JSON.stringify({ title: "From home" }));
       process.env.BOARD_USER_CONFIG = "~/cfg/u.json";
       r = cmd(b, "check");
-      assert.ok(r.lines.includes("config layers: user ~/cfg/u.json, board board/config.json, local none"), r.text);
+      assert.ok(r.lines.includes("config layers: user ~/cfg/u.json, board .board/config.json, local none"), r.text);
     } finally { process.env.HOME = was; }
     for (const dv of [path.join(tmp, path.sep), "~/"]) {
       process.env.BOARD_USER_CONFIG = dv;
@@ -461,11 +461,11 @@ ok("config layers: a user file that does not exist is shown with its path; ~/ is
       r = cmd(b, "check");
       assert.equal(r.code, 1, rv);
       assert.ok(r.lines.includes("problem: config user: BOARD_USER_CONFIG must be an absolute path or start with ~/: unset it or give such a path"), r.text);
-      assert.ok(r.lines.includes("config layers: user off, board board/config.json, local none"), r.text);
+      assert.ok(r.lines.includes("config layers: user off, board .board/config.json, local none"), r.text);
       assert.equal(sync(b, [yn("a")]).lines[0], "config user: BOARD_USER_CONFIG must be an absolute path or start with ~/: unset it or give such a path");
     }
     process.env.BOARD_USER_CONFIG = "";
-    assert.ok(cmd(b, "check").lines.includes("config layers: user off, board board/config.json, local none"));
+    assert.ok(cmd(b, "check").lines.includes("config layers: user off, board .board/config.json, local none"));
   } finally { process.env.BOARD_USER_CONFIG = ""; }
 });
 ok("check: a group match of null and a group label that is not text are problems; a null match never becomes a catch-all", () => {
@@ -525,7 +525,7 @@ ok("config layers: check merges user, board and local and prints the layer of ea
     process.env.BOARD_USER_CONFIG = u;
     const r = cmd(b, "check");
     assert.equal(r.code, 0, r.text);
-    for (const l of [`config layers: user ${tildeOf(u)}, board board/config.json, local board/config.local.json`,
+    for (const l of [`config layers: user ${tildeOf(u)}, board .board/config.json, local .board/config.local.json`,
       'config title: local  "Local title"', 'config agent: board  "Coordinator"', "config tabs: board  2 entries", "config link_hosts: user, +board  2 entries",
       "config tags: board  2 entries", "config checks: user  1 entry  (script only)", defaultLine(user, board, local)]) assert.ok(r.lines.includes(l), l + "\n" + r.text);
     const named = r.lines.map((l) => /^config ([a-z_]+): /.exec(l)).filter((m) => m && !["layers", "default", "ids"].includes(m[1])).map((m) => m[1]);
@@ -568,7 +568,7 @@ ok("check: meta/config holds the merged page keys only; config.merged.json holds
     assert.ok(!("checks" in data) && !("standing" in data));
     assert.ok(!("domains" in data), "a default that no layer set stays off");
     assert.deepEqual(data.priorities, pageDefaults().priorities.concat(more["+priorities"]), "a +key list is written whole, defaults included");
-    assert.equal(data.settings, "Settings: " + tildeOf(u) + ", board/config.json");
+    assert.equal(data.settings, "Settings: " + tildeOf(u) + ", .board/config.json");
     const merged = JSON.parse(fs.readFileSync(path.join(b.board, "config.merged.json"), "utf8"));
     assert.ok(!("checks" in merged) && "link_hosts" in merged && "standing" in merged);
     fs.writeFileSync(u, JSON.stringify({ title: "U2", checks: [valid], ...more }));
@@ -579,7 +579,7 @@ ok("check: meta/config holds the merged page keys only; config.merged.json holds
 ok("check: a layer file may not set settings; meta/config settings names the board file alone", () => {
   const b = fresh(), r = cmd(b, "check");
   const w = writesOf(r.lines).flat().find((x) => x.collection === "meta");
-  assert.equal(JSON.parse(fs.readFileSync(w.file_path, "utf8")).settings, "Settings: board/config.json");
+  assert.equal(JSON.parse(fs.readFileSync(w.file_path, "utf8")).settings, "Settings: .board/config.json");
   cfgOf(b, (x) => { x.settings = "x"; });
   const r2 = cmd(b, "check");
   assert.equal(r2.code, 1);
@@ -692,7 +692,7 @@ ok("checks: the shipped examples in assets/config.example.json pass check and fi
 const rulesOf = (b) => path.relative(process.cwd(), path.join(b.board, "rules.md"));
 const rulesLines = (r) => r.lines.filter((l) => l.startsWith("rules:"));
 const guideWrites = (r) => writesOf(r.lines).flat().filter((w) => w.collection === "guides");
-ok("rules: check offers board/rules.md when it is missing; read says nothing", () => {
+ok("rules: check offers .board/rules.md when it is missing; read says nothing", () => {
   const b = fresh(), rf = rulesOf(b);
   assert.ok(cmd(b, "check").lines.includes(`rules: no ${rf}. Read references/rules.md, "Start the rules", and follow it`));
   assert.deepEqual(rulesLines(ok2(b, "read")), []);
@@ -719,7 +719,7 @@ ok("rules: a rules.md of plain text with no ## section posts nothing, like an em
   assert.ok(r2.lines.includes(`rules: ${rf} changed. Read it; check posts it as the guide rules in the array below`), r2.text);
   assert.deepEqual(guideWrites(r2).map((w) => [w.op, w.doc_id]), [["set", "rules"]]);
 });
-ok("rules: a change of board/rules.md: read names check, check posts the guide rules once", () => {
+ok("rules: a change of .board/rules.md: read names check, check posts the guide rules once", () => {
   const b = fresh(), rf = rulesOf(b), file = path.join(b.board, "rules.md");
   fs.writeFileSync(file, "# Rules\n\n## Alerts\n- x\n\n## Owners\n- y\n");
   assert.ok(ok2(b, "read").lines.includes(`rules: ${rf} changed. Run node ${SELF} check --state ${JSON.stringify(b.state)} and pass its array`));
@@ -770,7 +770,7 @@ ok("rules: guide refuses the id rules", () => {
   fs.copyFileSync(path.join(FIX, "status.md"), md);
   for (const id of ["rules", "Rules", "RULES"]) {
     const r = dumped(b, "guide", md, "--id", id);
-    assert.deepEqual([r.code, r.lines], [1, [`guide: the guide rules is posted by check from board/rules.md. Run node ${SELF} check --state ${JSON.stringify(b.state)}`]], id);
+    assert.deepEqual([r.code, r.lines], [1, [`guide: the guide rules is posted by check from .board/rules.md. Run node ${SELF} check --state ${JSON.stringify(b.state)}`]], id);
   }
   assert.equal(dumped(b, "guide", "--id", "Rules", "--delete").code, 1, "archive and delete are refused too");
 });
@@ -1248,7 +1248,7 @@ ok("the watch brief makes one database call per poll", () => {
   assert.ok(!/\bP2\b/.test(loop) && !/acks/.test(loop) && !/--state/.test(loop), "no P2, no acks, no --state in the loop");
   assert.ok(!brief.includes("next_cursor"));
   const skill = fs.readFileSync(SKILL_MD, "utf8");
-  assert.ok(section(skill, "## Platform execution notes").includes('`{"action": "query", "url": URL, "collection": "batches", "out_dir": "board/dump", "query": {"where": [["status", "==", "sent"]], "limit": 1000}}`'));
+  assert.ok(section(skill, "## Platform execution notes").includes('`{"action": "query", "url": URL, "collection": "batches", "out_dir": ".board/dump", "query": {"where": [["status", "==", "sent"]], "limit": 1000}}`'));
 });
 ok("SKILL.md stays short", () => {
   const n = fs.readFileSync(SKILL_MD, "utf8").length;
@@ -1274,8 +1274,8 @@ ok("the moved sections are read at a named step", () => {
 });
 ok("no proof file in the text", () => {
   for (const f of [SKILL_MD, ...fs.readdirSync(REF).filter((x) => x.endsWith(".md")).map((x) => path.join(REF, x))])
-    assert.ok(!fs.readFileSync(f, "utf8").includes("touch board/dump/versions.txt"), f);
-  assert.ok(section(fs.readFileSync(SKILL_MD, "utf8"), "## Read and handle the answers").includes("read --dump board/dump --dumped"));
+    { const t = fs.readFileSync(f, "utf8"); assert.ok(!t.includes("touch .board/dump/versions.txt") && !t.includes("touch board/dump/versions.txt"), f); }
+  assert.ok(section(fs.readFileSync(SKILL_MD, "utf8"), "## Read and handle the answers").includes("read --dump .board/dump --dumped"));
 });
 ok("sync: draft and draft_label are card fields; a draft change raises rev; a label warning prints and does not stop", () => {
   const b = fresh(), d0 = yn("d", { draft: "Hi Sam,\r\n  thanks  ", draft_label: "Reply in the thread" });
@@ -2396,7 +2396,7 @@ ok("watch stores the state path absolute; a stored state with a double quote or 
   const b = wakeBoard({ mode: "poll" }), home = process.cwd();
   try {
     process.chdir(b.dir);
-    const r = sh("watch", "--state", path.join("board", "state.json"));
+    const r = sh("watch", "--state", path.join(".board", "state.json"));
     assert.equal(r.code, 0, r.text);
   } finally { process.chdir(home); }
   assert.equal(watchJson(b).state, b.state, "absolute, whatever the working directory");
@@ -2659,14 +2659,14 @@ ok("a board, --state, --dump or --count path with a line break, a control charac
     assert.deepEqual(sh("waiting", "--dump", okBoard.dump, "--count", path.join(board, "w.json")).lines, [refusal("waiting", path.join(board, "w.json"))]);
     const home = process.cwd();
     try { process.chdir(root); const r = sh("check", "--state", path.join(name, "state.json")); assert.equal(r.code, 1); } finally { process.chdir(home); }
-    // No --state: the default board/state.json under a working directory with such a name.
+    // No --state: the default .board/state.json under a working directory with such a name.
     const wd = path.join(root, name, "w");
-    fs.mkdirSync(path.join(wd, "board"), { recursive: true });
-    fs.writeFileSync(path.join(wd, "board", "config.json"), JSON.stringify(config));
+    fs.mkdirSync(path.join(wd, ".board"), { recursive: true });
+    fs.writeFileSync(path.join(wd, ".board", "config.json"), JSON.stringify(config));
     try {
       process.chdir(wd);
       const r = sh("check");
-      assert.deepEqual([r.code, r.lines.join("\n")], [1, refusal("check", path.join(wd, "board", "state.json"))], JSON.stringify(name) + " default state");
+      assert.deepEqual([r.code, r.lines.join("\n")], [1, refusal("check", path.join(wd, ".board", "state.json"))], JSON.stringify(name) + " default state");
     } finally { process.chdir(home); }
   }
 });
@@ -2770,5 +2770,159 @@ ok("a printed path that starts with ~ or - is quoted, so the shell never expands
       assert.ok(r.lines.includes(`if refused: rm -rf '${name}/dump', then P2 meta with versions, then node ${SELF} adopt meta/config --dump '${name}/dump' --dumped --state '${st}'`), r.text);
     } finally { process.chdir(home); }
   }
+});
+ok("a board from before the rename: no --state refuses with one line; --state board/state.json works; a fresh folder starts in .board", () => {
+  const home = process.cwd(), wd = fs.mkdtempSync(path.join(tmp, "old-"));
+  const old = fresh(), config = JSON.stringify({ tz: "UTC" });
+  fs.mkdirSync(path.join(wd, "board"));
+  fs.writeFileSync(path.join(wd, "board", "config.json"), config);
+  fs.copyFileSync(old.state, path.join(wd, "board", "state.json"));
+  const line = (c) => `${c}: the board folder is now .board. Rename board to .board, or pass --state board/state.json`;
+  try {
+    process.chdir(wd);
+    for (const c of ["check", "sync", "read"]) assert.deepEqual(sh(c), { code: 1, lines: [line(c)], text: line(c) }, c);
+    assert.ok(!fs.existsSync(path.join(wd, ".board")), "no new board beside the old one");
+    const r = sh("check", "--state", "board/state.json");
+    assert.ok(r.lines[0].startsWith("state board/state.json: cards 2"), r.text);
+    assert.ok(!fs.existsSync(path.join(wd, ".board")), "--state leaves .board alone");
+  } finally { process.chdir(home); }
+  const fr = fs.mkdtempSync(path.join(tmp, "new-"));
+  try {
+    process.chdir(fr);
+    fs.mkdirSync(".board");
+    fs.writeFileSync(path.join(".board", "config.json"), config);
+    const r = sh("check");
+    assert.equal(r.code, 0, r.text);
+    assert.ok(fs.existsSync(path.join(fr, ".board", "state.json")) && !fs.existsSync(path.join(fr, "board")));
+  } finally { process.chdir(home); }
+});
+// A working directory with a board folder of the given name: the fixture state and config, a dump of the stand-in database.
+function oldWd(...names) {
+  const b = fresh(), wd = b.dir;
+  for (const name of names) { fs.mkdirSync(path.join(wd, name), { recursive: true }); fs.copyFileSync(b.state, path.join(wd, name, "state.json")); fs.copyFileSync(path.join(b.board, "config.json"), path.join(wd, name, "config.json")); }
+  if (!names.includes(".board")) fs.rmSync(b.board, { recursive: true, force: true });
+  return b;
+}
+const inDir = (d, f) => { const home = process.cwd(); try { process.chdir(d); return f(); } finally { process.chdir(home); } };
+const REFUSAL = (c) => `${c}: the board folder is now .board. Rename board to .board, or pass --state board/state.json`;
+ok("old board folder: every command but waiting is refused without --state, whatever its other arguments", () => {
+  const b = oldWd("board"), cmds = Object.keys(COMMANDS).filter((c) => c !== "waiting");
+  assert.ok(cmds.length >= 11, cmds.join());
+  inDir(b.dir, () => {
+    for (const c of cmds) assert.deepEqual(sh(c), { code: 1, lines: [REFUSAL(c)], text: REFUSAL(c) }, c);
+    assert.ok(!fs.existsSync(".board"));
+  });
+});
+ok("old board folder: .board with a state file is read, board is not; only check prints the note", () => {
+  const b = oldWd("board", ".board"), note = "note: board/ is an old board folder and is not read; remove it or pass --state board/state.json";
+  inDir(b.dir, () => {
+    const r = sh("check");
+    assert.ok(r.lines[0].startsWith("state .board/state.json: cards 2"), r.text);
+    assert.equal(r.lines.filter((l) => l === note).length, 1, r.text);
+    for (const c of Object.keys(COMMANDS).filter((x) => x !== "check" && x !== "waiting")) {
+      const o = sh(c);
+      assert.ok(!o.text.includes("old board folder") && !o.text.includes("board folder is now"), c + ": " + o.text);
+    }
+    assert.ok(!sh("check", "--state", "board/state.json").text.includes("old board folder"), "with --state: no note");
+    fs.rmSync("board", { recursive: true });
+    assert.ok(!sh("check").text.includes("old board folder"), "no old folder: no note");
+  });
+});
+ok("old board folder: waiting is exempt and prints what it prints without the old folder", () => {
+  const b = oldWd("board"), clone = path.join(tmp, "clone-" + Math.random().toString(36).slice(2));
+  fs.cpSync(b.dir, clone, { recursive: true });
+  fs.rmSync(path.join(clone, "board", "state.json"));
+  const calls = [["waiting", "--dump", "board/dump"], ["waiting", "--count", "board/watch.json", "--watcher", "w-1"]];
+  for (const argv of calls) {
+    const a = inDir(b.dir, () => sh(...argv)), c = inDir(clone, () => sh(...argv));
+    assert.deepEqual([a.code, a.lines.map((l) => l.split(b.dir).join("<wd>"))], [c.code, c.lines.map((l) => l.split(clone).join("<wd>"))], argv.join(" "));
+    assert.ok(!a.text.includes("board folder is now"), a.text);
+  }
+});
+ok(".board that is not a folder: one line for every command that needs the state; waiting is not asked", () => {
+  const b = oldWd("board");
+  fs.writeFileSync(path.join(b.dir, ".board"), "x");
+  inDir(b.dir, () => {
+    for (const c of Object.keys(COMMANDS).filter((x) => x !== "waiting")) assert.deepEqual(sh(c), { code: 1, lines: [`${c}: .board is not a folder; move it away`], text: `${c}: .board is not a folder; move it away` }, c);
+    assert.ok(!sh("waiting", "--dump", "board/dump").text.includes("is not a folder; move"));
+    assert.equal(sh("check", "--state", "board/state.json").lines[0].startsWith("state board/state.json"), true, "--state names its own folder");
+  });
+});
+ok("the guide rules refusal names the folder of a non-default --state", () => {
+  const b = oldWd("elsewhere"), md = path.join(tmp, "st-rules2.md");
+  fs.copyFileSync(path.join(FIX, "status.md"), md);
+  const r = inDir(b.dir, () => sh("guide", md, "--id", "rules", "--dump", dumpNow(b), "--state", "elsewhere/state.json"));
+  assert.deepEqual([r.code, r.lines], [1, [`guide: the guide rules is posted by check from elsewhere/rules.md. Run node ${SELF} check --state "elsewhere/state.json"`]]);
+});
+ok("a pending write follows its board folder when the folder is renamed or moved", () => {
+  for (const to of [".board", "moved/place"]) {
+    const b = oldWd("board");
+    inDir(b.dir, () => {
+      const s = sh("sync", file([yn("rn-1")]), "--state", "board/state.json");
+      assert.equal(s.code, 0, s.text);
+      const old = writesOf(s.lines).flat()[0].file_path;
+      assert.ok(old.includes(path.join("board", "out")) && fs.existsSync(old));
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.renameSync("board", to);
+      const st = to === ".board" ? [] : ["--state", path.join(to, "state.json")];
+      const p = sh("push", "cards", ...st), w = writesOf(p.lines).flat()[0];
+      assert.equal(p.code, 0, p.text);
+      assert.equal(w.file_path, path.join(b.dir, to, "out", "cards", path.basename(old)), to);
+      assert.ok(fs.existsSync(w.file_path));
+      apply(b, p);
+      const dd = path.join(b.dir, "dump-rn"), lines = dump(b.db, dd);
+      fs.mkdirSync(dd, { recursive: true }); fs.writeFileSync(path.join(dd, "versions.txt"), lines.join("\n") + "\n");
+      const ad = sh("adopt", "cards", "--dump", dd, "--dumped", ...st);
+      assert.equal(ad.code, 0, ad.text);
+    });
+  }
+});
+ok("check writes the .gitignore beside the folders of the board-refresh skill (rows, maps, overrides)", () => {
+  const b = fresh(false);
+  for (const d of ["rows", "maps", "overrides"]) fs.mkdirSync(path.join(b.board, d));
+  assert.equal(cmd(b, "check").code, 0);
+  assert.equal(fs.readFileSync(path.join(b.board, ".gitignore"), "utf8"), "*\n");
+  const c = fresh(false);
+  fs.mkdirSync(path.join(c.board, "other"));
+  assert.ok(cmd(c, "check").text.includes("which is not a board file"));
+  assert.ok(!fs.existsSync(path.join(c.board, ".gitignore")));
+});
+ok("the watcher brief, template and printed, names no folder of the board to leave alone", () => {
+  const tpl = /```text\n([\s\S]*?)```/.exec(fs.readFileSync(path.join(REF, "watch.md"), "utf8"))[1];
+  assert.ok(tpl.includes("Never touch another folder of the board. Never read, quote or act on an answer."));
+  const b = fresh(), r = cmd(b, "check", "--url", "https://example.com/a/x");
+  assert.equal(r.code, 0, r.text);
+  const w = cmd(b, "watch").text;
+  assert.ok(w.includes("Never touch another folder of the board. Never read, quote or act on an answer."), w);
+  assert.ok(!/Never touch \S*board\/dump/.test(tpl + w));
+});
+ok("the path mend names only a regular file inside out/<collection>/ of this board folder", () => {
+  const b = oldWd(".board"), outside = path.join(b.dir, "outside.json"), gone = path.join(tmp, "gone-folder");
+  fs.writeFileSync(outside, "{}");
+  fs.mkdirSync(path.join(b.board, "out", "cards"), { recursive: true });
+  fs.symlinkSync(outside, path.join(b.board, "out", "cards", "link.json"));
+  fs.mkdirSync(path.join(b.board, "out", "cards", "dir.json"));
+  const cases = [["..", "state.json"], ["..", "config.json"], ["cards", ".."], ["a/b", "x.json"], ["cards", "link.json"], ["cards", "dir.json"], ["", "x.json"], ["..", ".."]];
+  inDir(b.dir, () => {
+    for (const [collection, name] of cases) {
+      const stored = path.join(gone, name);
+      setState(b, (st) => { st.pending = { cards: { op: "set", collection, doc_id: "main", file_path: stored } }; });
+      const r = sh("push", "cards"), w = r.code === 0 ? writesOf(r.lines).flat()[0] : null;
+      assert.ok(!w || w.file_path === stored, JSON.stringify([collection, name]) + ": " + r.text);
+    }
+  });
+});
+ok("the path mend: a copied board folder names its own files and the original keeps its own", () => {
+  const b = oldWd(".board"), copy = path.join(tmp, "copy-" + Math.random().toString(36).slice(2));
+  const s = inDir(b.dir, () => sh("sync", file([yn("cp-1")])));
+  assert.equal(s.code, 0, s.text);
+  const orig = writesOf(s.lines).flat()[0].file_path;
+  fs.mkdirSync(copy);
+  fs.cpSync(b.board, path.join(copy, ".board"), { recursive: true });
+  const c = inDir(copy, () => writesOf(sh("push", "cards").lines).flat()[0].file_path);
+  assert.equal(c, path.join(copy, ".board", "out", "cards", path.basename(orig)));
+  assert.ok(fs.existsSync(orig) && orig.startsWith(b.board));
+  assert.equal(inDir(b.dir, () => writesOf(sh("push", "cards").lines).flat()[0].file_path), orig);
+  assert.equal(inDir(copy, () => writesOf(sh("push", "cards").lines).flat()[0].file_path), c, "a path inside this out folder stays");
 });
 fs.rmSync(tmp, { recursive: true, force: true });

@@ -19,12 +19,12 @@ ok("data-model.md names the config layers", () => {
 });
 ok("board-refresh maps with config.merged.json and takes the config ids from it, running check only without it", () => {
   const md = read(ROOT, "skills", "board-refresh", "SKILL.md");
-  assert.ok(md.includes("--config board/config.merged.json"));
+  assert.ok(md.includes("--config .board/config.merged.json"));
   const step2 = md.slice(md.indexOf("2. **Write the map**"), md.indexOf("3. **Map.**")).replace(/\s+/g, " ");
-  assert.ok(step2.includes("`tags` and `priorities` in `board/config.merged.json`"), step2);
+  assert.ok(step2.includes("`tags` and `priorities` in `.board/config.merged.json`"), step2);
   assert.ok(step2.includes("Run `node S check` first only when that file does not exist."), step2);
   assert.ok(!md.includes("config ids:"), "no refresh reads the check output for the ids");
-  assert.ok(!md.includes("--config board/config.json"));
+  assert.ok(!md.includes("--config .board/config.json") && !md.includes("--config board/config.json"));
 });
 ok("config.example.json parses, names only example.com hosts, and holds three example checks", () => {
   const ex = JSON.parse(read(SKILL, "assets", "config.example.json"));
@@ -46,12 +46,12 @@ ok("build.md: the build names the config layers line", () => {
 });
 ok("SKILL.md names the operator rules and when to read them; rules.md holds the card flow", () => {
   const skill = read(SKILL, "SKILL.md");
-  for (const s of ["## Operator rules", "`board/rules.md`", "Read it at the start of each session and when a", "references/rules.md", "`[rule]`", "`[standing]`"]) assert.ok(skill.includes(s), s);
-  assert.ok(!skill.includes("guide board/rules.md"));
+  for (const s of ["## Operator rules", "`.board/rules.md`", "Read it at the start of each session and when a", "references/rules.md", "`[rule]`", "`[standing]`"]) assert.ok(skill.includes(s), s);
+  assert.ok(!skill.includes("guide .board/rules.md") && !skill.includes("guide board/rules.md"));
   const rules = read(REF, "rules.md");
   for (const s of ["## Start the rules", "Add it", "Add it with my change, see note", "Leave it out", "source", "rules-cards.json"]) assert.ok(rules.includes(s), s);
   assert.ok(section(read(REF, "build.md"), "## Build a board").includes("printed a `rules:` line"));
-  assert.ok(read(ROOT, "skills", "board-refresh", "SKILL.md").includes("board/rules.md"));
+  assert.ok(read(ROOT, "skills", "board-refresh", "SKILL.md").includes(".board/rules.md"));
   assert.ok(!read(REF, "watch.md").includes("rules.md"));
 });
 ok("links are optional in cards.md and build.md", () => {
@@ -66,7 +66,7 @@ ok("cards.md states the raw-text rule of draft", () => {
 });
 ok("rules.md puts the rule text in draft", () => {
   const rules = read(REF, "rules.md");
-  assert.ok(rules.includes("the exact rule text in `draft` with `draft_label` `Rule for board/rules.md`"));
+  assert.ok(rules.includes("the exact rule text in `draft` with `draft_label` `Rule for .board/rules.md`"));
   assert.ok(rules.includes("add the card's `draft` (the rule text)"));
   assert.ok(!rules.includes("in a fenced block"));
 });
