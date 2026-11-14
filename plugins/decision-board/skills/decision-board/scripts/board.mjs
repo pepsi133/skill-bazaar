@@ -10,9 +10,19 @@ import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
+// A path as a word of a printed command line: bare when it is made of safe characters and does not start with - or
+// ~, else in single quotes with each ' written as '\''. No shell expands anything inside single quotes.
+const SAFE_PATH = /^[A-Za-z0-9_./:@%+=,-]+$/;
+const safePath = (p) => SAFE_PATH.test(p) && !/^[-~]/.test(p);
+function shq(p) { p = String(p); return safePath(p) ? p : "'" + p.replace(/'/g, "'\\''") + "'"; }
+// The same for a path that the script always printed in double quotes: a safe path keeps them, as before.
+function dq(p) { p = String(p); return safePath(p) ? '"' + p + '"' : shq(p); }
+// A path that cannot stay on one printed line: a control character, U+2028 or U+2029.
+const badPath = (p) => /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(p);
+const pathRefusal = (cmd, p) => `${cmd}: the path ${q(p)} holds a line break or a control character; use another path`;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WAIT_SH = path.resolve(HERE, "..", "assets", "wait.sh");
-const SELF = path.relative(process.cwd(), fileURLToPath(import.meta.url)) || "board.mjs";
+const SELF = shq(path.relative(process.cwd(), fileURLToPath(import.meta.url)) || "board.mjs");
 const USAGE = `Usage: node ${SELF} <command> ... [--state <file>]
   check [--url <link>]                      merge the config layers, check them and the state; print the meta/config write when it changed; --url stores the artifact link for watch
   sync <file> [--source <s>] [<file> [--source <s>]]... [--allow-close]   add and change cards; a --source closes that source's cards its file no longer holds
@@ -50,7 +60,10 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
 // runs only after new Run(...) applied the config.
 const nowMs = () => { const v = process.env.BOARD_NOW; if (!v) return Date.now(); const t = Date.parse(v); if (isNaN(t)) fail("BOARD_NOW: not a time: " + q(v)); return t; };
 const now = () => P.stampIn(nowMs(), P.cfg.tz, false);
-const q = (s) => JSON.stringify(String(s));
+// JSON, with what JSON leaves raw escaped too: DEL and the C1 controls, the line separators U+2028 and U+2029,
+// the bidi controls, U+200B and U+FEFF; never U+200C and U+200D, which words and emoji need. q quotes one text.
+const js = (x) => JSON.stringify(x).replace(/[\u007f-\u009f\u200b\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+const q = (s) => js(String(s));
 const lower = (s) => String(s || "").trim().toLowerCase();
 // JSON with sorted keys, to compare a board copy with a local one.
 const stable = (x) => JSON.stringify(x, (k, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map((y) => [y, v[y]])) : v));
@@ -64,7 +77,7 @@ function fail(lines) { throw new Stop([].concat(lines).join("\n")); }
 
 // ---- arguments: positionals, and flags that take every value up to the next flag. sync reads the raw order.
 const SWITCHES = ["archive", "delete", "allow-close", "all", "dumped", "idle", "restart"];
-// The flags each command takes. A later cluster adds a line here for a new command.
+// The flags each command takes. A new command adds its line here.
 export const FLAGS = {
   check: ["state", "url"],
   sync: ["state", "source", "allow-close"],
@@ -80,16 +93,27 @@ export const FLAGS = {
   watch: ["state", "restart"],
 };
 function parseArgs(argv) {
-  const a = { _: [], raw: argv };
-  for (let i = 0, key = null; i < argv.length; i++) {
-    const v = argv[i];
-    if (v.startsWith("--")) { key = v.slice(2); a[key] = a[key] || []; if (SWITCHES.includes(key)) key = null; }
-    else if (key) a[key].push(v);
+  // No prototype: a flag such as --__proto__ or --constructor is a plain key, refused as an unknown flag.
+  // --_ and --raw would overwrite the positionals and the raw order: they are kept aside (BAD) and refused.
+  const a = Object.assign(Object.create(null), { _: [], raw: argv });
+  let cur = null;
+  for (const v of argv) {
+    if (v.startsWith("--")) {
+      const key = v.slice(2);
+      if (key === "_" || key === "raw") { if (a[BAD] === undefined) a[BAD] = key; cur = []; continue; }
+      a[key] = a[key] || [];
+      cur = SWITCHES.includes(key) ? null : a[key];
+    } else if (cur) cur.push(v);
     else a._.push(v);
   }
   return a;
 }
+const BAD = Symbol("a flag that is a key of the parsed arguments");
+// The --state part of a printed command line: the --state the command was given, else nothing.
+const stateArg = (a) => (a.state ? " --state " + dq(one(a, "state")) : "");
 const one = (a, k) => (a[k] && a[k].length ? a[k][a[k].length - 1] : "");
+// The words after the last --k up to the next flag, joined with one space: a text given without quotes.
+const words = (a, k) => { const i = a.raw.lastIndexOf("--" + k), out = []; for (let j = i + 1; i >= 0 && j < a.raw.length && !a.raw[j].startsWith("--"); j++) out.push(a.raw[j]); return out.join(" "); };
 
 // ---- dumps: <dir>/<collection>/<doc id>.json. A file holds the fields (as ArtifactData saves them), {version, data}
 // (and maybe id), or the fields with "version" beside them. A version in the file wins; else it comes from
@@ -109,8 +133,11 @@ function ownCopy(o, keepUnsafe) {
 // An id that the script prints as a word of a command line: the page's idRe, and not a leading - (a flag) or ~ (the
 // shell expands it).
 const plainId = (s) => typeof s === "string" && S.idRe.test(s) && !/^[-~]/.test(s);
-// A path in an error line: as it is, or JSON-quoted when it holds a space, a quote, a backslash, $ or a backtick.
-const shownPath = (p) => (/[\s"'`$\\]/.test(p) ? q(p) : p);
+// A config id (a tag, a priority) in a printed line: as it is when plain, else JSON-quoted.
+const idText = (s) => (plainId(s) ? s : q(s));
+// A path in an error line: as it is, or JSON-quoted when it holds a space, a quote, a backslash, $, a backtick,
+// a C1 control or a bidi or zero-width character.
+const shownPath = (p) => (/[\s"'`$\\\u007f-\u009f\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(p) ? q(p) : p);
 // Wrapped: exactly version and an object data, maybe id. Version and an object data beside other keys is no known shape.
 function isWrapped(raw, file) {
   if (!isPlain(raw) || !isPlain(raw.data) || !Object.prototype.hasOwnProperty.call(raw, "version")) return false;
@@ -197,14 +224,18 @@ export const CONFIG_KEYS = Object.keys(P.DEFAULTS).filter((k) => !WRITTEN_KEYS.i
 // The defaults as plain objects of this realm (P.DEFAULTS comes from a vm context, where isPlain is false).
 export const pageDefaults = () => plain(Object.assign({}, P.DEFAULTS, SCRIPT_DEFAULTS));
 // The user file, outside any repository: BOARD_USER_CONFIG ("" turns the layer off), else XDG, else ~/.config.
+const userValueOk = (v) => path.isAbsolute(v) || v.startsWith("~/");
 function userConfigPath() {
   const v = process.env.BOARD_USER_CONFIG, x = process.env.XDG_CONFIG_HOME;
-  if (v !== undefined) return v === "" ? "" : path.resolve(v);
+  // ~/ means the home folder; a relative value is refused by loadConfig and turns the layer off.
+  if (v !== undefined) return v === "" || !userValueOk(v) ? "" : v.startsWith("~/") ? path.join(os.homedir(), v.slice(2)) : path.resolve(v);
   if (x && path.isAbsolute(x)) return path.join(x, "decision-board", "config.json");
   return path.join(os.homedir(), ".config", "decision-board", "config.json");
 }
 function tilde(file) { const h = os.homedir() + path.sep; return file.startsWith(h) ? "~/" + file.slice(h.length) : file; }
 function rel(file) { return path.relative(process.cwd(), file) || file; }
+// A layer file of the board folder by its folder and file name, the same from any working directory.
+function boardName(file) { return path.basename(path.dirname(file)) + "/" + path.basename(file); }
 const ownVal = (o, k) => (Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);
 // The problem of key k of the layer object over, given the earlier value of its base key: a text, true to skip the
 // key without a problem (the "+key" half of a pair, reported under "key"), or "" when it merges.
@@ -284,13 +315,46 @@ export function mergeLayers(layers, defaults) {
 }
 // The footer line of the page: the layer files that exist, the user file first.
 function settingsText(files) {
-  return "Settings: " + files.filter((f) => f.exists).map((f) => (f.name === "user" ? tilde(f.file) : rel(f.file))).join(", ");
+  return "Settings: " + files.filter((f) => f.exists).map((f) => (f.name === "user" ? tilde(f.file) : boardName(f.file))).join(", ");
+}
+// The group and tab entries of one raw layer file. The merge drops a key whose value is null, so a null in a match widens
+// it, up to a group that takes every card, and a null label falls back to the id: each null is a problem, named by
+// the key in that file. A label that is not text too.
+function groupProblems(name, data) {
+  const out = [];
+  for (const kind of ["groups", "tabs"]) {
+    // A group without its match takes every card; a tab without it takes none by source or tag.
+    const whole = kind === "groups" ? "null takes every card" : "null drops the match, so the tab takes no card by source or tag";
+    const walk = (v, at) => {
+      if (Array.isArray(v)) v.forEach((x, j) => (x === null ? out.push(`${name}: ${at}[${j}]: ${whole}; give a match or remove the entry`) : walk(x, `${at}[${j}]`)));
+      else if (isPlain(v)) for (const k of Object.keys(v)) {
+        if (v[k] === null) out.push(`${name}: ${at}.${k}: null drops the key and ${kind === "groups" ? "widens" : "changes"} the match; give a value or remove the key`);
+        else walk(v[k], `${at}.${k}`);
+      }
+    };
+    for (const k of [kind, "+" + kind]) {
+      const list = ownVal(data, k);
+      if (!Array.isArray(list)) continue;
+      list.forEach((g, i) => {
+        if (!isPlain(g)) return;
+        const at = `${k}[${i}]`, m = ownVal(g, "match"), label = ownVal(g, "label");
+        if (m === null) out.push(`${name}: ${at}.match: ${whole}; give a match or remove the key`);
+        else walk(m, at + ".match");
+        if (label === null) out.push(`${name}: ${at}.label: null; give a text or remove the key`);
+        else if (label !== undefined && typeof label !== "string") out.push(`${name}: ${at}.label: not text`);
+      });
+    }
+  }
+  return out;
 }
 // The three layer files of a board folder, merged over the defaults. page: the keys for meta/config; merged: the
 // full config for config.merged.json; unknown: the unknown-field problems of each file, top level only.
 function loadConfig(dir) {
   const u = userConfigPath(), files = [["user", u], ["board", path.join(dir, "config.json")], ["local", path.join(dir, "config.local.json")]]
     .map(([name, file]) => ({ name, file, exists: !!file && fs.existsSync(file) }));
+  // A user file that is a folder is no layer: a problem that names the variable, not a read error.
+  const userDir = files[0].exists && fs.statSync(u).isDirectory();
+  if (userDir) files[0].exists = false;
   const layers = files.filter((f) => f.exists).map((f) => {
     const data = readJson(f.file);
     if (!isPlain(data)) fail(`${f.file}: not a JSON object`);
@@ -306,7 +370,11 @@ function loadConfig(dir) {
     }
   }
   const { config, src, problems } = mergeLayers(layers, pageDefaults());
-  const page = Object.assign({}, config), merged = Object.assign(pageDefaults(), config);
+  for (const { name, data } of layers) problems.push(...groupProblems(name, data));
+  const uv = process.env.BOARD_USER_CONFIG;
+  if (uv && !userValueOk(uv)) problems.push("user: BOARD_USER_CONFIG must be an absolute path or start with ~/: unset it or give such a path");
+  if (userDir) problems.push(`user: BOARD_USER_CONFIG names the folder ${shownPath(tilde(u))}: give the path of a JSON file or unset it`);
+  const page =Object.assign({}, config), merged = Object.assign(pageDefaults(), config);
   SCRIPT_KEYS.concat(WRITTEN_KEYS).forEach((k) => delete page[k]);
   page.settings = settingsText(files);
   WRITTEN_KEYS.concat(MERGED_OMIT).forEach((k) => delete merged[k]);
@@ -319,16 +387,19 @@ class Run {
     this.a = a;
     this.file = path.resolve(one(a, "state") || path.join("board", "state.json"));
     this.dir = path.dirname(this.file);
+    if (badPath(this.file)) fail(pathRefusal(a._[0], this.file));
     const saved = readJson(this.file);
     if (saved && (!isPlain(saved) || !Array.isArray(saved.cards) || !saved.cards.every(isPlain) || !isPlain(saved.next)))
       fail(this.file + ": not a state file {cards, next}");
-    if (saved && olderModel(saved)) fail(`${this.file}: a state file of an older board model. Delete it and run \`node ${SELF} check\``);
-    if (!saved && !o.create) fail(`no state ${this.file}. Run \`node ${SELF} check\` once to make it`);
+    if (saved && olderModel(saved)) fail(`${this.file}: a state file of an older board model. Delete it and run \`node ${SELF} check${stateArg(a)}\``);
+    if (!saved && !o.create) fail(`no state ${this.file}. Run \`node ${SELF} check${stateArg(a)}\` once to make it`);
     this.saved = saved;
     this.st = saved ? plain(saved) : { cards: [], next: {} };
     for (const k of ["pending", "unlogged"]) this.st[k] = isPlain(this.st[k]) ? this.st[k] : {};
     // A batch id is printed inside command lines: a pending ack or log entry of an id that is not plain goes.
     for (const id of Object.keys(this.st.unlogged)) if (!plainId(id)) delete this.st.unlogged[id];
+    // A purge key is printed inside command lines too: only a plain stamp stays.
+    for (const k of Object.keys(this.st.pending)) if (k.startsWith("purge/") && !plainId(k.slice(6))) delete this.st.pending[k];
     for (const k of Object.keys(this.st.pending)) if (k.startsWith("batches/")) {
       if (!plainId(k.slice(8))) { delete this.st.pending[k]; continue; }
       const v = ackValue(ackEntry(this.st.pending[k]));
@@ -346,6 +417,8 @@ class Run {
     // Values the script prints or acts on: only what it writes itself (a real wake day, a known close reason).
     for (const [id, x] of Object.entries(this.st.snoozed || {})) if (!isPlain(x) || !P.realDate(x.day)) delete this.st.snoozed[id];
     for (const [id, x] of Object.entries(this.st.ctl_closed || {})) if (!["other", "dismiss", "done"].includes(x)) delete this.st.ctl_closed[id];
+    // src_closed: the ids of ctl_closed whose card its source had closed before the control.
+    if (this.st.src_closed !== undefined) this.st.src_closed = Array.isArray(this.st.src_closed) ? this.st.src_closed.filter((id) => typeof id === "string" && ownVal(this.st.ctl_closed || {}, id)) : [];
     this.configFile = path.join(this.dir, "config.json");
     this.load = loadConfig(this.dir);
     this.config = this.load.any ? this.load.config : null;
@@ -356,9 +429,9 @@ class Run {
   needConfig(fromCheck) {
     if (!this.load.any) {
       const u = this.load.files[0].file;
-      fail(`no config: write ${rel(this.configFile)}${u ? " or the user file " + tilde(u) : ""} (references/data-model.md), then run \`node ${SELF} check\``);
+      fail(`no config: write ${rel(this.configFile)}${u ? " or the user file " + tilde(u) : ""} (references/data-model.md), then run \`node ${SELF} check${stateArg(this.a)}\``);
     }
-    if (!fromCheck && this.load.problems.length) fail(this.load.problems.map((p) => "config " + p).concat(`fix the config, then run \`node ${SELF} check\``));
+    if (!fromCheck && this.load.problems.length) fail(this.load.problems.map((p) => "config " + p).concat(`fix the config, then run \`node ${SELF} check${stateArg(this.a)}\``));
   }
   card(id) { return this.st.cards.find((c) => c.id === id); }
   needCards(ids, cmd) {
@@ -462,6 +535,8 @@ class Run {
       for (const id of Object.keys(this.st[k])) if (!this.card(id)) delete this.st[k][id];
       if (!Object.keys(this.st[k]).length) delete this.st[k];
     }
+    if (this.st.src_closed) this.st.src_closed = this.st.src_closed.filter((id) => this.st.ctl_closed && ownVal(this.st.ctl_closed, id));
+    if (this.st.src_closed && !this.st.src_closed.length) delete this.st.src_closed;
     if (JSON.stringify(this.st) !== JSON.stringify(this.saved)) {
       fs.mkdirSync(this.dir, { recursive: true });
       fs.writeFileSync(this.file + ".tmp", JSON.stringify(this.st, null, 1) + "\n");
@@ -472,8 +547,7 @@ class Run {
   // Where the printed next steps point: the --dump folder of the command, else dump/ beside the state; and --state.
   ctx() {
     const a = this.a;
-    return { dump: a.dump ? one(a, "dump") : path.relative(process.cwd(), path.join(this.dir, "dump")) || "dump",
-      state: a.state ? " --state " + q(one(a, "state")) : "" };
+    return { dump: shq(a.dump ? one(a, "dump") : path.relative(process.cwd(), path.join(this.dir, "dump")) || "dump"), state: stateArg(a) };
   }
 }
 // The calls that dump what adopt needs for a group: the agent never picks the collections itself.
@@ -497,7 +571,7 @@ function printWrites(list, log, ctx) {
   if (!chunks.length) { log("no writes"); return; }
   chunks.forEach((c, i) => {
     log(`batch ${i + 1} of ${chunks.length}: ${c.length} writes. Pass this array as "writes" to one ArtifactData batch call:`);
-    log(JSON.stringify(c.map((w) => w.out)));
+    log(js(c.map((w) => w.out)));
     for (const g of Array.from(new Set(c.map((w) => w.group).filter(Boolean)))) {
       log(`if refused: rm -rf ${ctx.dump}, then ${dumpCalls(g)}, then node ${SELF} adopt ${g} --dump ${ctx.dump} --dumped${ctx.state}`);
       log(`if the reply is lost: node ${SELF} push ${g}${ctx.state}`);
@@ -529,7 +603,7 @@ function cardProblems(c, name, ids, qk) {
   else if (ids.has(c.id)) out.push("id: twice in these files");
   if (typeof c.title !== "string" || !c.title.trim()) out.push("title: missing");
   if (c.kind !== undefined && !P.cfg.kinds.some((k) => k.id === c.kind)) out.push("kind: not one of " + P.cfg.kinds.map((k) => k.id).join(", "));
-  if (c.priority !== undefined && !P.cfg.priorities.some((k) => k.id === c.priority)) out.push("priority: not one of " + P.cfg.priorities.map((k) => k.id).join(", "));
+  if (c.priority !== undefined && !P.cfg.priorities.some((k) => k.id === c.priority)) out.push("priority: not one of " + P.cfg.priorities.map((k) => idText(k.id)).join(", "));
   if (c.status !== undefined && !S.statuses.includes(c.status)) out.push("status: not one of " + S.statuses.join(", "));
   const decision = (c.kind === undefined ? "decision" : c.kind) === "decision";
   if (Array.isArray(c.options)) {
@@ -566,7 +640,7 @@ function linkProblems(links) {
 function tagProblems(tags) {
   if (!Array.isArray(tags)) return [];
   const known = P.cfg.tags.map((t) => t.id), bad = tags.filter((t) => typeof t === "string" && !known.includes(t));
-  const out = bad.length ? [`tags: ${bad.map((t) => JSON.stringify(t)).join(", ")} not in the config tags${known.length ? " (" + known.join(", ") + ")" : ". Set tags in config.json first"}`] : [];
+  const out = bad.length ? [`tags: ${bad.map((t) => js(t)).join(", ")} not in the config tags${known.length ? " (" + known.map(idText).join(", ") + ")" : ". Set tags in config.json first"}`] : [];
   if (new Set(tags).size !== tags.length) out.push("tags: repeated");
   return out;
 }
@@ -689,6 +763,8 @@ function syncFiles(raw) {
   if (!files.length) fail("sync: name the card file");
   return files;
 }
+// A card of a card file in a problem line: its id (quoted when it is not an id), else its place in the files.
+const cardName = (c, i) => (c && typeof c.id === "string" && c.id ? qid(c.id) : "#" + (i + 1));
 function cmdSync(a, log) {
   const r = new Run(a), files = syncFiles(a.raw), ids = new Set(), errs = [], cards = [], allow = !!a["allow-close"];
   r.needConfig();
@@ -701,24 +777,24 @@ function cmdSync(a, log) {
       // A card posted again keeps the first ask that is stored. With --source, every card has that source.
       const ex = typeof c.id === "string" && r.card(c.id);
       if (ex && P.isObj(ex.first_asked)) c.first_asked = plain(ex.first_asked);
-      if (f.source && c.source !== undefined && lower(c.source) !== f.source) errs.push(`${c.id}: source: not the --source ${q(f.source)}`);
+      if (f.source && c.source !== undefined && lower(c.source) !== f.source) errs.push(`${typeof c.id === "string" && c.id ? qid(c.id) : "?"}: source: not the --source ${q(f.source)}`);
       if (f.source) c.source = f.source;
       // source_key names the item a Close or an assign to the agent may write to: only a map file, synced with its
       // --source, carries it.
-      if (!f.source && P.isObj(c) && c.source_key !== undefined) errs.push(`${typeof c.id === "string" && c.id ? c.id : "?"}: source_key: set only by board-refresh map; sync that file with --source`);
+      if (!f.source && P.isObj(c) && c.source_key !== undefined) errs.push(`${typeof c.id === "string" && c.id ? qid(c.id) : "?"}: source_key: set only by board-refresh map; sync that file with --source`);
       cards.push({ c, f });
     });
   }
-  cards.forEach(({ c }, i) => { if (P.isObj(c) && (has(c, "result") || has(c, "result_at"))) errs.push(`${typeof c.id === "string" && c.id ? c.id : "#" + (i + 1)}: result: set only by ack --result`); errs.push(...cardProblems(c, c && typeof c.id === "string" && c.id ? c.id : "#" + (i + 1), ids)); if (c && typeof c.id === "string") ids.add(c.id); });
+  cards.forEach(({ c }, i) => { if (P.isObj(c) && (has(c, "result") || has(c, "result_at"))) errs.push(`${cardName(c, i)}: result: set only by ack --result`); errs.push(...cardProblems(c, cardName(c, i), ids)); if (c && typeof c.id === "string") ids.add(c.id); });
   const ck = compileChecks(r.config.checks === undefined ? [] : r.config.checks);
-  if (ck.problems.length) fail(ck.problems.concat("fix the config, then run `node " + SELF + " check`"));
+  if (ck.problems.length) fail(ck.problems.concat("fix the config, then run `node " + SELF + " check" + stateArg(a) + "`"));
   let hit = false, slowHit = false;
   cards.forEach(({ c }, i) => {
     if (!P.isObj(c)) return;
     const slow = [], h = checkHits(c, ck.checks, slow);
     if (h.some((x) => !slow.includes(x))) hit = true;
     if (slow.length) slowHit = true;
-    errs.push(...h.map((x) => (typeof c.id === "string" && c.id ? c.id : "#" + (i + 1)) + ": " + x));
+    errs.push(...h.map((x) => cardName(c, i) + ": " + x));
   });
   if (hit) errs.push("a check line that does not say took too long is a rule of the operator's config: change the card, never the check");
   // A check that ran out of time says nothing about the card: the check itself needs the change.
@@ -734,6 +810,9 @@ function cmdSync(a, log) {
   const warn = [];
   const defPri = P.cfg.priorities[Math.min(1, P.cfg.priorities.length - 1)].id;
   const ctl = Object.assign({}, r.st.ctl_closed || {});
+  // A card in its source's file again is no longer one that its source closed: an undo of its control reopens it.
+  const srcBack = new Set(cards.filter(({ c, f }) => f.source && P.isObj(c)).map(({ c }) => c.id));
+  if (r.st.src_closed) r.st.src_closed = r.st.src_closed.filter((id) => !srcBack.has(id));
   let dropped = 0;
   for (const { c, f } of cards) {
     const ex = r.card(c.id), old = ex ? plain(P.coerce("item", ex)) : null, doc = { id: c.id };
@@ -754,9 +833,10 @@ function cmdSync(a, log) {
     if ((content || back) && ctl[c.id] !== "other") { held.delete(c.id); delete ctl[c.id]; }
     doc.status = c.status || (old && !content && !back && (!f.source || held.has(c.id)) ? old.status : "open") || "open";
     if (ctl[c.id] === "other") doc.status = "closed";
-    if (doc.status === "open" && !(Array.isArray(doc.links) && doc.links.length)) noLink.push(c.id);
     const strip = (x) => { const y = plain(P.coerce("item", x)); MANAGED.forEach((k) => delete y[k]); return JSON.stringify(y); };
     if (old && strip(doc) === strip(ex)) { n.same++; continue; }
+    // The no-link count: open cards new or changed in this sync, not the operator's rule cards.
+    if (doc.status === "open" && lower(doc.source) !== "rules" && !(Array.isArray(doc.links) && doc.links.length)) noLink.push(c.id);
     if (old && old.status === "closed" && doc.status === "open") reopened.push(c.id);
     doc.rev = old ? old.rev + (content || back ? 1 : 0) : 1;
     if (old && ex.result) { if (doc.rev === old.rev) { doc.result = ex.result; doc.result_at = ex.result_at; } else dropped++; }
@@ -768,12 +848,14 @@ function cmdSync(a, log) {
   const sources = new Set(files.map((f) => f.source).filter(Boolean));
   for (const c of r.st.cards) {
     if (sources.has(lower(c.source)) && !ids.has(c.id) && c.status !== "closed") { c.status = "closed"; c.updated = t; closed.push(c.id); }
+    // A card a control holds closed whose row its source no longer has: an undo must not reopen it.
+    if (sources.has(lower(c.source)) && !ids.has(c.id) && ctl[c.id] && !(r.st.src_closed || []).includes(c.id)) r.st.src_closed = (r.st.src_closed || []).concat(c.id);
   }
   const size = JSON.stringify(r.cardsDoc()).length;
   if (size > MAX_DOC) fail(`sync: the cards document would be ${size} characters, over ${MAX_DOC}. Nothing changed. Close and purge old cards first`);
   log(`sync: ${n.new} new, ${n.rev} changed (rev up), ${n.changed} changed (same rev), ${n.same} unchanged, ${closed.length} closed${closed.length ? " (" + closed.join(", ") + ")" : ""}` +
     (reopened.length ? `, ${reopened.length} reopened (${reopened.join(", ")})` : "") + (dropped ? `, ${dropped} results dropped (rev up)` : ""));
-  noLink.forEach((id) => log(`note: ${qid(id)}: no link`));
+  if (noLink.length) log(`note: no link: ${noLink.length} cards`);
   warn.slice(0, 3).forEach((l) => log(l));
   if (warn.length > 3) log(`warning: and ${warn.length - 3} more drafts that start with a label`);
   if (n.new + n.rev + n.changed + closed.length) { r.st.refreshed = t; r.putCards(); }
@@ -815,7 +897,8 @@ function controlsOf(b) {
 // The flags of one control line; an empty list means the agent and ack act on it.
 function ctlFlags(r, e) {
   const c = r.card(e.id), flags = [];
-  if (!c) return ["[missing]"];
+  // A card that a purge took off the board is not on the board, though the state keeps it until adopt.
+  if (!c || (r.st.purge || []).includes(e.id)) return ["[missing]"];
   const rev = P.coerce("item", c).rev;
   if (S.revBound.includes(e.key)) { if (e.x.rev < rev) flags.push("[stale-rev]"); else if (e.x.rev !== rev) flags.push("[other-rev]"); }
   if (!P.cfg.controls[e.key]) flags.push("[not-enabled]");
@@ -829,20 +912,19 @@ function ctlFlags(r, e) {
   if (e.key === "close" && v === "on" && !(typeof c.source_key === "string" && c.source_key.trim())) flags.push("[no-item]");
   return flags;
 }
-// The value as read prints it. Database text goes through q() or JSON.stringify, so no value can forge a line.
-const ctlText = (e) => (e.key === "tags" ? `+${JSON.stringify(e.x.tags_on || [])} -${JSON.stringify(e.x.tags_off || [])}` : q(e.x[e.key]));
+// The value as read prints it. Database text goes through q() or js(), so no value can forge a line.
+const ctlText = (e) => (e.key === "tags" ? `+${js(e.x.tags_on || [])} -${js(e.x.tags_off || [])}` : q(e.x[e.key]));
 // The value as decisions.md logs it.
 const ctlPlain = (e) => (e.key === "tags" ? [...(e.x.tags_on || []).map((t) => "+" + t), ...(e.x.tags_off || []).map((t) => "-" + t)].join(" ") || "none"
   : e.x[e.key] === "" ? "none" : e.x[e.key]);
 // The source item of a card as read names it: source, source_key and the first link, each through q(); a card
-// with no link (links are optional, B) prints the bare words "link none" in the link's place.
+// with no link (links are optional) prints the bare words "link none" in the link's place.
 const itemOf = (c) => {
   const url = Array.isArray(c.links) && c.links[0] && typeof c.links[0].url === "string" ? c.links[0].url : "";
   return `item ${q(c.source || "")} ${q(c.source_key || "")} ${url ? q(url) : "link none"}`;
 };
 // What the agent does with one control line, printed in brackets at its end: the script decides, the agent follows.
-// flags: the line's flags ([superseded] included). This is the one place a later per-source close command would
-// change the close step.
+// flags: the line's flags ([superseded] included). The close step of every source is worded here, in one place.
 function ctlHint(c, e, flags) {
   // The hints below print the card id inside --close and --result: only a plain id.
   if (flags.length || !plainId(e.id)) return "(skip)";
@@ -852,11 +934,12 @@ function ctlHint(c, e, flags) {
     ? `(do the work the card asks; in a source change only ${itemOf(c)}; leave the card open and add --result ${qid(e.id)} "<what you did, in a few words>" to the ack line)`
     : `(do the work the card asks, with no write to any source; leave the card open and add --result ${qid(e.id)} "<what you did, in a few words>" to the ack line)`;
   if (e.key === "assign" || e.key === "dismiss" || e.key === "done") return "(ack applies it)";
-  if (e.key === "snooze" && v !== "") return `(no follow-up before ${v})`;
+  // A wake day that is today or already past asks for nothing.
+  if (e.key === "snooze" && v !== "" && v > P.dayIn(nowMs(), P.cfg.tz)) return `(no follow-up before ${v})`;
   return "(nothing to do)";
 }
 // read: the running snoozes of the state, as one line, or "". Drops the ones whose day came (today in the config
-// tz), whose card changed rev, or whose card is closed or gone. ack writes r.st.snoozed (4.3 step 2b).
+// tz), whose card changed rev, or whose card is closed or gone. ack writes r.st.snoozed.
 function snoozedLine(r) {
   const today = P.dayIn(nowMs(), P.cfg.tz), s = r.st.snoozed || {}, out = [];
   for (const id of Object.keys(s)) {
@@ -878,10 +961,15 @@ const shown = (s) => P.localStamp(s, P.cfg.tz) || s;
 function cmdWaiting(a, log) {
   // The watcher does exactly what the one line says: no skip line here (read prints it to the owning session).
   const dir = one(a, "dump"), list = waiting(readDump(dir, "batches"));
-  if (!a.count) { log(list.length ? list.map((b) => qid(b.id)).join("\n") : "none"); return; }   // A's form
+  if (!a.count) { log(list.length ? list.map((b) => qid(b.id)).join("\n") : "none"); return; }   // the form without --count
   const file = path.resolve(one(a, "count")), w = readWatch(file);
   if (!w) fail(`waiting: ${file} is not a watch file. Report "watch file missing, run node S watch" and stop`);
-  if (path.resolve(dir) !== w.dump) fail(`waiting: --dump is not the dump folder of ${file}. Report "wrong dump folder, run node S watch" and stop`);
+  // The watcher's reports name watch with the --state of the watch that started it; inside the quoted report the
+  // path takes single quotes (shq) when it needs any.
+  // A state path that cannot sit inside the quoted report (a line break, a double quote, a bidi or zero-width
+  // character) is left out.
+  const st = typeof w.state === "string" && w.state && !badPath(w.state) && !/["\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(w.state) ? " --state " + shq(w.state) : "";
+  if (path.resolve(dir) !== w.dump) fail(`waiting: --dump is not the dump folder of ${file}. Report "wrong dump folder, run node S watch${st}" and stop`);
   fs.rmSync(w.dump, { recursive: true, force: true });                 // the next poll starts clean; no rm in the brief
   if (list.length) {
     w.reported = true; fs.writeFileSync(file, JSON.stringify(w) + "\n");
@@ -890,13 +978,13 @@ function cmdWaiting(a, log) {
   }
   // At the limit already: say so again and keep the count at the limit, so watch still sees the ended window.
   if (w.poll < w.limit) { w.poll += 1; fs.writeFileSync(file, JSON.stringify(w) + "\n"); }
-  if (w.poll >= w.limit) { log(`none, poll ${w.poll} of ${w.limit}: the limit. Report exactly: "no batch, poll limit reached: run node S watch and do what it prints". Then stop.`); return; }
-  log(`none, poll ${w.poll} of ${w.limit}. Run bash "${WAIT_SH}" ${w.seconds} in the foreground, then go to step 1.`);
+  if (w.poll >= w.limit) { log(`none, poll ${w.poll} of ${w.limit}: the limit. Report exactly: "no batch, poll limit reached: run node S watch${st} and do what it prints". Then stop.`); return; }
+  log(`none, poll ${w.poll} of ${w.limit}. Run bash ${dq(WAIT_SH)} ${w.seconds} in the foreground, then go to step 1.`);
 }
 // read: what the agent does with one answer or note line of a sent batch, printed in brackets at its end.
 // flags: the line's flags, a list. The script decides, the agent follows.
 function lineHint(flags, a) {
-  const dir = one(a, "dump"), st = a.state ? " --state " + q(one(a, "state")) : "";
+  const dir = shq(one(a, "dump")), st = stateArg(a);
   if (flags.includes("[stale-rev]") || flags.includes("[missing]")) return "(skip)";
   if (flags.includes("[other-rev]")) return `(skip; after the ack: rm -rf ${dir}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${dir} --dumped${st})`;
   if (flags.includes("[question]")) return "(answer the note in the card text and post the card again)";
@@ -905,7 +993,7 @@ function lineHint(flags, a) {
 }
 function cmdRead(a, log) {
   const dir = one(a, "dump");
-  if (!a.dumped) fail(`read: no --dumped. Run rm -rf ${dir}, then P4; once P4 succeeded, run node ${SELF} read --dump ${dir} --dumped`);
+  if (!a.dumped) fail(`read: no --dumped. Run rm -rf ${shq(dir)}, then P4; once P4 succeeded, run node ${SELF} read --dump ${shq(dir)} --dumped${stateArg(a)}`);
   const dump = readDump(dir), r = new Run(a), list = a.all ? batchesOf(dump) : waiting(dump);
   skipLine(dump, log);
   r.clearCardsOnly(dump);
@@ -945,7 +1033,7 @@ function cmdRead(a, log) {
       log(`  note ${qid(id)}${nb.item ? "  item " + q(nb.item) : ""}  ${q(nb.text)}${nflags.length ? "  " + nflags.join(" ") : ""}${sent ? "  " + lineHint(nflags, a) : ""}`);
     }
     if (sent && r.st.pending["batches/" + b.id]) log("  " + pushHint(b.id, r));
-    else if (sent) log(`  when handled: node ${SELF} ack ${qid(b.id)} --dump ${one(a, "dump")}${a.state ? " --state " + q(one(a, "state")) : ""}`);
+    else if (sent) log(`  when handled: node ${SELF} ack ${qid(b.id)} --dump ${shq(one(a, "dump"))}${stateArg(a)}`);
   }
   r.finish(() => {});
 }
@@ -1020,7 +1108,9 @@ function cmdAck(a, log) {
   if (first) fail(`ack: ack ${qid(first.id)} first: it holds controls for the same cards. Nothing written`);
   // The placement of each card: closed for a control (ctl_closed holds why), or reopened when the control that
   // closed it is undone. A card the agent closed itself never enters ctl_closed.
-  const toClose = new Set(), toOpen = new Set(), ctl = Object.assign({}, r.st.ctl_closed || {});
+  const toClose = new Set(), toOpen = new Set(), ctl = Object.assign({}, r.st.ctl_closed || {}), ownClosed = new Set(r.st.held || []);
+  // src: the cards whose control arrived after their source had closed them; an undo leaves those closed (unheld).
+  const src = new Set(r.st.src_closed || []), unheld = [];
   // The value of one place key: the changed value, else the kept one; undefined when absent or flagged.
   const v = (id, key) => {
     const x = batch.controls[id], raw = x[key] !== undefined ? x[key] : x.keep ? x.keep[key] : undefined;
@@ -1031,9 +1121,11 @@ function cmdAck(a, log) {
     const x = batch.controls[id];
     if (!x || !r.card(id) || !S.placeKeys.some((k) => x[k] !== undefined)) continue;
     const why = v(id, "assign") === "other" ? "other" : v(id, "dismiss") === "on" ? "dismiss" : v(id, "done") === "on" ? "done" : "";
-    const wasOpen = r.card(id).status !== "closed";
-    if (why && (wasOpen || ctl[id])) { toClose.add(id); ctl[id] = why; }   // an agent's own close never enters ctl
-    else if (!why && ctl[id]) { toOpen.add(id); delete ctl[id]; }
+    // A card that its source closed (closed, not held by the agent's own close) takes the control too, so the
+    // card stays closed when the row comes back unchanged. An agent's own close never enters ctl.
+    const wasOpen = r.card(id).status !== "closed", bySource = !wasOpen && !ctl[id] && !ownClosed.has(id);
+    if (why && (wasOpen || ctl[id] || bySource)) { toClose.add(id); ctl[id] = why; if (bySource) src.add(id); }
+    else if (!why && ctl[id]) { delete ctl[id]; if (src.delete(id)) unheld.push(id); else toOpen.add(id); }
   }
   r.st.ctl_closed = ctl;
   // The running snoozes; a flagged snooze changes nothing.
@@ -1044,9 +1136,13 @@ function cmdAck(a, log) {
   }
   r.st.snoozed = sn;                                              // finish() deletes an empty object
   // An explicit --close wins over a reopen: the card is now the agent's own close.
+  // The source mark stays: an own close does not bring the row back to its source.
   for (const id of close) toOpen.delete(id);
   const k1 = r.closeCards(Array.from(toClose), t);
   const j = r.openCards(Array.from(toOpen), t);
+  // An undone control on a card its source closed: the card stays closed as the source left it, not held.
+  r.st.held = (r.st.held || []).filter((x) => !unheld.includes(x));
+  r.st.src_closed = Array.from(src);
   const k2 = r.closeCards(close, t), k = k1 + k2;
   const m = setResults();
   // One array: the batch update, and the cards write when cards changed. The pending ack keeps the batch update
@@ -1057,15 +1153,15 @@ function cmdAck(a, log) {
   r.st.unlogged[bid] = batch.itemIds.map((key) => { const x = batch.answers[key] || { answer: "", note: "" }; return [key, x.answer, x.note, day]; })
     .concat(controlsOf(batch).map((e) => { const fl = ctlFlags(r, e); return [e.id, "control " + e.key + " " + ctlPlain(e) + (fl.length ? " " + fl.join(" ") : ""), "", day]; }))
     .concat(batch.noteIds.map((id) => { const x = batch.notes[id] || { text: "", item: "" }; return [x.item || "", "", x.text, day]; }));
-  log(`ack ${bid}: handled, ${k} cards closed, ${j} reopened, ${m} results. The answers go to decisions.md when the next read no longer lists the batch`);
+  log(`ack ${bid}: handled, ${k} cards closed${j ? `, ${j} reopened` : ""}${m ? `, ${m} results` : ""}. The answers go to decisions.md when the next read no longer lists the batch`);
   for (const l of resultLines()) log(l);
   if (P.cfg.status.guide) log(statusGuideLine(r, a, "Add what you did with this batch"));
   r.finish(log);
 }
 // The status guide line of ack and guide.
 function statusGuideLine(r, a, what) {
-  const f = rel(path.join(r.dir, "status.md")), st = a.state ? " --state " + q(one(a, "state")) : "";
-  return `status guide: on in the config. ${what} in ${f}, dump guides with versions, then run node ${SELF} guide ${f} --id status --kind status --dump ${one(a, "dump") || "board/dump"}${st} and pass its array`;
+  const f = rel(path.join(r.dir, "status.md"));
+  return `status guide: on in the config. ${what} in ${f}, dump guides with versions, then run node ${SELF} guide ${shq(f)} --id status --kind status --dump ${shq(one(a, "dump") || "board/dump")}${stateArg(a)} and pass its array`;
 }
 
 // ---- guide
@@ -1113,7 +1209,7 @@ function guideId(id) { if (!S.idRe.test(id)) fail("guide: --id <id> with 1 to 10
 function cmdGuide(a, log) {
   const dump = readDump(one(a, "dump")), r = new Run(a), id = guideId(one(a, "id")), ex = dump.col("guides").get(id), t = now();
   r.clearCardsOnly(dump);
-  if (id.toLowerCase() === RULES_ID) fail(`guide: the guide rules is posted by check from board/rules.md. Run node ${SELF} check`);
+  if (id.toLowerCase() === RULES_ID) fail(`guide: the guide rules is posted by check from board/rules.md. Run node ${SELF} check${stateArg(a)}`);
   const old = ex ? plain(P.coerce("guide", ex.data)) : null, dumped = ex ? pin("guides", id, ex) : undefined;
   if (a.delete || a.archive) {
     if (!ex) fail("guide: no guide " + id + " in the dump");
@@ -1144,20 +1240,23 @@ function cmdGuide(a, log) {
 const RULES_ID = "rules";
 function rulesFile(r) { return path.join(r.dir, "rules.md"); }
 // What check does with rules.md: changed = its hash differs from the state's rules_md; write = changed and it has a
-// section, or it lost every section after a post (then the guide is deleted).
+// "## " section, or it lost every section after a post (then the guide is deleted).
 function rulesState(r) {
   const file = rulesFile(r);
   if (!fs.existsSync(file)) return { file, exists: false, changed: false, write: false };
   const buf = fs.readFileSync(file), text = buf.toString("utf8"), hash = createHash("sha256").update(buf).digest("hex").slice(0, 12);
+  // Only a "## " heading makes a section: a file of a title or plain text alone is handled as an empty file.
   const g = parseGuide(text), posted = r.st.next["guides/" + RULES_ID] !== undefined, changed = hash !== r.st.rules_md;
-  return { file, exists: true, text, hash, g, posted, changed, write: changed && (g.secs.length > 0 || posted) };
+  const sections = g.secs.some((s) => s.title);
+  return { file, exists: true, text, hash, g, sections, posted, changed, write: changed && (sections || posted) };
 }
 // The one rules line of check or read, or "". a: the parsed arguments, for the --state of the printed command.
 function rulesLine(rs, cmd, a) {
   if (cmd === "check" && !rs.exists) return `rules: no ${rel(rs.file)}. Read references/rules.md, "Start the rules", and follow it`;
   if (!rs.write) return "";
+  if (cmd === "check" && !rs.sections) return `rules: ${rel(rs.file)} holds no section: the guide rules is removed in the array below`;
   if (cmd === "check") return `rules: ${rel(rs.file)} changed. Read it; check posts it as the guide rules in the array below`;
-  return `rules: ${rel(rs.file)} changed. Run node ${SELF} check${a.state ? " --state " + q(one(a, "state")) : ""} and pass its array`;
+  return `rules: ${rel(rs.file)} changed. Run node ${SELF} check${stateArg(a)} and pass its array`;
 }
 // check: the guide document of rules.md with its problems. old is the last guide write that check printed, so a
 // section keeps its updated time while its title and body stay the same.
@@ -1193,7 +1292,7 @@ function cmdPurge(a, log) {
   const already = new Set(r.st.purge || []);
   // An earlier purge whose rows the board still holds is adopted first; one the board holds is forgotten.
   for (const k of purgeKeys(r)) {
-    if (r.st.pending[k].some((w) => dump.col(w.collection).has(w.doc_id))) fail(`purge: ${k} has not landed yet. Run \`node ${SELF} adopt ${k} --dump ${one(a, "dump")} --dumped\` first`);
+    if (r.st.pending[k].some((w) => dump.col(w.collection).has(w.doc_id))) fail(`purge: ${k} has not landed yet. Run \`node ${SELF} adopt ${k} --dump ${shq(one(a, "dump"))} --dumped${stateArg(a)}\` first`);
     delete r.st.pending[k];
   }
   let ids = a.ids || [];
@@ -1304,7 +1403,7 @@ function noWrite(r, cmd, key) {
 }
 function cmdAdopt(a, log) {
   const key = docKey(a, "adopt");
-  if (!a.dumped) fail(`adopt: no --dumped. Dump again as the "if refused" line says; once every call succeeded, run node ${SELF} adopt ${key} --dump ${one(a, "dump")} --dumped`);
+  if (!a.dumped) fail(`adopt: no --dumped. Dump again as the "if refused" line says; once every call succeeded, run node ${SELF} adopt ${key} --dump ${shq(one(a, "dump"))} --dumped${stateArg(a)}`);
   const dump = readDump(one(a, "dump")), r = new Run(a), w = r.st.pending[key], ctx = r.ctx(), again = (ws) => ws.map((out) => ({ out, size: 0, group: key }));
   if (!w && key !== "cards") noWrite(r, "adopt", key);
   skipLine(dump, log);
@@ -1396,9 +1495,41 @@ function inGitTree(file) {
     if (path.dirname(d) === d) return "";
   }
 }
+// check: the board folder keeps itself out of git with a .gitignore of the one line "*", created once and never
+// changed. Never in a repository root or the home folder, where it would hide every new file; never through a
+// symlink (lstat, and an exclusive create). An existing file without the line * is kept and named; a line counts as
+// git reads it: * once trailing spaces and a trailing carriage return are gone.
+function ignoreBoard(dir, log, errs) {
+  const shown = shownPath(rel(dir)), gi = path.join(dir, ".gitignore"), giShown = shownPath(path.join(rel(dir), ".gitignore"));
+  const lst = (f) => { try { return fs.lstatSync(f); } catch (e) { if (e.code === "ENOENT" || e.code === "ENOTDIR") return null; throw e; } };
+  const real = (f) => { try { return fs.realpathSync(f); } catch (e) { return path.resolve(f); } };
+  const none = (why) => log(`note: ${shown} ${why}: no .gitignore written; keep the board in its own folder`);
+  try {
+    if (lst(path.join(dir, ".git"))) return none("is a repository root");
+    if ([real(os.homedir()), path.parse(real(dir)).root].includes(real(dir))) return none(real(dir) === real(os.homedir()) ? "is the home folder" : "is the root folder");
+    const st = lst(gi);
+    if (st) {
+      // A link to a file is the operator's own arrangement: read through it, never write. statSync throws for a
+      // link to nothing, which the catch reports.
+      if (!(st.isSymbolicLink() ? fs.statSync(gi) : st).isFile()) { errs.push(`${giShown} is not a file: the board folder is not ignored. Remove it, then run check`); return; }
+      if (!fs.readFileSync(gi, "utf8").split("\n").some((l) => l.replace(/\r$/, "").replace(/ +$/, "") === "*")) log(`note: ${giShown} does not hold the line *: the board folder is not ignored; add a line * to it`);
+      return;
+    }
+    // A board folder holds only what the script and the agent put there: .json, .md and .html files, a state
+    // file being written, and the folders the script makes.
+    const ours = (name) => { const x = lst(path.join(dir, name)); return x && (x.isFile() ? /\.(json|md|html)$|\.json\.tmp$/.test(name) : x.isDirectory() && BOARD_DIRS.includes(name)); };
+    const other = fs.existsSync(dir) ? fs.readdirSync(dir).find((x) => !ours(x)) : undefined;
+    if (other !== undefined) { log(`note: ${shown} holds ${plainId(other) ? other : q(other)}, which is not a board file: no .gitignore written; move it out or keep the board in its own folder`); return; }
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(gi, "*\n", { flag: "wx" });
+  } catch (e) { errs.push(`${giShown}: ${e.code || e.message}: the board folder is not ignored. Fix the folder, then run check`); }
+}
+// The folders the script makes in the board folder: the dump of the agent, the out files, the purge copies, the
+// dump of the watcher.
+const BOARD_DIRS = ["dump", "out", "purged", "watch-dump"];
 // A config value in one short text.
 function valueText(v) {
-  if (typeof v === "string") return v.length > 60 ? JSON.stringify(v.slice(0, 57)) + "..." : JSON.stringify(v);
+  if (typeof v === "string") return v.length > 60 ? js(v.slice(0, 57)) + "..." : js(v);
   if (typeof v === "number" || typeof v === "boolean") return String(v);
   if (Array.isArray(v)) return v.length === 1 ? "1 entry" : v.length + " entries";
   if (isPlain(v)) return "{" + Object.keys(v).join(", ") + "}";
@@ -1408,12 +1539,12 @@ function valueText(v) {
 function configLines(load) {
   const out = [], [u, b, l] = load.files, nFiles = load.files.filter((f) => f.exists).length;
   const set = CONFIG_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(load.src, k));
-  out.push(`config layers: user ${!u.file ? "off" : u.exists ? tilde(u.file) : "none"}, board ${b.exists ? rel(b.file) : "none"}, local ${l.exists ? rel(l.file) : "none"}`);
+  out.push(`config layers: user ${!u.file ? "off" : u.exists ? tilde(u.file) : `none (${tilde(u.file)})`}, board ${b.exists ? boardName(b.file) : "none"}, local ${l.exists ? boardName(l.file) : "none"}`);
   if (nFiles === 1 && set.length) out.push(`config ${load.files.find((f) => f.exists).name}: ${set.join(", ")}`);
   if (nFiles >= 2) for (const k of set) out.push(`config ${k}: ${load.src[k].join(", ")}  ${valueText(load.config[k])}${SCRIPT_KEYS.includes(k) ? "  (script only)" : ""}`);
   const unset = CONFIG_KEYS.filter((k) => !SCRIPT_KEYS.includes(k) && !set.includes(k));
   if (unset.length) out.push(`config default: ${unset.join(", ")}`);
-  out.push(`config ids: tags ${P.cfg.tags.map((t) => t.id).join(", ") || "none"}; priorities ${P.cfg.priorities.map((p) => p.id).join(", ")}`);
+  out.push(`config ids: tags ${P.cfg.tags.map((t) => idText(t.id)).join(", ") || "none"}; priorities ${P.cfg.priorities.map((p) => idText(p.id)).join(", ")}`);
   return out;
 }
 // The problems of config "status", on the merged config.
@@ -1456,6 +1587,7 @@ function cmdCheck(a, log) {
       fail(`check: ${f} is already a state file in this folder. One state file per board folder: use it, or another folder`);
   }
   r.needConfig(true);
+  ignoreBoard(r.dir, log, errs);
   const raw = r.config, c = P.cfg;
   errs.push(...r.load.problems.map((p) => "config " + p));
   for (const k of ["tabs", "priorities", "domains", "link_hosts", "tags", "groups", "sort", "people"]) {
@@ -1465,7 +1597,9 @@ function cmdCheck(a, log) {
     if (!Array.isArray(raw[k]) || got < raw[k].length) errs.push(`config ${k}: ${got} of ${Array.isArray(raw[k]) ? raw[k].length : "a non-list"} entries kept`);
   }
   errs.push(...r.load.unknown);
-  if (raw.tz !== undefined && !P.tzOk(raw.tz)) errs.push(`config tz: ${JSON.stringify(raw.tz)} is not a time zone name such as "Europe/Warsaw" or "UTC"`);
+  // A people id becomes an object key on the page: the unsafe keys are refused as in the config layers.
+  if (Array.isArray(raw.people)) raw.people.forEach((x, i) => { if (isPlain(x) && UNSAFE.has(x.id)) errs.push(`config people[${i}].id: ${q(x.id)} is not allowed`); });
+  if (raw.tz !== undefined && !P.tzOk(raw.tz)) errs.push(`config tz: ${js(raw.tz)} is not a time zone name such as "Europe/Warsaw" or "UTC"`);
   if (raw.week_start !== undefined && !P.normWeek(raw.week_start)) errs.push(`config week_start: ${q(raw.week_start)} is not a day and a time such as "tuesday 12:00"`);
   if (raw.controls !== undefined) {
     if (!isPlain(raw.controls)) errs.push("config controls: not an object");
@@ -1478,7 +1612,7 @@ function cmdCheck(a, log) {
   const ck = compileChecks(raw.checks === undefined ? [] : raw.checks);
   errs.push(...ck.problems);
   if (r.config.standing !== undefined && !standingOk(r.config.standing)) errs.push("config standing: a list of 1 to 50 texts, each 1 to 40 characters");
-  const rd = rs.write && rs.g.secs.length ? rulesDoc(r, rs, t) : null;
+  const rd = rs.write && rs.sections ? rulesDoc(r, rs, t) : null;
   if (rd) errs.push(...rd.errs);
   const ids = new Set(), count = {};
   r.st.cards.forEach((x, i) => {
@@ -1553,13 +1687,14 @@ function cmdStatus(a, log) {
   const r = new Run(a); r.needConfig();
   if (!["now", "next", "waiting", "idle"].some((k) => has(a, k))) fail("status: give --now, --next, --waiting or --idle");
   const errs = [], s = storedStatus(r);
-  let nowText = has(a, "now") ? cleanText(one(a, "now"), S.max.line) : null;
+  let nowText = has(a, "now") ? cleanText(words(a, "now"), S.max.line) : null;
   if (nowText !== null && !nowText) errs.push("status --now: empty text");
   if (nowText !== null && lower(nowText) === "idle") nowText = "idle";      // --now idle is the same as --idle
   if (has(a, "idle") && nowText !== null && nowText !== "idle") errs.push("status: --idle and --now together; give one");
   if (has(a, "idle")) nowText = "idle";
+  if (nowText === "idle" && !has(a, "next")) s.next = [];                    // idle ends the old next list too
   if (nowText) {
-    if (nowText !== "idle") s.waiting = "";                                  // call C6: a new task ends the old wait, first
+    if (nowText !== "idle") s.waiting = "";                                  // a new task ends the old wait, first
     s.now = nowText;
   }
   if (has(a, "next")) {
@@ -1567,14 +1702,14 @@ function cmdStatus(a, log) {
     if (raw.some((x) => !x)) errs.push("status --next: an empty line");
     s.next = raw.filter(Boolean);
   }
-  if (has(a, "waiting")) s.waiting = cleanText(one(a, "waiting"), S.max.line);   // after the clear above, so it wins
+  if (has(a, "waiting")) s.waiting = cleanText(words(a, "waiting"), S.max.line);   // after the clear above, so it wins
   if (s.next.length > 3) errs.push("status --next: at most 3 lines");
   s.updated = now();
   const bytes = Buffer.byteLength(JSON.stringify(statusDoc(Object.assign({}, s, { watch: { started: s.updated, until: s.updated } }))));
   if (!errs.length && bytes > S.max.statusBytes) errs.push(`status: ${bytes} bytes with a watcher, over ${S.max.statusBytes}; shorten the lines`);
   if (errs.length) fail(errs.join("\n"));
   putStatus(r, s);
-  log(`status: now ${q(s.now)}, next ${JSON.stringify(s.next)}, waiting ${q(s.waiting)}`);   // what was stored, after cleanText
+  log(`status: now ${q(s.now)}, next ${js(s.next)}, waiting ${q(s.waiting)}`);   // what was stored, after cleanText
   r.finish(log);
 }
 
@@ -1594,36 +1729,38 @@ const COMMENTS_LINE = "comments: if this session has not run P5 for this board y
 function briefText(url, dump, wf) {
   const md = fs.readFileSync(path.join(HERE, "..", "references", "watch.md"), "utf8"), m = md.match(/```text\n([\s\S]*?)\n```/);
   if (!m) fail("watch: references/watch.md has no text block");
-  const p4 = JSON.stringify({ action: "query", url, collection: "batches", out_dir: dump, query: { where: [["status", "==", "sent"]], limit: 1000 } });
-  return m[1].split("<P4>").join(p4).split("<SCRIPT>").join(fileURLToPath(import.meta.url)).split("<DUMP>").join(dump).split("<COUNT>").join(wf);
+  const p4 = js({ action: "query", url, collection: "batches", out_dir: dump, query: { where: [["status", "==", "sent"]], limit: 1000 } });
+  return m[1].split("<P4>").join(p4).split("<SCRIPT>").join(dq(fileURLToPath(import.meta.url))).split("<DUMP>").join(dq(dump)).split("<COUNT>").join(dq(wf));
 }
 function cmdWatch(a, log) {
   const r = new Run(a); r.needConfig();
   const bad = wakeProblems(r.load.config);
-  if (bad.length) fail(bad.concat([`fix the config, then run \`node ${SELF} check\``]).join("\n"));
+  if (bad.length) fail(bad.concat([`fix the config, then run \`node ${SELF} check${stateArg(a)}\``]).join("\n"));
   const w = P.cfg.wake, wf = watchFile(r), cur = readWatch(wf);
   if (w.mode === "off") log("wake off: start no watcher. Read the board when the operator asks.");
   else if (w.mode === "comment") { log("wake comment: start no watcher; a comment on the board wakes you."); log(COMMENTS_LINE); }
   else if (cur && cur.poll >= cur.limit && !has(a, "restart")) {
-    // Operator answers wake-modes-limit-reached and wake-limit-restart: the watcher stopped; the page shows the
-    // window ended; a new window only on watch --restart, which the agent runs when the operator asks.
+    // At the poll limit the watcher has stopped and the page shows the window ended; a new window starts only on
+    // watch --restart, which the agent runs when the operator asks.
     if (!cur.ended) {
       const s = storedStatus(r), t = now();
       if (s.watch) { s.watch = { started: s.watch.started, until: t }; s.updated = t; putStatus(r, s); }
       cur.ended = true; fs.writeFileSync(wf, JSON.stringify(cur) + "\n");
     }
-    log(`wake ${w.mode}: the watcher window ended at its poll limit; start none. Start a new one only when the operator asks you to watch again: node ${SELF} watch --restart.` + (w.comment ? " A comment on the board still wakes you." : " Read the board when the operator asks."));
+    log(`wake ${w.mode}: the watcher window ended at its poll limit; start none. Start a new one only when the operator asks you to watch again: node ${SELF} watch --restart${stateArg(a)}.` + (w.comment ? " A comment on the board still wakes you." : " Read the board when the operator asks."));
     if (w.comment) log(COMMENTS_LINE);
   } else if (cur && cur.poll < cur.limit && !cur.reported && P.stampMs(cur.until) > nowMs()) {
     log(`wake ${w.mode}: a watcher runs until ${cur.until}; start none.`);
     if (w.comment) log(COMMENTS_LINE);
   } else {
-    if (!r.st.url) fail(`watch: no board URL in ${r.file}. Run node ${SELF} check --url <the artifact link> once, then watch again`);
+    if (!r.st.url) fail(`watch: no board URL in ${r.file}. Run node ${SELF} check --url <the artifact link>${stateArg(a)} once, then watch again`);
     const dump = path.join(r.dir, "watch-dump");
-    for (const p of [dump, wf, fileURLToPath(import.meta.url)]) if (p.includes('"')) fail(`watch: the path ${p} holds a double quote; move the board`);
+    // The brief quotes every path for the shell (dq); a line break or another control character cannot stay on its line.
+    for (const p of [dump, wf, fileURLToPath(import.meta.url)]) if (badPath(p)) fail(`watch: the path ${q(p)} holds a line break or a control character; move the board`);
     const t = now(), until = P.stampIn(P.stampMs(t) + w.poll_seconds * w.poll_limit * 1000, P.cfg.tz, false);
     fs.rmSync(dump, { recursive: true, force: true });
-    fs.writeFileSync(wf, JSON.stringify({ dump, seconds: w.poll_seconds, limit: w.poll_limit, poll: 0, started: t, until }) + "\n");
+    // state: the --state of watch as an absolute path, so the watcher's reports name the same board from anywhere.
+    fs.writeFileSync(wf, JSON.stringify(Object.assign({ dump, seconds: w.poll_seconds, limit: w.poll_limit, poll: 0, started: t, until }, a.state ? { state: r.file } : {})) + "\n");
     const s = storedStatus(r); s.watch = { started: t, until }; s.updated = t; putStatus(r, s);
     log(`wake ${w.mode}: start one watcher, every ${w.poll_seconds} s, at most ${w.poll_limit} polls, until ${until}. Pass the array below to P3, then start P6 with the lines between "--- brief" and "--- end" as its prompt.`);
     log("--- brief"); log(briefText(r.st.url, dump, wf)); log("--- end");
@@ -1637,7 +1774,11 @@ export function run(argv, log = console.log) {
   const a = parseArgs(argv), cmd = COMMANDS[a._[0]];
   if (!cmd) { log(USAGE); return 2; }
   if (!FLAGS[a._[0]]) { log(`${a._[0]}: no FLAGS line for this command in board.mjs`); return 1; }
-  for (const key of Object.keys(a)) if (key !== "_" && key !== "raw" && !FLAGS[a._[0]].includes(key)) { log(`${a._[0]}: unknown flag --${/^[a-z-]{1,40}$/.test(key) ? key : q(key)}`); return 1; }
+  for (const key of (a[BAD] !== undefined ? [a[BAD]] : []).concat(Object.keys(a))) if ((key === a[BAD] || (key !== "_" && key !== "raw")) && !FLAGS[a._[0]].includes(key)) { log(`${a._[0]}: unknown flag --${/^[a-z-]{1,40}$/.test(key) ? key : q(key)}`); return 1; }
+  // A path with a line break or another control character would break the command lines printed with it.
+  for (const k of ["state", "dump", "count"]) for (const v of a[k] || []) if (badPath(v)) { log(pathRefusal(a._[0], v)); return 1; }
+  // The user file and the script itself are printed too: the same refusal.
+  for (const v of [process.env.BOARD_USER_CONFIG || "", fileURLToPath(import.meta.url)]) if (badPath(v)) { log(pathRefusal(a._[0], v)); return 1; }
   try { cmd(a, log); return 0; } catch (e) { if (e instanceof Stop) { log(e.message); return 1; } throw e; }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = run(process.argv.slice(2));

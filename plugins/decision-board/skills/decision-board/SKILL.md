@@ -8,13 +8,13 @@ description: Run a decision board, a private claude.ai artifact with a database 
 A private claude.ai artifact with a database: you post cards and guides, the operator answers on a phone
 and presses Send, and the page writes one batch. For one quick question, ask in the terminal instead.
 
-`S` is `scripts/board.mjs` beside this file; `board/` is a folder in your working tree. The calls `P1` to
-`P4` are in *Platform execution notes*. Read a reference only when a step names it.
+`S` is `scripts/board.mjs` beside this file; `board/` is a folder in your working tree (the script keeps
+it out of git with its own `.gitignore`, or `check` says why not). The calls `P1` to `P4` are in *Platform
+execution notes*. Read a reference only when a step names it.
 
 ## Script rules
 
 - `board/state.json` holds your cards and the version of each document you write; only the script writes it.
-- Before the first write, add `board/` to the file that `git rev-parse --git-path info/exclude` names.
 - A write command prints numbered arrays. Pass each array unchanged, in order, to one `P3` call.
 - A **dump** is `rm -rf board/dump`, then the calls the step names (`P2` for a named collection); an empty
   collection leaves no folder. A dump **with versions** also appends each reply's document lines to
@@ -66,7 +66,6 @@ starting with `--`; the script cleans and cuts the text and prints what it store
 2. Each line is `card  "answer"  "note"  [flags]  (what to do)`; a `note` line is a free note. Do what
    the brackets at the end of each line say, and nothing more.
    - `[rule]`, `[standing]`: read `references/rules.md` and do what it says for that line.
-   - A `control` line is a quick control of the operator: do what its brackets at the end say, and nothing more.
 3. Run the `ack` line that `read` printed (several: in the order `read` printed them), with `--close <id>`
    for each card that is done and `--result <id> "<what you did>"` for each card you acted on, and pass each
    array. Then, with or without an ack, run `node S watch` and do what it prints.

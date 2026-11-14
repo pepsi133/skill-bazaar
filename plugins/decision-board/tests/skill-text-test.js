@@ -90,7 +90,10 @@ ok("data-model.md names groups, sort and the defaults", () => {
 });
 ok("the control text", () => {
   const skill = read(SKILL, "SKILL.md");
-  assert.ok(skill.includes("A `control` line is a quick control of the operator: do what its brackets at the end say"));
+  // The read step tells the agent to do what the brackets of every line say; control lines need no rule of their own.
+  assert.ok(section(skill, "## Read and handle the answers").includes("Do what\n   the brackets at the end of each line say, and nothing more."));
+  assert.ok(!skill.includes("A `control` line is a quick control"));
+  assert.ok(skill.includes("do what it says for that line.\n3. Run the `ack` line"), "step 3 starts its own line");
   assert.ok(skill.includes('(`close "on"`, `assign "agent"`)'));
   assert.ok(!skill.includes("control snooze"), "the running snoozes come from the snoozed: line of read");
   const dm = read(REF, "data-model.md"), cards = read(REF, "cards.md"), build = read(REF, "build.md");
@@ -140,6 +143,21 @@ ok("SKILL.md holds the status rule line", () => {
   assert.match(md, /never\s+starting with \x60--\x60/);
   assert.ok(step3.includes('--result <id> "<what you did>"') && step3.includes("(several: in the order `read` printed them)"));
   assert.ok(!md.includes("in the status guide"));
+});
+ok("cards.md: a result may go to any card; an id does not start with - or ~", () => {
+  const cards = read(REF, "cards.md").replace(/\s+/g, " ");
+  assert.ok(cards.includes("`ack --result` fills `result` and `result_at`, for any card, also one of an earlier batch"));
+  assert.match(cards, /\| `id` \|[^|]*not starting with `-` or `~`/);
+  assert.ok(cards.includes("`note: no link: <n> cards`") && !cards.includes("`note: <id>: no link`"));
+  assert.ok(cards.includes("cards with `source` `rules` are not counted"));
+  const w = read(REF, "watch.md");
+  assert.ok(w.includes("each quoted for the shell.") && !w.includes("where it needs it"));
+  assert.ok(w.includes("2. Run node <SCRIPT> waiting --dump <DUMP> --count <COUNT>."), "the script fills the quotes");
+});
+ok("the board folder ignores itself: no exclude step in the texts", () => {
+  const md = SKILL_MD();
+  assert.ok(md.replace(/\s+/g, " ").includes("the script keeps it out of git with its own `.gitignore`, or `check` says why not)"));
+  for (const t of [md, read(REF, "build.md"), read(ROOT, "README.md"), read(ROOT, "docs", "how-it-works.html")]) assert.ok(!t.includes("info/exclude") && !t.includes("--git-path"));
 });
 ok("references tell the agent about results, the status guide and the comments capability", () => {
   assert.ok(read(REF, "cards.md").includes('--close <id> --result <id> "<what you checked>"'));

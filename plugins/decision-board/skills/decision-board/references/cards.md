@@ -3,12 +3,12 @@
 ## Fields
 
 A card file is a JSON list of cards. The script fills `rev`, `created` and
-`updated` (and `ack --result` fills `result` and `result_at`), and refuses an
-unknown field.
+`updated` (and `ack --result` fills `result` and `result_at`, for any card, also one of an earlier batch),
+and refuses an unknown field.
 
 | Field | Value |
 |---|---|
-| `id` | Required. A short slug, for example `backup-retention`: letters, digits and `_ - . ~ : @ +`, not `.` or `..`. Keep it when the card changes. To replace a card, close it and post a new id: an id belongs to one finding for good |
+| `id` | Required. A short slug, for example `backup-retention`: letters, digits and `_ - . ~ : @ +`, not `.` or `..`, and not starting with `-` or `~`. Keep it when the card changes. To replace a card, close it and post a new id: an id belongs to one finding for good |
 | `title` | Required. A plain question that one option answers, at most about 90 characters |
 | `summary`, `evidence` | Text in the format below. `evidence` folds away |
 | `draft` | Only the text the operator pastes elsewhere: a reply, a prompt, a message. Raw text: no preface, no notes, no approval line, no fence. Copy copies it byte for byte. Where it goes, why, and any caveat go in `summary` |
@@ -20,7 +20,7 @@ unknown field.
 | `source` | A short word for where the card came from; it chooses the tab. `sync --source <s>` sets it on every card of the file |
 | `blocks` | What waits for the card, for example `the nightly backup`. The card then shows in "Blocked on you" |
 | `status` | `open` (default) or `closed` |
-| `links` | Optional. Up to 10 `{"label", "url"}`; `sync` prints `note: <id>: no link` for an open card without one. A url must parse, use `https:`, carry no user name or password, and have a host of the config `link_hosts` or a subdomain of one. Give the link of the item when it has one |
+| `links` | Optional. Up to 10 `{"label", "url"}`; `sync` prints one `note: no link: <n> cards` line for the open cards without one that it adds or changes; cards with `source` `rules` are not counted. A url must parse, use `https:`, carry no user name or password, and have a host of the config `link_hosts` or a subdomain of one. Give the link of the item when it has one |
 | `tags` | Tag ids from the config `tags`, each once, matched exactly |
 | `first_asked` | `{"date": "YYYY-MM-DD", "who": "<id>"}`: when the question was first put to the operator, and by whom. Required on every open card whose kind is not `info`. A real date in the config `tz`, no later than tomorrow. `who` is optional: at most 40 of the id characters. A card posted again keeps the stored value |
 | `due` | Optional. `YYYY-MM-DD`, a day in the config `tz`, for a real deadline (a form, a review, a renewal). Only a date the source states; never infer one. From that day the card also shows in "Due today" until it is closed. Post it again without `due` to remove it |
