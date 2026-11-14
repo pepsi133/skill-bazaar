@@ -124,11 +124,13 @@ ok("SKILL.md runs node S watch after a post and after a read; no watcher is star
   assert.ok(md.includes("with or without an ack"));
   for (const s of ["start a watcher", "Start a new watcher", "poll limit 30", "wait.sh 120"]) assert.ok(!md.includes(s), s);
   for (const s of ["`P5`, comments:", "`P6`, the watcher:", "write no reply"]) assert.ok(md.includes(s), s);
-  assert.ok(core().includes("Run `node S watch --restart`") && core().includes("only when the operator asks you to watch again"));
+  // The limit line that watch prints names watch --restart and the operator's request; SKILL.md does not repeat it.
+  assert.ok(!md.includes("--restart") && !md.includes("cleans and cuts"));
 });
 ok("the watch brief is filled by the script", () => {
   const w = read(REF, "watch.md"), md = SKILL_MD();
-  for (const s of ["<P4>", "<SCRIPT>", "<DUMP>", "<COUNT>", "Do not copy the block below by hand"]) assert.ok(w.includes(s), s);
+  for (const s of ["<P4>", "<SCRIPT>", "<COUNT>", "<ID>", "Do not copy the block below by hand"]) assert.ok(w.includes(s), s);
+  assert.ok(!w.includes("<DUMP>"), "the dump folder is named once, in the query");
   for (const t of [md, w]) for (const s of ["wait.sh 120", "<wait script> 120"]) assert.ok(!t.includes(s), s);
   for (const t of [md, w]) assert.ok(!/poll limit <?N>?/.test(t) && !/poll limit \d/.test(t));
 });
@@ -152,7 +154,7 @@ ok("cards.md: a result may go to any card; an id does not start with - or ~", ()
   assert.ok(cards.includes("cards with `source` `rules` are not counted"));
   const w = read(REF, "watch.md");
   assert.ok(w.includes("each quoted for the shell.") && !w.includes("where it needs it"));
-  assert.ok(w.includes("2. Run node <SCRIPT> waiting --dump <DUMP> --count <COUNT>."), "the script fills the quotes");
+  assert.ok(w.includes("2. Run the command on the next line, exactly as it stands:\n   node <SCRIPT> waiting --count <COUNT> --watcher <ID>\n"), "the script fills the quotes; no period follows the id");
 });
 ok("the board folder ignores itself: no exclude step in the texts", () => {
   const md = SKILL_MD();

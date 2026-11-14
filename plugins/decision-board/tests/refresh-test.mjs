@@ -313,6 +313,33 @@ ok("map: map keys due, priority, summary and draft fill the card; an override st
   assert.ok(bp.text.includes("priority: a list of"), bp.text);
   assert.ok(map(GOOD, Object.assign({}, MAP, { due: 5 })).text.includes("due: a string"));
 });
+ok("map: an 8-digit real date of the years 1970 to 2999 is YYYYMMDD in due and created; other digits below 1000000000 are no date; epoch seconds still read", () => {
+  const was = process.env.BOARD_NOW;
+  process.env.BOARD_NOW = "2026-11-25T12:00:00Z";
+  try {
+    const M2 = Object.assign({}, MAP, { due: "due_on" });
+    for (const v of ["20261120", 20261120, " 20261120 ", "19700101"]) {
+      const r = one({ due_on: v, created_at: v }, M2);
+      assert.equal(r.code, 0, r.text);
+      const s = String(v).trim(), day = s.slice(0, 4) + "-" + s.slice(4, 6) + "-" + s.slice(6);
+      assert.deepEqual([r.cards[0].due, r.cards[0].first_asked.date, r.details.notes], [day, day, []], JSON.stringify(v));
+    }
+    for (const v of ["20261340", 20261340, "12345", 12345, "999999999", "20261120.5", "01000101", "99991231", "19691231"]) {
+      const d = one({ due_on: v }, M2);
+      assert.equal(d.code, 0, d.text);
+      assert.deepEqual(["due" in d.cards[0], d.details.notes], [false, ["note: 1: due not read"]], JSON.stringify(v));
+      const c = one({ created_at: v });
+      assert.deepEqual([c.code, c.details.skipped[0].reasons], [1, ["created date cannot be read"]], JSON.stringify(v));
+    }
+    for (const v of ["1763000000", 1763000000, "1000000000"]) {
+      const r = one({ due_on: v, created_at: v }, M2);
+      assert.equal(r.code, 0, r.text);
+      const day = new Date(Number(v) * 1000).toISOString().slice(0, 10);
+      assert.deepEqual([r.cards[0].due, r.cards[0].first_asked.date], [day, day], JSON.stringify(v));
+    }
+    assert.equal(one({ created_at: "1768210200000" }).cards[0].first_asked.date, "2026-01-12", "epoch ms");
+  } finally { process.env.BOARD_NOW = was; }
+});
 ok("map: the example maps of references/maps.md map their sample rows", () => {
   const md = fs.readFileSync(new URL("../skills/board-refresh/references/maps.md", import.meta.url), "utf8");
   const blocks = [...md.matchAll(/```json\n([\s\S]*?)```/g)].map((x) => JSON.parse(x[1]));

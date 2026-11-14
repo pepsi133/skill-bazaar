@@ -94,13 +94,18 @@ function dayIn(ms, tz) {
   for (const x of new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(ms))) p[x.type] = x.value;
   return p.year + "-" + p.month + "-" + p.day;
 }
-// The created field as YYYY-MM-DD in the config tz: a date (itself), a timestamp with Z or an offset (its day in tz), a timestamp without a zone (its own date part), or epoch seconds or milliseconds (12 digits or more before any fraction), as a number or a digit string such as "1762650000.000200" (its day in tz). undefined when the row has none, null when it cannot be read.
+// The created field as YYYY-MM-DD in the config tz: a date (itself), a timestamp with Z or an offset (its day in tz), a timestamp without a zone (its own date part), or epoch seconds or milliseconds (12 digits or more before any fraction), as a number or a digit string such as "1762650000.000200" (its day in tz), from 1000000000 up; exactly 8 digits that make a real date in the years 1970 to 2999 are YYYYMMDD; a smaller value is no date. undefined when the row has none, null when it cannot be read.
 function createdDate(v, tz) {
   if (v === undefined || v === null || v === "") return undefined;
   const EPOCH = /^\d+(\.\d+)?$/;
   if (typeof v === "number" || (typeof v === "string" && EPOCH.test(v.trim()))) {
     const s = String(v).trim(), n = Number(s);
     if (!Number.isFinite(n) || !EPOCH.test(s)) return null;
+    // Exactly 8 digits that make a real date in the years 1970 to 2999 are YYYYMMDD; any other value below 1000000000
+    // (2001-09-09) is no date.
+    const d8 = /^(19[7-9]\d|2\d{3})\d{4}$/.test(s) ? s.slice(0, 4) + "-" + s.slice(4, 6) + "-" + s.slice(6) : "";
+    if (d8 && realDate(d8)) return d8;
+    if (n < 1e9) return null;
     const ms = s.split(".")[0].length >= 12 ? n : n * 1000;
     return isNaN(new Date(ms)) ? null : dayIn(ms, tz);
   }

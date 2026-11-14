@@ -345,12 +345,14 @@ ok("a batch id that is not a batch id never reaches a printed line: skipped in t
   assert.deepEqual([Object.keys(st(b).pending).filter((k) => k.startsWith("batches/")), Object.keys(st(b).unlogged)], [["batches/" + ACKED], [ACKED]]);
   // waiting --count, with the junk beside a valid batch and beside none: the HEAD lines exactly.
   const wf = path.join(b.board, "watch.json"), WAIT_SH = path.resolve(here, "..", "skills", "decision-board", "assets", "wait.sh");
-  fs.writeFileSync(wf, JSON.stringify({ dump: b.dump, seconds: 60, limit: 2, poll: 0, started: "2026-02-01T12:00:00+00:00", until: "2026-02-01T13:00:00+00:00" }));
-  assert.deepEqual(sh("waiting", "--dump", dumpNow(b), "--count", wf).lines, [`batches ${ACKED} wait. Report exactly: "batches wait: run Read and handle the answers". Then stop.`]);
+  // The watcher's dump folder is watch-dump beside the watch file: a copy of the dump.
+  const wd = path.join(b.board, "watch-dump"), watchDump = () => { fs.rmSync(wd, { recursive: true, force: true }); fs.cpSync(dumpNow(b), wd, { recursive: true }); return wd; };
+  fs.writeFileSync(wf, JSON.stringify({ dump: wd, seconds: 60, limit: 2, poll: 0, started: "2026-02-01T12:00:00+00:00", until: "2026-02-01T13:00:00+00:00" }));
+  assert.deepEqual(sh("waiting", "--dump", watchDump(), "--count", wf).lines, [`batches ${ACKED} wait. Report exactly: "batches wait: run Read and handle the answers". Then stop.`]);
   // The valid batch handled: the junk alone.
   apply(b, ak);
   assert.deepEqual(sh("waiting", "--dump", dumpNow(b)).lines, ["none"]);
-  assert.deepEqual(sh("waiting", "--dump", dumpNow(b), "--count", wf).lines, [`none, poll 1 of 2. Run bash "${WAIT_SH}" 60 in the foreground, then go to step 1.`]);
+  assert.deepEqual(sh("waiting", "--dump", watchDump(), "--count", wf).lines, [`none, poll 1 of 2. Run bash "${WAIT_SH}" 60 in the foreground, then go to step 1.`]);
   // As arguments: refused, the argument quoted as display text.
   assert.deepEqual(dumped(b, "ack", BAD[0]).lines, ['ack: "$(touch PWNED)" is not a batch id']);
   for (const id of ["-x", "~root"]) {

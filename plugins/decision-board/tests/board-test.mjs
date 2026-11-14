@@ -2155,9 +2155,12 @@ function wakeBoard(wake) {
 const atNow = (t, fn) => { const was = process.env.BOARD_NOW; process.env.BOARD_NOW = t; try { return fn(); } finally { process.env.BOARD_NOW = was; } };
 const watchJson = (b) => JSON.parse(fs.readFileSync(b.wf, "utf8"));
 const setWatch = (b, x) => fs.writeFileSync(b.wf, JSON.stringify(Object.assign(watchJson(b), x)) + "\n");
+// The watcher's step as the brief names it: the watch file and an id (default: the one in the file).
+const poll = (b, id = watchJson(b).watcher) => sh("waiting", "--count", b.wf, "--watcher", id);
 const startLine = (mode, s, n, until) => `wake ${mode}: start one watcher, every ${s} s, at most ${n} polls, until ${until}. Pass the array below to P3, then start P6 with the lines between "--- brief" and "--- end" as its prompt.`;
 const limitLine = (mode, b) => `wake ${mode}: the watcher window ended at its poll limit; start none. Start a new one only when the operator asks you to watch again: node ${SELF} watch --restart --state ${JSON.stringify(b.state)}.` +
   (mode === "both" ? " A comment on the board still wakes you." : " Read the board when the operator asks.");
+const runsLine = (mode, b, until) => `wake ${mode}: a watcher runs until ${until}; start none. Only when the operator asks to watch again: node ${SELF} watch --restart --state ${JSON.stringify(b.state)}`;
 const COMMENTS = "comments: if this session has not run P5 for this board yet, run it now.";
 const T14 = "2026-02-01T14:00:00+00:00";
 // The poll case: watch in mode poll, its write applied.
@@ -2171,13 +2174,18 @@ ok("watch: poll starts one watcher, writes the watch file and the status window,
   assert.ok(e > 2);
   assert.ok(brief.includes('ToolSearch("select:ArtifactData")'));
   assert.ok(brief.includes(`"url":"${URL1}"`) && brief.includes(`"out_dir":${JSON.stringify(b.wd)}`) && brief.includes('"where":[["status","==","sent"]]'), brief);
-  assert.ok(brief.includes(`waiting --dump "${b.wd}" --count "${b.wf}"`), brief);
-  for (const x of ["<P4>", "<SCRIPT>", "<DUMP>", "<COUNT>"]) assert.ok(!brief.includes(x), x);
+  const id = watchJson(b).watcher;
+  assert.match(id, /^w[0-9a-f]{6}$/, "a plain id");
+  assert.ok(r.lines.includes(`   node "${path.join(SKILL, "scripts", "board.mjs")}" waiting --count "${b.wf}" --watcher ${id}`), brief);
+  assert.ok(!brief.includes(id + "."), "no period follows the id");
+  assert.equal(brief.split(b.wd).length - 1, 1, "the dump folder is named once, as out_dir");
+  assert.ok(brief.includes("Work only in the out_dir folder of step 1."), brief);
+  for (const x of ["<P4>", "<SCRIPT>", "<DUMP>", "<COUNT>", "<ID>"]) assert.ok(!brief.includes(x), x);
   assert.ok(!r.lines.includes(COMMENTS));
   const ws = writesOf(r.lines).flat();
   assert.deepEqual(ws.map((w) => [w.op, w.collection, w.doc_id]), [["set", "meta", "status"]]);
   assert.deepEqual(statusOut(r).watch, { started: T0, until: T14 });
-  assert.deepEqual(watchJson(b), { dump: b.wd, seconds: 300, limit: 24, poll: 0, started: T0, until: T14, state: b.state });
+  assert.deepEqual(watchJson(b), { dump: b.wd, seconds: 300, limit: 24, poll: 0, started: T0, until: T14, watcher: id, state: b.state });
 });
 ok("watch: both uses 900 s and 32 polls by default, the config values when set, and prints the comments line", () => {
   let r = cmd(wakeBoard({ mode: "both" }), "watch");
@@ -2188,7 +2196,7 @@ ok("watch: both uses 900 s and 32 polls by default, the config values when set, 
 });
 ok("watch: a running watcher is not started again", () => {
   const b = pollStarted();
-  assert.deepEqual(cmd(b, "watch").lines, [`wake poll: a watcher runs until ${T14}; start none.`, "no writes"]);
+  assert.deepEqual(cmd(b, "watch").lines, [runsLine("poll", b, T14), "no writes"]);
 });
 ok("watch: after a batch report or a dead watcher a new one starts", () => {
   const b = pollStarted();
@@ -2204,12 +2212,14 @@ ok("watch: at the poll limit it ends the window once and starts none; only watch
   for (const mode of ["poll", "both"]) {
     const b = pollStarted(mode), lim = limitLine(mode, b), tail = mode === "both" ? [COMMENTS] : [];
     setWatch(b, { poll: mode === "poll" ? 24 : 32 });
+    const was = state(b).status;
     atNow("2026-02-01T14:05:00Z", () => {
       const r = cmd(b, "watch");
       assert.deepEqual(r.lines.slice(0, 1 + tail.length), [lim].concat(tail), mode);
       const ws = writesOf(r.lines).flat();
       assert.deepEqual(ws.map((w) => [w.collection, w.doc_id, w.if_version]), [["meta", "status", 1]]);
       assert.equal(statusOut(r).watch.until, "2026-02-01T14:05:00+00:00");
+      assert.deepEqual(statusOut(r), Object.assign({}, was, { watch: { started: was.watch.started, until: "2026-02-01T14:05:00+00:00" } }), "only the window end changes; updated stays");
       assert.equal(watchJson(b).ended, true);
       apply(b, r);
       const before = fs.readFileSync(b.wf, "utf8");
@@ -2228,13 +2238,20 @@ ok("watch: at the poll limit it ends the window once and starts none; only watch
     });
   }
 });
-ok("watch --restart: before until at the limit it starts one; with a running watcher it starts none", () => {
+ok("watch --restart: before until at the limit it starts one; inside a running window it starts a new one with a new id and poll 0", () => {
   let b = pollStarted();
   setWatch(b, { poll: 24 });
   const r = atNow("2026-02-01T13:58:00Z", () => cmd(b, "watch", "--restart"));
   assert.equal(r.lines[0], startLine("poll", 300, 24, "2026-02-01T15:58:00+00:00"));
   b = pollStarted();
-  assert.deepEqual(cmd(b, "watch", "--restart").lines, [`wake poll: a watcher runs until ${T14}; start none.`, "no writes"]);
+  setWatch(b, { poll: 5 });
+  const old = watchJson(b).watcher;
+  assert.deepEqual(cmd(b, "watch").lines, [runsLine("poll", b, T14), "no writes"], "plain watch starts none");
+  const rs = atNow("2026-02-01T12:30:00Z", () => cmd(b, "watch", "--restart"));
+  assert.equal(rs.lines[0], startLine("poll", 300, 24, "2026-02-01T14:30:00+00:00"));
+  const w = watchJson(b);
+  assert.ok(w.watcher !== old && w.poll === 0, JSON.stringify(w));
+  assert.ok(rs.lines.some((l) => l.endsWith(`--watcher ${w.watcher}`)), rs.text);
   b = wakeBoard({ mode: "off" });
   assert.deepEqual(cmd(b, "watch", "--restart").lines, ["wake off: start no watcher. Read the board when the operator asks.", "no writes"]);
   assert.equal(fs.existsSync(b.wf), false);
@@ -2253,6 +2270,17 @@ ok("watch: keeps now, next and waiting of the last status", () => {
   const r = cmd(b, "watch"), o = statusOut(r);
   assert.deepEqual([o.now, o.next, o.waiting], ["X", ["Y"], "Z"]);
   assert.equal(writesOf(r.lines).flat()[0].if_version, 1);
+});
+ok("watch keeps the updated time of the last status and changes only the window; before any status updated is empty and the page shows Idle", () => {
+  let b = wakeBoard({ mode: "poll" });
+  apply(b, cmd(b, "status", "--now", "x"));
+  const r = atNow("2026-02-01T13:00:00Z", () => cmd(b, "watch")), o = statusOut(r);
+  assert.deepEqual(o, { now: "x", next: [], waiting: "", updated: T0, watch: { started: "2026-02-01T13:00:00+00:00", until: "2026-02-01T15:00:00+00:00" } });
+  assert.deepEqual(state(b).status, o, "the state holds the same document");
+  b = wakeBoard({ mode: "poll" });
+  const e = statusOut(cmd(b, "watch")), view = P.statusView(P.coerce("status", e), Date.parse(T0), String);
+  assert.deepEqual([e.now, e.next, e.waiting, e.updated], ["", [], "", ""]);
+  assert.deepEqual([view.has, view.head, view.age, view.when, view.stale], [true, "Idle", "", "", false], "the page reads no update time and shows the window");
 });
 ok("watch: refuses without a board URL or with bad wake values", () => {
   let b = fresh(false);
@@ -2374,7 +2402,7 @@ ok("watch stores the state path absolute; a stored state with a double quote or 
   assert.equal(watchJson(b).state, b.state, "absolute, whatever the working directory");
   for (const bad of ['/srv/a"b/state.json', "/srv/a\u202eb/state.json", "/srv/a\u200bb/state.json"]) {
     setWatch(b, { state: bad, poll: 23, limit: 24 });
-    const lines = sh("waiting", "--dump", b.wd, "--count", b.wf).lines;
+    const lines = poll(b).lines;
     assert.deepEqual(lines, ['none, poll 24 of 24: the limit. Report exactly: "no batch, poll limit reached: run node S watch and do what it prints". Then stop.'], JSON.stringify(bad));
   }
 });
@@ -2382,14 +2410,150 @@ ok("waiting --count: at the limit the count stays at the limit, and watch still 
   const b = pollStarted(), lim = `none, poll 24 of 24: the limit. Report exactly: "no batch, poll limit reached: run node S watch --state ${b.state} and do what it prints". Then stop.`;
   setWatch(b, { poll: 23 });
   for (let i = 0; i < 4; i++) {
-    const r = sh("waiting", "--dump", b.wd, "--count", b.wf);
+    const r = poll(b);
     assert.deepEqual([r.code, r.lines], [0, [lim]], "call " + (i + 1));
     assert.equal(watchJson(b).poll, 24, "call " + (i + 1));
   }
-  assert.equal(sh("waiting", "--dump", b.wd, "--count", b.wf).code, 0, "still a watch file");
+  assert.equal(poll(b).code, 0, "still a watch file");
   const w = atNow("2026-02-01T14:05:00Z", () => cmd(b, "watch"));
   assert.equal(w.lines[0], limitLine("poll", b));
   assert.ok(!w.lines.some((l) => l.startsWith("wake poll: start one watcher")), w.text);
+});
+const TOOK = 'another watcher took over. Report exactly: "replaced by a newer watcher". Then stop.';
+const OLD_BRIEF = 'this watcher\'s brief is out of date. Report exactly: "watcher brief out of date: the operator can restart the watcher". Then stop.';
+const waitLine = (k, n, s = 300) => `none, poll ${k} of ${n}. Run bash "${path.join(SKILL, "assets", "wait.sh")}" ${s} in the foreground, then go to step 1.`;
+ok("waiting --count: after watch --restart the old watcher stops at its next poll and the new window's count is untouched", () => {
+  const b = pollStarted(), old = watchJson(b).watcher;
+  assert.deepEqual(poll(b).lines, [waitLine(1, 24)]);
+  apply(b, atNow("2026-02-01T12:10:00Z", () => cmd(b, "watch", "--restart")));
+  const id = watchJson(b).watcher;
+  assert.ok(id !== old);
+  assert.deepEqual(poll(b, id).lines, [waitLine(1, 24)]);
+  fs.mkdirSync(b.wd, { recursive: true });
+  const before = fs.readFileSync(b.wf, "utf8");
+  for (const r of [poll(b, old), sh("waiting", "--dump", b.dump, "--count", b.wf, "--watcher", old), poll(b, old + ".")])
+    assert.deepEqual([r.code, r.lines], [0, [TOOK]], "both ids, different");
+  assert.deepEqual([fs.readFileSync(b.wf, "utf8"), fs.existsSync(b.wd)], [before, true], "the replaced watcher changes nothing and sets no stop mark");
+  assert.deepEqual(cmd(b, "watch").lines, [runsLine("poll", b, "2026-02-01T14:10:00+00:00"), "no writes"], "a newer watcher runs: start none");
+  assert.deepEqual(poll(b, id).lines, [waitLine(2, 24)]);
+  assert.deepEqual(sh("waiting", "--dump", b.wd, "--count", b.wf, "--watcher", id).lines, [waitLine(3, 24)], "a --dump that matches is taken");
+  const r = sh("waiting", "--dump", b.dump, "--count", b.wf, "--watcher", id);
+  assert.deepEqual([r.code, r.lines], [1, [`waiting: --dump is not the dump folder of ${b.wf}. Report "wrong dump folder, run node S watch --state ${b.state}" and stop`]]);
+  assert.equal(watchJson(b).poll, 3);
+  // A quote, a backtick or a closing mark copied around the id is not part of it.
+  const marks = [id + ".", id + ",", "`" + id + "`", id + ";", id + ":", id + "'", '"' + id + '"', id + ")", id + "]", "'" + id + ").", id + "`."];
+  marks.forEach((v, i) => assert.deepEqual(poll(b, v).lines, [waitLine(4 + i, 24)], JSON.stringify(v)));
+  assert.deepEqual(poll(b, id + "x").lines, [TOOK], "another letter is another id");
+});
+ok("waiting --count: a call without --watcher on a file with an id is out of date and marks the window stopped; plain watch then starts one", () => {
+  const b = pollStarted(), old = watchJson(b).watcher;
+  assert.deepEqual(poll(b).lines, [waitLine(1, 24)]);
+  for (const argv of [["--count", b.wf], ["--count", b.wf, "--watcher"], ["--count", b.wf, "--watcher", "."]]) {
+    const r = sh("waiting", ...argv);
+    assert.deepEqual([r.code, r.lines], [0, [OLD_BRIEF]], JSON.stringify(argv));
+    assert.deepEqual([watchJson(b).stopped, watchJson(b).poll, watchJson(b).watcher], [true, 1, old]);
+  }
+  assert.deepEqual(fs.readdirSync(b.board).filter((f) => f.endsWith(".tmp")), []);
+  const r = atNow("2026-02-01T12:20:00Z", () => cmd(b, "watch"));
+  assert.equal(r.lines[0], "wake poll: the watcher of this window stopped; start one watcher, every 300 s, at most 24 polls, until 2026-02-01T14:20:00+00:00. Pass the array below to P3, then start P6 with the lines between \"--- brief\" and \"--- end\" as its prompt.");
+  apply(b, r);
+  const id = watchJson(b).watcher;
+  assert.ok(id !== old && !("stopped" in watchJson(b)) && watchJson(b).poll === 0, JSON.stringify(watchJson(b)));
+  assert.deepEqual(poll(b, old).lines, [TOOK]);
+  assert.deepEqual(poll(b, id).lines, [waitLine(1, 24)]);
+  assert.deepEqual(cmd(b, "watch").lines, [runsLine("poll", b, "2026-02-01T14:20:00+00:00"), "no writes"]);
+  // With --restart the line is the plain start line.
+  sh("waiting", "--count", b.wf);
+  assert.equal(atNow("2026-02-01T12:30:00Z", () => cmd(b, "watch", "--restart")).lines[0], startLine("poll", 300, 24, "2026-02-01T14:30:00+00:00"));
+  // stopped is read only as true or false.
+  for (const stopped of ["yes", 1, null]) {
+    setWatch(b, { stopped });
+    assert.equal(poll(b).code, 1, JSON.stringify(stopped));
+  }
+});
+ok("watch: a watch file that cannot be written is one failure line and leaves no temp file", () => {
+  const b = wakeBoard({ mode: "poll" });
+  fs.mkdirSync(path.join(b.wf, "x"), { recursive: true });                // the watch file is a folder: the rename fails
+  const r = cmd(b, "watch");
+  assert.equal(r.code, 1, r.text);
+  assert.match(r.lines.join("\n"), new RegExp("^watch: cannot write " + b.wf.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ": E[A-Z]+$"));
+  assert.deepEqual(fs.readdirSync(b.board).filter((f) => f.endsWith(".tmp")), [], "no temp file left");
+});
+ok("watch after the window end while the old watcher still polls: the old one stops, the new one counts from 1, no window passes its limit", () => {
+  const b = wakeBoard({ mode: "poll", poll_seconds: 600, poll_limit: 3 }), counts = {};
+  apply(b, cmd(b, "watch"));
+  const old = watchJson(b).watcher, step = (id) => { const r = poll(b, id); if (r.lines[0].startsWith("none, poll ")) counts[id] = (counts[id] || 0) + 1; return r.lines; };
+  assert.deepEqual(step(old), [waitLine(1, 3, 600)]);
+  assert.deepEqual(step(old), [waitLine(2, 3, 600)]);
+  const r = atNow("2026-02-01T12:40:00Z", () => cmd(b, "watch"));        // the window ended at 12:30; poll 2 of 3
+  assert.equal(r.lines[0], startLine("poll", 600, 3, "2026-02-01T13:10:00+00:00"));
+  const id = watchJson(b).watcher;
+  assert.deepEqual(step(old), [TOOK]);
+  assert.deepEqual(step(id), [waitLine(1, 3, 600)]);
+  assert.deepEqual(step(old), [TOOK]);
+  assert.deepEqual(step(id), [waitLine(2, 3, 600)]);
+  assert.match(step(id)[0], /^none, poll 3 of 3: the limit\./);
+  assert.match(step(id)[0], /^none, poll 3 of 3: the limit\./);
+  assert.equal(watchJson(b).poll, 3);
+  assert.deepEqual([counts[old], counts[id]], [2, 4], "the limit line repeats at 3; the count never passes 3");
+});
+ok("waiting --count: a dump that is not the watch-dump folder beside the watch file is refused; nothing outside is deleted", () => {
+  const b = pollStarted(), id = watchJson(b).watcher, marker = path.join(b.dir, "marker");
+  const notWatch = `waiting: ${b.wf} is not a watch file. Report "watch file missing, run node S watch" and stop`;
+  for (const dump of [marker, "..", ".", b.board, b.state, "", path.join(b.board, "dump"), path.join(b.board, "watch-dump", "..")]) {
+    fs.mkdirSync(path.join(marker, "batches"), { recursive: true });
+    fs.copyFileSync(path.join(FIX, "dump", "batches", BB + ".json"), path.join(marker, "batches", BB + ".json"));
+    setWatch(b, { dump });
+    const before = fs.readFileSync(b.wf, "utf8");
+    for (const r of [poll(b, id), sh("waiting", "--dump", dump || "x", "--count", b.wf, "--watcher", id)])
+      assert.deepEqual([r.code, r.lines], [1, [notWatch]], JSON.stringify(dump));
+    assert.ok(fs.existsSync(path.join(marker, "batches", BB + ".json")) && fs.existsSync(b.state) && fs.existsSync(b.dir), JSON.stringify(dump));
+    assert.equal(fs.readFileSync(b.wf, "utf8"), before);
+  }
+  setWatch(b, { dump: b.wd });
+  fs.writeFileSync(b.wd, "not a folder");
+  let r = poll(b, id);
+  assert.deepEqual([r.code, r.lines], [1, [`waiting: the dump folder of ${b.wf} cannot be read. Report "watch dump unreadable, run node S watch --state ${b.state}" and stop`]]);
+  fs.rmSync(b.wd);
+  fs.mkdirSync(path.join(b.wd, "batches"), { recursive: true });
+  fs.writeFileSync(path.join(b.wd, "batches", BB + ".json"), "{");
+  r = poll(b, id);
+  assert.deepEqual([r.code, r.lines], [1, [`waiting: the dump folder of ${b.wf} cannot be read. Report "watch dump unreadable, run node S watch --state ${b.state}" and stop`]]);
+});
+// waiting --count with a watch --restart that lands after it read the watch file, before it writes it: the
+// restart runs inside waiting's removal of the dump folder.
+function raced(b, id) {
+  const rm = fs.rmSync;
+  let rs = null;
+  fs.rmSync = function (p, o) { const x = rm.call(fs, p, o); if (p === b.wd) { fs.rmSync = rm; rs = atNow("2026-02-01T12:10:00Z", () => cmd(b, "watch", "--restart")); } return x; };
+  try { return { r: poll(b, id), rs }; } finally { fs.rmSync = rm; }
+}
+ok("waiting --count: a watch --restart between its read and its write keeps the new id and poll 0; the old caller is told to stop", () => {
+  for (const withBatch of [false, true]) {
+    const b = pollStarted(), old = watchJson(b).watcher;
+    setWatch(b, { poll: 5 });
+    if (withBatch) fs.cpSync(path.join(FIX, "dump"), b.wd, { recursive: true }); else fs.mkdirSync(b.wd);
+    const { r, rs } = raced(b, old), w = watchJson(b);
+    assert.ok(rs && rs.lines[0].startsWith("wake poll: start one watcher"), rs && rs.text);
+    assert.deepEqual([r.code, r.lines], [0, [TOOK]], String(withBatch));
+    assert.ok(w.watcher !== old && w.poll === 0 && !("reported" in w), JSON.stringify(w));
+    assert.equal(w.started, "2026-02-01T12:10:00+00:00");
+    assert.deepEqual(fs.readdirSync(b.board).filter((f) => f.endsWith(".tmp")), [], "no temp file left");
+  }
+});
+ok("waiting --count: a watch file from before watcher ids counts without --watcher; an id that is not a plain id is refused", () => {
+  const b = fresh(), wf = path.join(b.board, "watch.json"), dir = path.join(b.board, "watch-dump");
+  const good = { dump: dir, seconds: 300, limit: 2, poll: 0, started: T0, until: T14 };
+  fs.writeFileSync(wf, JSON.stringify(good));
+  assert.deepEqual(sh("waiting", "--count", wf).lines, [waitLine(1, 2)]);
+  assert.deepEqual(sh("waiting", "--count", wf, "--watcher", "wabc123").lines, [OLD_BRIEF], "an id while the file holds none");
+  for (const watcher of ["-x", "~x", "a b", "", 7, null, "..", "x".repeat(101)]) {
+    fs.writeFileSync(wf, JSON.stringify(Object.assign({}, good, { watcher })));
+    const r = sh("waiting", "--count", wf, "--watcher", String(watcher));
+    assert.deepEqual([r.code, r.lines], [1, [`waiting: ${wf} is not a watch file. Report "watch file missing, run node S watch" and stop`]], JSON.stringify(watcher));
+  }
+  fs.writeFileSync(wf, JSON.stringify(Object.assign({}, good, { watcher: "w1a2b3c" })));
+  assert.deepEqual(sh("waiting", "--count", wf, "--watcher", "w1a2b3c").lines, [waitLine(1, 2)]);
 });
 ok("status and ack --result drop bidi controls, zero-width characters and lone surrogates; a text of only those is empty", () => {
   const b = fresh();
@@ -2585,9 +2749,9 @@ ok("wait.sh and the waiting line name the wait script so a folder with a space, 
     assert.equal(p.stdout, `wait paused: run bash ${sq} 1 again\n`, name);
     assert.deepEqual(viaStub(p.stdout.replace(/^wait paused: run /, "").replace(/ again\n$/, "")), ["bash", waitSh, "1"], name);
     const dir = fs.mkdtempSync(path.join(root, "d-")), wf = path.join(dir, "watch.json");
-    fs.writeFileSync(wf, JSON.stringify({ dump: path.join(dir, "dump"), seconds: 300, limit: 3, poll: 0 }));
+    fs.writeFileSync(wf, JSON.stringify({ dump: path.join(dir, "watch-dump"), seconds: 300, limit: 3, poll: 0 }));
     const lines = [];
-    assert.equal(mod.run(["waiting", "--dump", path.join(dir, "dump"), "--count", wf], (l) => lines.push(l)), 0);
+    assert.equal(mod.run(["waiting", "--dump", path.join(dir, "watch-dump"), "--count", wf], (l) => lines.push(l)), 0);
     assert.deepEqual(lines, [`none, poll 1 of 3. Run bash ${sq} 300 in the foreground, then go to step 1.`], name);
     assert.deepEqual(viaStub(lines[0].replace(/^.*?Run /, "").replace(/ in the foreground.*$/, "")), ["bash", waitSh, "300"], name);
     for (const d of [cwd, root, path.join(root, name)]) assert.ok(!fs.existsSync(path.join(d, "PWNED")), name);

@@ -62,8 +62,8 @@ prints `note: <key>: due not read`), `summary` (a row field, cut to 300 characte
 kept byte for byte), `input` (the field that changes when the item gets new activity, for example
 `updated_at`: a card the operator dismissed or marked done comes back when it changes), and `rows` (the
 field that holds the list when the export wraps it). A rule matches when the field, or an element of it,
-equals a value, case ignored. `created` takes a date, an ISO timestamp, or epoch
-seconds or milliseconds. The url must be `https:` on a host of `link_hosts`.
+equals a value, case ignored. `created` takes a date (also `YYYYMMDD`), an ISO
+timestamp, or epoch seconds or milliseconds from 1,000,000,000 up. The url must be `https:` on a host of `link_hosts`.
 A chat source (Teams, Slack) has no due date: leave out `due` and the groups place its cards by priority;
 never infer a date, and set `due` in an override only when the message text states one.
 
