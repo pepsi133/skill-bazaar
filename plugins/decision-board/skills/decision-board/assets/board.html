@@ -1047,16 +1047,22 @@ button.undo { flex: none; min-height: 44px; min-width: 88px; padding: 6px 16px; 
   }
   // The strip of a coerced status (or null). fmtTime: a one-argument formatter (the page passes fmt).
   // An empty now (a watcher window written before any status) is the idle status in every respect the strip shows.
+  // A document counts when its updated or its watcher window until is a readable time. The window is read only when
+  // until is a stamp of the schema form; a window with started but no such until counts as no window (the script
+  // never writes one). With no readable updated (a watch before any status) the window alone carries the strip: Idle,
+  // no age, never stale.
   function statusView(st, nowMs, fmtTime) {
-    var t = st ? stampMs(st.updated) : -Infinity, has = t !== -Infinity;
-    var n = has ? str(st.now) : "", idle = has && (n.toLowerCase() === "idle" || !n);
+    var t = st ? stampMs(st.updated) : -Infinity, timed = t !== -Infinity;
+    var win = st && st.watch && typeof st.watch.until === "string" && SCHEMA.stampRe.test(st.watch.until) && stampMs(st.watch.until) !== -Infinity ? st.watch : null;
+    var has = timed || !!win;
+    var n = has ? str(st.now) : "", idle = has && (!timed || n.toLowerCase() === "idle" || !n);
     var head = !has ? "No status from the agent yet" : idle ? "Idle" + (st.waiting ? ", waiting for: " + st.waiting : "") : "Now: " + st.now;
-    var age = has ? ageText(st.updated, nowMs) : "";
-    var stale = has && !idle && (nowMs - t > cfg.status.stale_minutes * 60000 || t - nowMs > 5 * 60000);
+    var age = timed ? ageText(st.updated, nowMs) : "";
+    var stale = timed && !idle && (nowMs - t > cfg.status.stale_minutes * 60000 || t - nowMs > 5 * 60000);
     if (stale) age = "last heard " + age;
-    return { has: has, idle: idle, head: head, age: age, when: has ? fmtTime(st.updated) : "", stale: stale,
+    return { has: has, idle: idle, head: head, age: age, when: timed ? fmtTime(st.updated) : "", stale: stale,
       next: has ? st.next.slice(0, 3) : [], waiting: has && !idle ? st.waiting : "",
-      wake: wakeLine(cfg.wake, has ? st.watch || null : null, nowMs, fmtTime) };
+      wake: wakeLine(cfg.wake, has ? win : null, nowMs, fmtTime) };
   }
   // A card changed since this viewer last marked it seen. Instants, never text: stamps carry offsets.
   function cardChanged(it, seenMap) {

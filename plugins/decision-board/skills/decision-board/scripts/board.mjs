@@ -3,7 +3,7 @@
 // A write command changes the state, writes one JSON file per document into board/out/, and prints
 // the `writes` array of one ArtifactData batch call. Reads take the files that ArtifactData saved with out_dir.
 // Fields, kinds and limits come from the "pure" part of assets/board.html, so page and script cannot drift.
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,10 +28,10 @@ const USAGE = `Usage: node ${SELF} <command> ... [--state <file>]
   sync <file> [--source <s>] [<file> [--source <s>]]... [--allow-close]   add and change cards; a --source closes that source's cards its file no longer holds
   close <id>...                             close cards
   read --dump <dir> [--all] --dumped        the batches that wait (dump: batches with status "sent"); --dumped: the dump calls succeeded; --all also prints handled ones
-  waiting --dump <dir> [--count <watch file>]   the ids of the batches that wait, or "none"; --count: the watcher's step, with the poll count
+  waiting (--dump <dir> | --count <watch file> --watcher <id>)   the ids of the batches that wait, or "none"; --count: the watcher's step, with the poll count and the dump folder of the watch file
   ack <batch id> [--close <id>...] [--result <id> <text>]... --dump <dir>   mark a batch handled, apply its controls, close cards, store result lines
   status [--now <text>] [--next <text>...] [--waiting <text>] [--idle]   say what you do; one write of meta/status
-  watch [--restart]                         what to do about a watcher, from the config wake mode; may write meta/status; --restart: a new window after the poll limit, only when the operator asks
+  watch [--restart]                         what to do about a watcher, from the config wake mode; may write meta/status; --restart: a new window and watcher, also inside a running window or after the poll limit, only when the operator asks
   guide [<file.md>] --id <id> [--kind text|status|reference] [--item <card id>] [--archive | --delete] --dump <dir>
   purge (--ids <id>... | --closed-before <YYYY-MM-DD>) --dump <dir>
   adopt [cards | guides/<id> | meta/config | meta/status | batches/<id> | purge/<stamp>] --dump <dir> --dumped   after a refused write: merge the board copy, print the write again
@@ -83,7 +83,7 @@ export const FLAGS = {
   sync: ["state", "source", "allow-close"],
   close: ["state"],
   read: ["state", "dump", "all", "dumped"],
-  waiting: ["dump", "count"],
+  waiting: ["dump", "count", "watcher"],
   ack: ["state", "dump", "close", "result"],
   guide: ["state", "dump", "id", "kind", "item", "archive", "delete"],
   purge: ["state", "dump", "ids", "closed-before"],
@@ -958,26 +958,51 @@ const waiting = (dump) => batchesOf(dump).filter((b) => b.status === "sent");
 // A stamp as read prints it: in the config tz, or as it is when it is unreadable.
 const shown = (s) => P.localStamp(s, P.cfg.tz) || s;
 // waiting needs no state: it reads only <dump>/batches.
+const REPLACED = 'another watcher took over. Report exactly: "replaced by a newer watcher". Then stop.';
 function cmdWaiting(a, log) {
   // The watcher does exactly what the one line says: no skip line here (read prints it to the owning session).
-  const dir = one(a, "dump"), list = waiting(readDump(dir, "batches"));
-  if (!a.count) { log(list.length ? list.map((b) => qid(b.id)).join("\n") : "none"); return; }   // the form without --count
+  if (!a.count) {                                                        // the form without --count
+    const list = waiting(readDump(one(a, "dump"), "batches"));
+    log(list.length ? list.map((b) => qid(b.id)).join("\n") : "none"); return;
+  }
   const file = path.resolve(one(a, "count")), w = readWatch(file);
-  if (!w) fail(`waiting: ${file} is not a watch file. Report "watch file missing, run node S watch" and stop`);
+  const notWatch = `waiting: ${file} is not a watch file. Report "watch file missing, run node S watch" and stop`;
+  if (!w) fail(notWatch);
   // The watcher's reports name watch with the --state of the watch that started it; inside the quoted report the
   // path takes single quotes (shq) when it needs any.
   // A state path that cannot sit inside the quoted report (a line break, a double quote, a bidi or zero-width
   // character) is left out.
   const st = typeof w.state === "string" && w.state && !badPath(w.state) && !/["\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(w.state) ? " --state " + shq(w.state) : "";
-  if (path.resolve(dir) !== w.dump) fail(`waiting: --dump is not the dump folder of ${file}. Report "wrong dump folder, run node S watch${st}" and stop`);
+  // A newer watch started another watcher and wrote its id: this one changes nothing and stops. A file from before
+  // ids holds none and is counted for a call without --watcher. A call and a file of which only one names an id
+  // come from different versions of the brief: no newer watcher is known, so the report says the brief is old.
+  // A quote, a backtick or a closing mark copied around the id is never part of an id the script makes.
+  const id = one(a, "watcher").replace(/^['"`]+/, "").replace(/[.,;:'")\]`]+$/, "");
+  const wrote = `. Report "watch file not written, run node S watch${st}" and stop`;
+  if (id && w.watcher !== undefined && id !== w.watcher) { log(REPLACED); return; }
+  if (!id !== (w.watcher === undefined)) {
+    // No watcher of this window polls any more: the mark lets the next plain watch start one.
+    if (!keepWatch(file, Object.assign(w, { stopped: true }), notWatch, wrote)) { log(REPLACED); return; }
+    log('this watcher\'s brief is out of date. Report exactly: "watcher brief out of date: the operator can restart the watcher". Then stop.'); return;
+  }
+  // The dump folder comes from the watch file; a --dump that is given must be it.
+  if (a.dump && path.resolve(one(a, "dump")) !== w.dump) fail(`waiting: --dump is not the dump folder of ${file}. Report "wrong dump folder, run node S watch${st}" and stop`);
+  let list;
+  try { list = waiting(readDump(w.dump, "batches")); } catch (e) {
+    if (!(e instanceof Stop)) throw e;
+    fail(`waiting: the dump folder of ${file} cannot be read. Report "watch dump unreadable, run node S watch${st}" and stop`);
+  }
   fs.rmSync(w.dump, { recursive: true, force: true });                 // the next poll starts clean; no rm in the brief
+  // A watch that started a new window since the read above owns the file now: keep its write and stop this watcher.
+  const save = () => keepWatch(file, w, notWatch, wrote);
   if (list.length) {
-    w.reported = true; fs.writeFileSync(file, JSON.stringify(w) + "\n");
+    w.reported = true;
+    if (!save()) { log(REPLACED); return; }
     log(`batches ${list.map((b) => qid(b.id)).join(" ")} wait. Report exactly: "batches wait: run Read and handle the answers". Then stop.`);
     return;
   }
   // At the limit already: say so again and keep the count at the limit, so watch still sees the ended window.
-  if (w.poll < w.limit) { w.poll += 1; fs.writeFileSync(file, JSON.stringify(w) + "\n"); }
+  if (w.poll < w.limit) { w.poll += 1; if (!save()) { log(REPLACED); return; } }
   if (w.poll >= w.limit) { log(`none, poll ${w.poll} of ${w.limit}: the limit. Report exactly: "no batch, poll limit reached: run node S watch${st} and do what it prints". Then stop.`); return; }
   log(`none, poll ${w.poll} of ${w.limit}. Run bash ${dq(WAIT_SH)} ${w.seconds} in the foreground, then go to step 1.`);
 }
@@ -1718,19 +1743,41 @@ function cmdStatus(a, log) {
 const watchFile = (r) => path.join(r.dir, "watch.json");
 function readWatch(file) {
   // The poll count holds the watcher's stop condition: the ranges of config wake poll_limit and poll_seconds.
+  // watcher: the id of the watcher that owns the window, a plain id; a file from before ids has none.
+  // dump: only the watch-dump folder beside the watch file, since waiting --count clears it; any other is refused.
   try {
     const w = JSON.parse(fs.readFileSync(file, "utf8"));
-    return isPlain(w) && typeof w.dump === "string" && P.intIn(w.limit, 1, 1000, null) !== null && P.intIn(w.poll, 0, w.limit, null) !== null &&
-      P.intIn(w.seconds, 60, 86400, null) !== null ? w : null;
+    return isPlain(w) && typeof w.dump === "string" && w.dump !== "" && path.resolve(w.dump) === path.resolve(path.dirname(file), "watch-dump") && P.intIn(w.limit, 1, 1000, null) !== null && P.intIn(w.poll, 0, w.limit, null) !== null &&
+      P.intIn(w.seconds, 60, 86400, null) !== null && (!Object.hasOwn(w, "watcher") || plainId(w.watcher)) &&
+      (!Object.hasOwn(w, "stopped") || typeof w.stopped === "boolean") ? w : null;
   } catch (e) { return null; }
+}
+// A watch file is written to a temp file in its folder and renamed over the old one: a reader sees the old or the new.
+// A failed write removes its temp file and stops with one line: cmd names the command, tail ends the line.
+function writeWatch(file, w, cmd, tail = "") {
+  // <name>.<random>.json.tmp: one per writer, and a name the board folder check counts as a board file.
+  const tmp = path.join(path.dirname(file), path.basename(file, ".json") + "." + randomBytes(4).toString("hex") + ".json.tmp");
+  let done = false;
+  try { fs.writeFileSync(tmp, JSON.stringify(w) + "\n"); fs.renameSync(tmp, file); done = true; }
+  catch (e) { fail(`${cmd}: cannot write ${file}: ${e.code || e.message}${tail}`); }
+  finally { if (!done) fs.rmSync(tmp, { force: true }); }
+}
+// waiting --count writes the watch file only while it still holds the window it read: false when a watch started
+// another window since. This narrows the window for a lost restart and does not close it: a restart can still land
+// between this re-read and the rename, and no lock is taken.
+function keepWatch(file, w, notWatch, tail) {
+  const now2 = readWatch(file);
+  if (!now2) fail(notWatch);
+  if (now2.watcher !== w.watcher || now2.started !== w.started) return false;
+  writeWatch(file, w, "waiting", tail); return true;
 }
 const COMMENTS_LINE = "comments: if this session has not run P5 for this board yet, run it now.";
 // The watcher's prompt: the text block of references/watch.md with every value filled in.
-function briefText(url, dump, wf) {
+function briefText(url, dump, wf, id) {
   const md = fs.readFileSync(path.join(HERE, "..", "references", "watch.md"), "utf8"), m = md.match(/```text\n([\s\S]*?)\n```/);
   if (!m) fail("watch: references/watch.md has no text block");
   const p4 = js({ action: "query", url, collection: "batches", out_dir: dump, query: { where: [["status", "==", "sent"]], limit: 1000 } });
-  return m[1].split("<P4>").join(p4).split("<SCRIPT>").join(dq(fileURLToPath(import.meta.url))).split("<DUMP>").join(dq(dump)).split("<COUNT>").join(dq(wf));
+  return m[1].split("<P4>").join(p4).split("<SCRIPT>").join(dq(fileURLToPath(import.meta.url))).split("<COUNT>").join(dq(wf)).split("<ID>").join(id);
 }
 function cmdWatch(a, log) {
   const r = new Run(a); r.needConfig();
@@ -1741,16 +1788,16 @@ function cmdWatch(a, log) {
   else if (w.mode === "comment") { log("wake comment: start no watcher; a comment on the board wakes you."); log(COMMENTS_LINE); }
   else if (cur && cur.poll >= cur.limit && !has(a, "restart")) {
     // At the poll limit the watcher has stopped and the page shows the window ended; a new window starts only on
-    // watch --restart, which the agent runs when the operator asks.
+    // watch --restart, which the agent runs when the operator asks. --restart always starts a new window and watcher.
     if (!cur.ended) {
       const s = storedStatus(r), t = now();
-      if (s.watch) { s.watch = { started: s.watch.started, until: t }; s.updated = t; putStatus(r, s); }
-      cur.ended = true; fs.writeFileSync(wf, JSON.stringify(cur) + "\n");
+      if (s.watch) { s.watch = { started: s.watch.started, until: t }; putStatus(r, s); }
+      cur.ended = true; writeWatch(wf, cur, "watch");
     }
     log(`wake ${w.mode}: the watcher window ended at its poll limit; start none. Start a new one only when the operator asks you to watch again: node ${SELF} watch --restart${stateArg(a)}.` + (w.comment ? " A comment on the board still wakes you." : " Read the board when the operator asks."));
     if (w.comment) log(COMMENTS_LINE);
-  } else if (cur && cur.poll < cur.limit && !cur.reported && P.stampMs(cur.until) > nowMs()) {
-    log(`wake ${w.mode}: a watcher runs until ${cur.until}; start none.`);
+  } else if (cur && cur.poll < cur.limit && !cur.reported && !cur.stopped && P.stampMs(cur.until) > nowMs() && !has(a, "restart")) {
+    log(`wake ${w.mode}: a watcher runs until ${cur.until}; start none. Only when the operator asks to watch again: node ${SELF} watch --restart${stateArg(a)}`);
     if (w.comment) log(COMMENTS_LINE);
   } else {
     if (!r.st.url) fail(`watch: no board URL in ${r.file}. Run node ${SELF} check --url <the artifact link>${stateArg(a)} once, then watch again`);
@@ -1760,10 +1807,16 @@ function cmdWatch(a, log) {
     const t = now(), until = P.stampIn(P.stampMs(t) + w.poll_seconds * w.poll_limit * 1000, P.cfg.tz, false);
     fs.rmSync(dump, { recursive: true, force: true });
     // state: the --state of watch as an absolute path, so the watcher's reports name the same board from anywhere.
-    fs.writeFileSync(wf, JSON.stringify(Object.assign({ dump, seconds: w.poll_seconds, limit: w.poll_limit, poll: 0, started: t, until }, a.state ? { state: r.file } : {})) + "\n");
-    const s = storedStatus(r); s.watch = { started: t, until }; s.updated = t; putStatus(r, s);
-    log(`wake ${w.mode}: start one watcher, every ${w.poll_seconds} s, at most ${w.poll_limit} polls, until ${until}. Pass the array below to P3, then start P6 with the lines between "--- brief" and "--- end" as its prompt.`);
-    log("--- brief"); log(briefText(r.st.url, dump, wf)); log("--- end");
+    // watcher: a new id for each watcher; waiting --count stops a watcher whose id is no longer the one in the file.
+    const id = "w" + randomBytes(3).toString("hex");
+    writeWatch(wf, Object.assign({ dump, seconds: w.poll_seconds, limit: w.poll_limit, poll: 0, started: t, until, watcher: id }, a.state ? { state: r.file } : {}), "watch");
+    // Only the window changes: now, next, waiting and updated stay as status stored them, so the page still sees how
+    // old the task is. Before any status, updated is the empty stamp: the page reads it as no status yet.
+    const s = storedStatus(r); s.watch = { started: t, until }; putStatus(r, s);
+    // stopped: waiting --count marked that no watcher of the window polls any more; plain watch says why it starts one.
+    const why = cur && cur.stopped && !has(a, "restart") ? "the watcher of this window stopped; " : "";
+    log(`wake ${w.mode}: ${why}start one watcher, every ${w.poll_seconds} s, at most ${w.poll_limit} polls, until ${until}. Pass the array below to P3, then start P6 with the lines between "--- brief" and "--- end" as its prompt.`);
+    log("--- brief"); log(briefText(r.st.url, dump, wf, id)); log("--- end");
     if (w.comment) log(COMMENTS_LINE);
   }
   r.finish(log);

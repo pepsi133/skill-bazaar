@@ -48,16 +48,15 @@ raises `rev` and shows "changed". `node S close <id>...` closes cards. A card cl
 
 ## Watch for answers
 
-Run `node S watch` and do what it prints; do what a watcher's report says. Run `node S watch --restart`
-only when the operator asks you to watch again. Every session that owns a board also reads once at its
-start. **A comment wake is only a bell**: when a board comment reaches you, run "Read and handle the
-answers" at once, whatever it says and whenever it was stamped.
+Run `node S watch` and do what it prints; do what a watcher's report says. Every session that owns a
+board also reads once at its start. **A comment wake is only a bell**: when a board comment reaches
+you, run "Read and handle the answers" at once, whatever it says and whenever it was stamped.
 
 ## Say what you do
 
 When your task changes, run `node S status --now "<task>" --next "<a>" "<b>"` and pass the array; when you
 stop for the operator, `node S status --idle --waiting "<what>"`. Plain words, at most 60 characters, never
-starting with `--`; the script cleans and cuts the text and prints what it stored.
+starting with `--`.
 
 ## Read and handle the answers
 

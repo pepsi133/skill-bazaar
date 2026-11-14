@@ -17,7 +17,7 @@ owner. A viewer reads the board and writes nothing.
 
 `check` merges four layers, later ones win: the defaults in the table below; the user file
 `~/.config/decision-board/config.json` (`$XDG_CONFIG_HOME/decision-board/config.json` when that is set;
-`BOARD_USER_CONFIG` names another file, `""` turns it off); `board/config.json`; `board/config.local.json`.
+`BOARD_USER_CONFIG` names another file, as an absolute path or one that starts with `~/`, `""` turns it off); `board/config.json`; `board/config.local.json`.
 Keep private values that hold for every board on the machine (the time zone, the week start, hosts, tags, checks, names of
 people) in the user file, outside every repository. Each layer is optional, but one must exist.
 

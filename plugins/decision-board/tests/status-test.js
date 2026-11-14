@@ -80,6 +80,34 @@ ok("statusView: an unreadable updated is no status; a stamp 10 minutes ahead is 
   assert.deepEqual([ahead.stale, ahead.age], [true, "last heard just now"]);
   assert.equal(P.statusView(st({ updated: at(-4) }), NOW, f1).stale, false);
 });
+ok("statusView: a watcher window with an empty updated is Idle with no age and shows the window; with updated as before; nothing is no status; a task text without updated is Idle; an until not in the stamp form is no window", () => {
+  P.applyConfig({ tz: "UTC", wake: { mode: "poll" } });
+  const empty = (watch) => P.coerce("status", Object.assign({ now: "", next: [], waiting: "", updated: "" }, watch ? { watch } : {}));
+  const run = { started: at(10), until: at(-60) }, ended = { started: at(200), until: at(80) };
+  for (const [w, part] of [[run, ", watcher planned until T(" + at(-60) + ")"], [ended, ", watcher window ended T(" + at(80) + ")"]]) {
+    const v = P.statusView(empty(w), NOW, f1);
+    assert.deepEqual([v.has, v.idle, v.head, v.age, v.when, v.stale, plain(v.next), v.waiting], [true, true, "Idle", "", "", false, [], ""], part);
+    assert.ok(v.wake.endsWith(part), v.wake);
+  }
+  const timed = P.statusView(st({ updated: at(45), watch: run }), NOW, f1);
+  assert.deepEqual([timed.has, timed.head, timed.age, timed.stale, timed.when], [true, "Now: Build the report", "last heard 45 min ago", true, "T(" + at(45) + ")"]);
+  assert.ok(timed.wake.endsWith(", watcher planned until T(" + at(-60) + ")"), timed.wake);
+  for (const x of [empty(null), empty({ started: "", until: "" }), null]) {
+    const v = P.statusView(x, NOW, f1);
+    assert.deepEqual([v.has, v.head, v.age, v.when], [false, "No status from the agent yet", "", ""], JSON.stringify(x));
+    assert.ok(v.wake.endsWith(", no watcher started"), v.wake);
+  }
+  const task = P.statusView(P.coerce("status", { now: "Build the report", next: ["A"], waiting: "the key", updated: "", watch: run }), NOW, f1);
+  assert.deepEqual([task.has, task.idle, task.head, task.age, task.when, task.stale, task.waiting], [true, true, "Idle, waiting for: the key", "", "", false, ""], "a task text without updated is Idle");
+  assert.ok(task.wake.endsWith(", watcher planned until T(" + at(-60) + ")"), task.wake);
+  for (const until of ["1", "2026-02-01", "2026-02-01T13:00:00Z", "soon"]) {
+    const v = P.statusView(empty({ started: at(10), until }), NOW, f1);
+    assert.deepEqual([v.has, v.head], [false, "No status from the agent yet"], until);
+    const t = P.statusView(st({ watch: { started: at(10), until } }), NOW, f1);
+    assert.ok(t.has && t.wake.endsWith(", no watcher started"), until + ": " + t.wake);
+  }
+  P.applyConfig({ tz: "UTC" });
+});
 ok("statusView: config status.stale_minutes changes the stale bound; an invalid value keeps 30", () => {
   P.applyConfig({ tz: "UTC", status: { stale_minutes: 5 } });
   assert.equal(P.statusView(st({ updated: at(6) }), NOW, f1).stale, true);
