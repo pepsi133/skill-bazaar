@@ -14,7 +14,8 @@ description: Refresh the cards of a decision board from outside sources, such as
    export file) and save the rows as JSON, for example `.board/rows/tracker.json`. When the source
    states its total, compare it with your count and pass it as `--min-rows`. A CLI that pages by
    default (`gh issue list` returns 30 rows and states no total) needs its own limit flag, or a short
-   fetch closes cards. Rows stay as fetched: every change goes through the map or an override.
+   fetch closes cards. Rows stay as fetched: every change goes through the map or an override. A source that
+   cannot be read is left out of that `sync` run; never sync it from an empty file.
 2. **Write the map** (next section), with the `id` of each entry of `tags` and `priorities` in
    `.board/config.merged.json`. Run `node S check` first only when that file does not exist.
    For a new source, read `references/maps.md` first.
@@ -70,6 +71,14 @@ never infer a date, and set `due` in an override only when the message text stat
 The card id is `<source>-<key>`, stable across runs (a key outside the id characters gets a short
 hash). The link label is `<source> <key>`. The card's `source_key` is the raw key: the Close control and an
 assign to the agent name the item by it.
+
+## Cards written by hand
+
+A hand-written card has no source record, so a refresh cannot touch it. To give the existing cards one, write a rows
+file with one row per card (key, title, link, creation date), where `<source>-<key>` is the card's id: card
+`tracker-7` is key `7` of source `tracker`. Write the map for those fields and run `map` and `sync --source` as above.
+The cards keep their ids and gain `source_key`; later runs close those the rows no longer hold. A card whose id has
+another form needs a new id: close it and post the new one.
 
 ## Never guess a missing field
 

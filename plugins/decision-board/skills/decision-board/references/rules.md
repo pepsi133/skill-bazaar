@@ -4,7 +4,8 @@ Read this only when a line names it: `check` prints `rules: no .board/rules.md`,
 or `[standing]`. `S` and `P3` are as in `SKILL.md`.
 
 `.board/rules.md` is guide Markdown: `# Rules`, then one `## <topic>` section per topic, in plain sentences
-(which alerts matter, who owns what, what is noise). Only you write it, and only as below. `check` posts it as the
+(which alerts matter, who owns what, what is noise). Only you write it, and only as below. A rule the operator
+states in the terminal goes into `rules.md` directly, then `node S check` posts it; every other rule comes through a card. `check` posts it as the
 board's Rules tab after each change; never post it with `guide`.
 
 ## Start the rules

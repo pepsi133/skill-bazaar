@@ -22,6 +22,8 @@ Loop:
    Then go to step 1.
 ```
 
+Only the main session that owns the board holds the comment wake (`P5`); a subagent cannot.
+
 On its report, the owning session does what the report says. A second `watch` before the first poll prints the same brief again, and the status array again while it is unconfirmed; it writes nothing. A `watch` that starts a window refuses while an earlier array is unconfirmed: after you pass the status array, run `node S confirm` or add `--confirmed`.
 
 At the poll limit `watch` starts no new window. Only when the operator asks to watch again, run `node S watch --restart`: it

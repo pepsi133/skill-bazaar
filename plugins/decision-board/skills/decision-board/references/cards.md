@@ -3,7 +3,7 @@
 ## Fields
 
 A card file is a JSON list of cards. The script fills `rev`, `created` and
-`updated` (and `ack --result` fills `result` and `result_at`, for any card, also one of an earlier batch; `close <id>... --result "<text>"` fills them too, for a card that closes with no batch waiting),
+`updated` (and `ack --result` fills `result` and `result_at`, for any card, also one of an earlier batch; `close <id>... --result "<text>"` fills them too, for a card that closes with no batch waiting; a second `close --result` on a closed card replaces the stored result; a text over 200 characters is refused),
 and refuses an unknown field.
 
 | Field | Value |
@@ -17,7 +17,7 @@ and refuses an unknown field.
 | `recommendation` | One of the options, word for word |
 | `kind` | `decision` (default), `action` (the operator does something outside the board; options "Done", "Done in part, see note", "Later", "Other, see note"), or `info` (one option, "Acknowledge") |
 | `priority` | `now`, `soon` (default) or `later`, or an id of the config |
-| `source` | A short word for where the card came from; it chooses the tab. `sync --source <s>` sets it on every card of the file |
+| `source` | One short word per source, the same on every run (a new word is a new source); it chooses the tab. `sync --source <s>` sets it on every card of the file and closes that source's open cards the file lacks; a card that names another source is refused. A file that mixes sources or holds hand-written cards goes in without `--source`, each card naming its own `source`, and closes nothing |
 | `blocks` | What waits for the card, for example `the nightly backup`. The card then shows in "Blocked on you" |
 | `status` | `open` (default) or `closed` |
 | `links` | Optional. Up to 10 `{"label", "url"}`; with config `link_hosts` set, `sync` prints one `note: no link: <n> cards` line for the open cards without one that it adds or changes; cards with `source` `rules` are not counted. A url must parse, use `https:`, carry no user name or password, and have a host of the config `link_hosts` or a subdomain of one. Give the link of the item when it has one |
