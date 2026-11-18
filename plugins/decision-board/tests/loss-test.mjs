@@ -12,7 +12,7 @@ import { makeTmp, removeTmp } from "./_tmp.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(here, "fixtures");
-const SELF = path.relative(process.cwd(), path.join(here, "..", "skills", "decision-board", "scripts", "board.mjs"));
+const SELF = path.resolve(path.join(here, "..", "skills", "decision-board", "scripts", "board.mjs"));
 const tmp = makeTmp("loss-test-");
 let n = 0, failed = 0;
 function ok(name, fn) {
@@ -205,7 +205,7 @@ function refusedAck(b, bump = (raw) => { raw.version += 1; }) {
   assert.throws(() => apply(b, r), /version_mismatch/);
   return adoptNoCards(b, "batches/" + ACKED);
 }
-const cardsLine = (b, word) => `batches/${ACKED}: the cards write of this ack is not on the board. ${word} rm -rf ${b.dump}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${b.dump} --dumped --state ${JSON.stringify(b.state)}`;
+const cardsLine = (b, word) => `batches/${ACKED}: the cards write of this ack is not on the board. ${word} rm -rf ${b.dump}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${b.dump} --dumped --reply - --state ${JSON.stringify(b.state)}`;
 // Follow the adopt cards line of r: it is there, then adopt cards lands the close.
 function followCards(b, r, word) {
   assert.ok(r.lines.includes(cardsLine(b, word)), r.text);
@@ -400,8 +400,8 @@ ok("an ack the board holds whose cards are owed: its own note; push sends the ca
   assert.equal(adoptNoCards(b, "batches/" + ACKED).lines.slice(-1)[0], cardsLine(b, "Now:"));
   assert.deepEqual(cmd(b, "close", "disk-size").lines, ["close: 0 cards closed", cardsNote(b), "no writes"]);
   const p = cmd(b, "push", "batches/" + ACKED);
-  const dd = path.relative(process.cwd(), b.dump) || "dump";            // push takes no --dump: the default folder
-  assert.deepEqual(p.lines.filter((l) => l.startsWith("if ")), [`if refused: rm -rf ${dd}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${dd} --dumped${stt}`,
+  const dd = b.dump;            // push takes no --dump: the default folder
+  assert.deepEqual(p.lines.filter((l) => l.startsWith("if ")), [`if refused: rm -rf ${dd}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${dd} --dumped --reply -${stt}`,
     `if the reply is lost: node ${SELF} push cards${stt}`], p.text);
   assert.equal((st(b).pending || {})["batches/" + ACKED], undefined, "push clears it");
   follow(b, p);
@@ -483,7 +483,7 @@ ok("the batch handled elsewhere and cards moved: adopt batches/<id> lands the cl
     "cards: added from the board other-card", "cards: kept this state's newer copy of disk-size",
     `batches/${ACKED}: the cards write of this ack is not on the board: write it again`, `cards: write again, pinned to version ${v}`], ad.text);
   assert.deepEqual(writesOf(ad.lines).flat().map((w) => [w.collection, w.if_version]), [["cards", v]], ad.text);
-  assert.deepEqual(ad.lines.filter((l) => l.startsWith("if ")), [`if refused: rm -rf ${b.dump}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${b.dump} --dumped${stt}`,
+  assert.deepEqual(ad.lines.filter((l) => l.startsWith("if ")), [`if refused: rm -rf ${b.dump}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${b.dump} --dumped --reply -${stt}`,
     `if the reply is lost: node ${SELF} push cards${stt}`], "the lines of the cards group");
   assert.equal((st(b).pending || {})["batches/" + ACKED], undefined, "the ack needs nothing more");
   apply(b, ad);

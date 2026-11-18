@@ -22,7 +22,7 @@ const badPath = (p) => /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(p);
 const pathRefusal = (cmd, p) => `${cmd}: the path ${q(p)} holds a line break or a control character; use another path`;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WAIT_SH = path.resolve(HERE, "..", "assets", "wait.sh");
-const SELF = shq(path.relative(process.cwd(), fileURLToPath(import.meta.url)) || "board.mjs");
+const SELF = shq(fileURLToPath(import.meta.url));
 const USAGE = `Usage: node ${SELF} <command> ... [--state <file>]
   page                                      write .board/board.html from the asset, titled "<config title> [DB]"; refuses a missing or generic title
   confirm                                   the array printed last was passed to the database: clear every write that waits for it
@@ -34,11 +34,12 @@ const USAGE = `Usage: node ${SELF} <command> ... [--state <file>]
   ack <batch id> [--close <id>...] [--result <id> <text>]... --dump <dir>   mark a batch handled, apply its controls, close cards, store result lines
   status [--now <text>] [--next <text>...] [--waiting <text>] [--idle]   say what you do; one write of meta/status
   watch [--restart]                         what to do about a watcher, from the config wake mode; may write meta/status; --restart: a new window and watcher, also inside a running window or after the poll limit, only when the operator asks
-  guide [<file.md>] --id <id> [--kind text|status|reference] [--item <card id>] [--archive | --delete] --dump <dir>
-  purge (--ids <id>... | --closed-before <YYYY-MM-DD>) --dump <dir>
-  adopt [cards | guides/<id> | meta/config | meta/status | batches/<id> | purge/<stamp>] --dump <dir> --dumped   after a refused write: merge the board copy, print the write again
+  guide [<file.md>] --id <id> [--kind text|status|reference] [--item <card id>] [--archive | --delete] --dump <dir> [--reply <file>|-]
+  purge (--ids <id>... | --closed-before <YYYY-MM-DD>) --dump <dir> [--reply <file>|-]
+  adopt [cards | guides/<id> | meta/config | meta/status | batches/<id> | purge/<stamp>] --dump <dir> --dumped [--reply <file>|-]   after a refused write: merge the board copy, print the write again
+  --reply: the reply text of the dump call with versions, as a file or - for the standard input; its document lines give the versions
   push [cards | guides/<id> | meta/config | meta/status | batches/<id> | purge/<stamp>]   print the last write of a document again
-Every command that prints a write refuses while an earlier array is not confirmed; --confirmed on it (or confirm) says the earlier array passed.
+Every command that prints a write refuses while an earlier array is not confirmed; --confirmed on it says the array of the last printing command passed, confirm says every array passed.
 --state defaults to .board/state.json; config.json, config.local.json, config.merged.json, rules.md, out/, purged/ and decisions.md sit beside it.
 The user config is $BOARD_USER_CONFIG, else $XDG_CONFIG_HOME/decision-board/config.json, else ~/.config/decision-board/config.json. <dir> holds the ArtifactData
 dumps: <dir>/<collection>/<doc id>.json; a missing folder is an empty collection. Every time written or printed is
@@ -90,9 +91,9 @@ export const FLAGS = {
   read: ["state", "dump", "all", "dumped"],
   waiting: ["dump", "count", "watcher"],
   ack: ["state", "dump", "close", "result", "confirmed"],
-  guide: ["state", "dump", "id", "kind", "item", "archive", "delete", "confirmed"],
-  purge: ["state", "dump", "ids", "closed-before", "confirmed"],
-  adopt: ["state", "dump", "dumped"],
+  guide: ["state", "dump", "id", "kind", "item", "archive", "delete", "confirmed", "reply"],
+  purge: ["state", "dump", "ids", "closed-before", "confirmed", "reply"],
+  adopt: ["state", "dump", "dumped", "reply"],
   push: ["state"],
   page: ["state"],
   status: ["state", "now", "next", "waiting", "idle", "confirmed"],
@@ -117,7 +118,7 @@ function parseArgs(argv) {
 }
 const BAD = Symbol("a flag that is a key of the parsed arguments");
 // The --state part of a printed command line: the --state the command was given, else nothing.
-const stateArg = (a) => (a.state ? " --state " + dq(one(a, "state")) : "");
+const stateArg = (a) => (a.state ? " --state " + dq(path.resolve(one(a, "state"))) : "");
 const one = (a, k) => (a[k] && a[k].length ? a[k][a[k].length - 1] : "");
 // The words after the last --k up to the next flag, joined with one space: a text given without quotes.
 const words = (a, k) => { const i = a.raw.lastIndexOf("--" + k), out = []; for (let j = i + 1; i >= 0 && j < a.raw.length && !a.raw[j].startsWith("--"); j++) out.push(a.raw[j]); return out.join(" "); };
@@ -154,16 +155,23 @@ function isWrapped(raw, file) {
 // The version of a dumped document that a write pins. A missing or broken version stops the command.
 function pin(collection, id, ex) {
   if (!ex) return undefined;
-  if (!Number.isInteger(ex.version) || ex.version < 1) fail(`${collection}/${qid(id)}: the dump has no whole-number version. Save the document lines of the dump replies to versions.txt in the dump folder, or dump again; write nothing until then`);
+  if (!Number.isInteger(ex.version) || ex.version < 1) fail(`${collection}/${qid(id)}: the dump has no whole-number version. Pass the reply text of the dump call with --reply (a file, or - for the standard input), or dump again; write nothing until then`);
   return ex.version;
 }
-export function readDump(dir, only) {
+// The text of --reply: a file, or - for the standard input. It is the reply of a dump call as it came back; only its
+// document lines count (readDump).
+function replyText(a) {
+  const f = one(a, "reply");
+  if (!f) return "";
+  try { return fs.readFileSync(f === "-" ? 0 : f, "utf8"); } catch (e) { fail(`--reply ${shownPath(f)}: cannot read it (${e.code || e.message}). Give the reply text of the dump call, as a file or - for the standard input`); }
+}
+export function readDump(dir, only, reply = "") {
   if (!dir) fail("--dump <dir> is required");
   if (fs.existsSync(dir) && !fs.statSync(dir).isDirectory()) fail(`--dump ${shownPath(dir)}: not a folder. Give the dump folder`);
   const cols = new Map(), listed = new Map(), vt = path.join(dir, "versions.txt");
   let skipped = 0;
   // The quoted path of a reply line, absolute or relative to the cwd, names the file.
-  for (const ln of fs.existsSync(vt) ? fs.readFileSync(vt, "utf8").split(/\r?\n/) : []) {
+  for (const ln of (fs.existsSync(vt) ? fs.readFileSync(vt, "utf8") + "\n" : "").concat(reply).split(/\r?\n/)) {
     const m = /\sversion (\d+)\s+("(?:[^"\\]|\\.)*")\s*$/.exec(ln);
     if (m) try { listed.set(path.resolve(JSON.parse(m[2])), Number(m[1])); } catch (e) { /* not a reply line */ }
   }
@@ -408,7 +416,17 @@ class Run {
     for (const k of ["pending", "unlogged"]) this.st[k] = isPlain(this.st[k]) ? this.st[k] : {};
     // unconfirmed: the keys of the arrays printed and not yet confirmed (confirm, --confirmed, adopt or a dump that shows them).
     this.unc = new Set(Array.isArray(this.st.unconfirmed) ? this.st.unconfirmed.filter(keyOk) : []);
-    if (a.confirmed) this.unc.clear();
+    // printed: the keys of the last command that printed a write. --confirmed covers those and no older array.
+    this.printed = new Set(Array.isArray(this.st.printed) ? this.st.printed.filter(keyOk) : []);
+    if (a.confirmed) {
+      const older = Array.from(this.unc).filter((k) => !this.printed.has(k));
+      if (older.length) {
+        const ctx = this.ctx();
+        fail([`${a._[0]}: nothing written. --confirmed covers only the array of the last command that printed one; not confirmed earlier: ${older.join(", ")}.`,
+          `If every array passed: node ${SELF} confirm${ctx.state}; else do the steps below for each key, then run the command again.`].concat(older.flatMap((g) => recoverLines(g, ctx))));
+      }
+      this.unc.clear();
+    }
     // A batch id is printed inside command lines: a pending ack or log entry of an id that is not plain goes.
     for (const id of Object.keys(this.st.unlogged)) if (!plainId(id)) delete this.st.unlogged[id];
     // A purge key is printed inside command lines too: only a plain stamp stays.
@@ -566,7 +584,10 @@ class Run {
       return { out, size: data ? JSON.stringify(data).length : 0, group: group || also || key };
     });
     for (const k of Array.from(this.unc)) if (!Object.hasOwn(this.st.pending, k)) this.unc.delete(k);
+    if (list.length) this.printed = new Set(list.map((x) => x.group).filter(Boolean));
     if (this.unc.size) this.st.unconfirmed = Array.from(this.unc).sort(); else delete this.st.unconfirmed;
+    const pr = Array.from(this.printed).filter((k) => this.unc.has(k)).sort();
+    if (pr.length) this.st.printed = pr; else delete this.st.printed;
     for (const k of ["pending", "unlogged"]) if (!Object.keys(this.st[k]).length) delete this.st[k];
     if (this.st.purge && !this.st.purge.length) delete this.st.purge;
     if (this.st.held) this.st.held = this.st.held.filter((id) => this.card(id));
@@ -587,7 +608,7 @@ class Run {
   // Where the printed next steps point: the --dump folder of the command, else dump/ beside the state; and --state.
   ctx() {
     const a = this.a;
-    return { dump: shq(a.dump ? one(a, "dump") : path.relative(process.cwd(), path.join(this.dir, "dump")) || "dump"), state: stateArg(a) };
+    return { dump: shq(path.resolve(a.dump ? one(a, "dump") : path.join(this.dir, "dump"))), state: stateArg(a) };
   }
 }
 // The calls that dump what adopt needs for a group: the agent never picks the collections itself.
@@ -600,7 +621,7 @@ function dumpCalls(group) {
 }
 // The two lines under an array, and in a refusal: the way out of a refused write and of a lost reply.
 const recoverLines = (g, ctx) => [
-  `if refused: rm -rf ${ctx.dump}, then ${dumpCalls(g)}, then node ${SELF} adopt ${g} --dump ${ctx.dump} --dumped${ctx.state}`,
+  `if refused: rm -rf ${ctx.dump}, then ${dumpCalls(g)}, then node ${SELF} adopt ${g} --dump ${ctx.dump} --dumped --reply -${ctx.state}`,
   `if the reply is lost: node ${SELF} push ${g}${ctx.state}`];
 // Each array, then for each group of its writes the line for a refused write and the line for a lost reply. A group
 // is a pending key, and every id in one is a plain id (readDump, the state load, guideId and docKey check them).
@@ -915,7 +936,7 @@ function cmdClose(a, log) {
   r.needCards(ids, "close");
   // --result <text>: one text for every named card, stored as ack --result stores it (a closed card keeps showing it).
   if (a.raw.filter((x) => x === "--result").length > 1) fail("close: give --result once; the text starts after it and cannot start with --");
-  const res = has(a, "result") ? cleanText(words(a, "result"), S.max.result) : null;
+  const res = has(a, "result") ? resultText(words(a, "result"), "close --result") : null;
   if (res === "") fail("close --result: empty text");
   const k = r.closeCards(ids, t);
   if (res) for (const id of ids) { const c = r.card(id); c.result = res; c.result_at = t; c.updated = t; }
@@ -1044,6 +1065,7 @@ function cmdWaiting(a, log) {
   fs.rmSync(w.dump, { recursive: true, force: true });                 // the next poll starts clean; no rm in the brief
   // A watch that started a new window since the read above owns the file now: keep its write and stop this watcher.
   const save = () => keepWatch(file, w, notWatch, wrote);
+  w.polled = now();                                                     // the time of this poll: watch lets a watcher that polled lately keep its window
   if (list.length) {
     w.reported = true;
     if (!save()) { log(REPLACED); return; }
@@ -1058,17 +1080,17 @@ function cmdWaiting(a, log) {
 // read: what the agent does with one answer or note line of a sent batch, printed in brackets at its end.
 // flags: the line's flags, a list. The script decides, the agent follows.
 function lineHint(flags, a, id) {
-  const dir = shq(one(a, "dump")), st = stateArg(a);
+  const dir = shq(path.resolve(one(a, "dump"))), st = stateArg(a);
   if (flags.includes("[stale-rev]") && id) return `(skip; tell the operator: add --result ${id} "answer not applied: the card changed since, answer again" to the ack line)`;
   if (flags.includes("[stale-rev]") || flags.includes("[missing]")) return "(skip)";
-  if (flags.includes("[other-rev]")) return `(skip; after the ack: rm -rf ${dir}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${dir} --dumped${st})`;
+  if (flags.includes("[other-rev]")) return `(skip; after the ack: rm -rf ${dir}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${dir} --dumped --reply -${st})`;
   if (flags.includes("[question]")) return "(answer the note in the card text and post the card again)";
   if (flags.includes("[rule]") || flags.includes("[standing]")) return "(read references/rules.md and do what it says for this line)";
   return "(act on it)";
 }
 function cmdRead(a, log) {
   const dir = one(a, "dump");
-  if (!a.dumped) fail(`read: no --dumped. Run rm -rf ${shq(dir)}, then P4; once P4 succeeded, run node ${SELF} read --dump ${shq(dir)} --dumped${stateArg(a)}`);
+  if (!a.dumped) fail(`read: no --dumped. Run rm -rf ${shq(path.resolve(dir))}, then P4; once P4 succeeded, run node ${SELF} read --dump ${shq(path.resolve(dir))} --dumped${stateArg(a)}`);
   const dump = readDump(dir), r = new Run(a), list = a.all ? batchesOf(dump) : waiting(dump);
   skipLine(dump, log);
   r.clearCardsOnly(dump);
@@ -1110,7 +1132,7 @@ function cmdRead(a, log) {
       log(`  note ${qid(id)}${nb.item ? "  item " + q(nb.item) : ""}  ${q(nb.text)}${nflags.length ? "  " + nflags.join(" ") : ""}${sent ? "  " + hint(lineHint(nflags, a)) : ""}`);
     }
     if (sent && r.st.pending["batches/" + b.id]) log("  " + pushHint(b.id, r));
-    else if (sent) log(`  ${lines && !live ? "nothing to act on here. " : ""}when handled: node ${SELF} ack ${qid(b.id)} --dump ${shq(one(a, "dump"))}${stateArg(a)}`);
+    else if (sent) log(`  ${lines && !live ? "nothing to act on here. " : ""}when handled: node ${SELF} ack ${qid(b.id)} --dump ${shq(path.resolve(one(a, "dump")))}${stateArg(a)}`);
   }
   r.finish(() => {});
 }
@@ -1139,7 +1161,7 @@ function cmdAck(a, log) {
   const res = batch || pend ? a.result || [] : [], t = now(), pairs = [];
   const nFlags = batch || pend ? a.raw.filter((x) => x === "--result").length : 0;
   if (res.length % 2 || res.length !== 2 * nFlags) fail("ack --result: give a card id and one text per --result");
-  for (let i = 0; i < res.length; i += 2) pairs.push([res[i], cleanText(res[i + 1], S.max.result)]);
+  for (let i = 0; i < res.length; i += 2) pairs.push([res[i], resultText(res[i + 1], "ack --result " + qid(res[i]))]);
   r.needCards(pairs.map((p) => p[0]), "ack");
   const rerr = [], seenIds = new Set();
   for (const [id, text] of pairs) {
@@ -1239,7 +1261,7 @@ function cmdAck(a, log) {
 // The status guide line of ack and guide.
 function statusGuideLine(r, a, what) {
   const f = rel(path.join(r.dir, "status.md"));
-  return `status guide: on in the config. ${what} in ${f}, dump guides with versions, then run node ${SELF} guide ${shq(f)} --id status --kind status --dump ${shq(one(a, "dump") || rel(path.join(r.dir, "dump")))}${stateArg(a)} and pass its array`;
+  return `status guide: on in the config. ${what} in ${f}, dump guides with versions, then run node ${SELF} guide ${shq(path.resolve(f))} --id status --kind status --dump ${shq(path.resolve(one(a, "dump") || path.join(r.dir, "dump")))} --reply -${stateArg(a)} and pass its array`;
 }
 
 // ---- guide
@@ -1285,7 +1307,7 @@ function guideDoc(id, kind, text, old, item, t) {
 function guideId(id) { if (!S.idRe.test(id)) fail("guide: --id <id> with 1 to 100 of A-Z a-z 0-9 _ - . ~ : @ +"); return id; }
 // The dump gives the old content (the status that the page sets, the section times); the version comes from the state.
 function cmdGuide(a, log) {
-  const dump = readDump(one(a, "dump")), r = new Run(a), id = guideId(one(a, "id")), ex = dump.col("guides").get(id), t = now();
+  const dump = readDump(one(a, "dump"), undefined, replyText(a)), r = new Run(a), id = guideId(one(a, "id")), ex = dump.col("guides").get(id), t = now();
   r.needConfirmed();
   r.clearCardsOnly(dump);
   if (id.toLowerCase() === RULES_ID) fail(`guide: the guide rules is posted by check from ${shownPath(boardName(path.join(r.dir, "rules.md")))}. Run node ${SELF} check${stateArg(a)}`);
@@ -1366,14 +1388,14 @@ function standingRe(v) {
 // the handled batches that hold only purged cards, except the newest batch. The cards stay in the state,
 // listed in purge, until adopt sees them gone from the board.
 function cmdPurge(a, log) {
-  const dump = readDump(one(a, "dump")), r = new Run(a), resps = dump.col("responses"), batches = dump.col("batches");
+  const dump = readDump(one(a, "dump"), undefined, replyText(a)), r = new Run(a), resps = dump.col("responses"), batches = dump.col("batches");
   r.needConfirmed();
   skipLine(dump, log);
   r.clearCardsOnly(dump);
   const already = new Set(r.st.purge || []);
   // An earlier purge whose rows the board still holds is adopted first; one the board holds is forgotten.
   for (const k of purgeKeys(r)) {
-    if (r.st.pending[k].some((w) => dump.col(w.collection).has(w.doc_id))) fail(`purge: ${k} has not landed yet. Run \`node ${SELF} adopt ${k} --dump ${shq(one(a, "dump"))} --dumped${stateArg(a)}\` first`);
+    if (r.st.pending[k].some((w) => dump.col(w.collection).has(w.doc_id))) fail(`purge: ${k} has not landed yet. Run \`node ${SELF} adopt ${k} --dump ${shq(path.resolve(one(a, "dump")))} --dumped --reply -${stateArg(a)}\` first`);
     delete r.st.pending[k];
   }
   let ids = a.ids || [];
@@ -1484,8 +1506,8 @@ function noWrite(r, cmd, key) {
 }
 function cmdAdopt(a, log) {
   const key = docKey(a, "adopt");
-  if (!a.dumped) fail(`adopt: no --dumped. Dump again as the "if refused" line says; once every call succeeded, run node ${SELF} adopt ${key} --dump ${shq(one(a, "dump"))} --dumped${stateArg(a)}`);
-  const dump = readDump(one(a, "dump")), r = new Run(a, { recover: true }), w = r.st.pending[key], ctx = r.ctx(), again = (ws) => ws.map((out) => ({ out, size: 0, group: key }));
+  if (!a.dumped) fail(`adopt: no --dumped. Dump again as the "if refused" line says; once every call succeeded, run node ${SELF} adopt ${key} --dump ${shq(path.resolve(one(a, "dump")))} --dumped --reply -${stateArg(a)}`);
+  const dump = readDump(one(a, "dump"), undefined, replyText(a)), r = new Run(a, { recover: true }), w = r.st.pending[key], ctx = r.ctx(), again = (ws) => ws.map((out) => ({ out, size: 0, group: key }));
   if (!w && key !== "cards") noWrite(r, "adopt", key);
   r.unc.delete(key);                                    // adopted: a write that goes again is unconfirmed again
   skipLine(dump, log);
@@ -1498,7 +1520,7 @@ function cmdAdopt(a, log) {
     if (!left.length) { delete r.st.pending[key]; log(`${key}: the board holds the purge`); return r.finish(log); }
     r.st.pending[key] = left;
     log(`${key}: ${left.length} deletes again, pinned to the board's versions. Then adopt cards`);
-    r.unc.add(key);
+    r.unc.add(key); r.printed = new Set([key]);
     r.finish(() => {});
     return printWrites(again(left), log, ctx);
   }
@@ -1523,7 +1545,7 @@ function cmdAdopt(a, log) {
   r.st.pending[key] = out;
   if (w.op === "delete") delete r.st.next[key]; else r.st.next[key] = v === undefined ? 1 : v + 1;
   log(`${key}: write again, pinned to ${out.if_version === undefined ? "a create" : "version " + out.if_version}`);
-  r.unc.add(key);
+  r.unc.add(key); r.printed = new Set([key]);
   r.finish(() => {});
   printWrites(again([out]), log, ctx);
 }
@@ -1536,7 +1558,7 @@ function cmdAdopt(a, log) {
 function adoptBatch(r, key, d, v, dump, log) {
   const e = ackEntry(r.st.pending[key]), ctx = r.ctx(), cd = dump.col("cards").get(CARDS);
   const cv = e.cards && cd ? pin("cards", CARDS, cd) : undefined;
-  const hint = (after) => log(`${key}: the cards write of this ack is not on the board. ${after ? "Once this array is applied:" : "Now:"} rm -rf ${ctx.dump}, then ${dumpCalls("cards")}, then node ${SELF} adopt cards --dump ${ctx.dump} --dumped${ctx.state}`);
+  const hint = (after) => log(`${key}: the cards write of this ack is not on the board. ${after ? "Once this array is applied:" : "Now:"} rm -rf ${ctx.dump}, then ${dumpCalls("cards")}, then node ${SELF} adopt cards --dump ${ctx.dump} --dumped --reply -${ctx.state}`);
   if (!e.write || holds(d, e.write)) {
     log(`${key}: the board holds the last write`);
     r.logHandled(dump, log);
@@ -1562,7 +1584,7 @@ function adoptBatch(r, key, d, v, dump, log) {
 function cmdPush(a, log) {
   const key = docKey(a, "push"), r = new Run(a, { recover: true }), w = r.st.pending[key];
   if (!w) noWrite(r, "push", key);
-  if (!key.startsWith("batches/")) { r.unc.add(key); r.finish(() => {}); return printWrites([].concat(w).map((out) => ({ out, size: 0, group: key })), log, r.ctx()); }
+  if (!key.startsWith("batches/")) { r.unc.add(key); r.printed = new Set([key]); r.finish(() => {}); return printWrites([].concat(w).map((out) => ({ out, size: 0, group: key })), log, r.ctx()); }
   const e = ackEntry(w);
   if (e.write) { r.rePut(e.write, key, e.cards); if (e.cards) r.putCardsAgain(key); }
   // An ack whose batch update the board holds owes only its cards: they go as a write of their own (adopt cards and
@@ -1677,7 +1699,9 @@ function wakeProblems(raw) {
   if (v.poll_limit !== undefined && P.intIn(v.poll_limit, 1, 1000, null) === null) out.push("config wake.poll_limit: a whole number from 1 to 1000");
   return out;
 }
-function cmdCheck(a, log) {
+function cmdCheck(a, out) {
+  // Its lines wait until no write is refused as unconfirmed: a refusal then stands alone, never after other output.
+  const buf = [], log = (l) => buf.push(l), flush = () => buf.splice(0).forEach((l) => out(l));
   const r = new Run(a, { create: true }), errs = [];
   if (a.url) {
     const u = one(a, "url");
@@ -1754,7 +1778,7 @@ function cmdCheck(a, log) {
     for (const x of m.priority || []) if (!P.cfg.priorities.some((p) => p.id === x)) log(`note: config groups: ${g.id} matches priority ${q(x)} that is not in priorities`);
   }
   errs.forEach((e) => log("problem: " + e));
-  if (errs.length) throw new Stop(errs.length + " problems");
+  if (errs.length) { flush(); throw new Stop(errs.length + " problems"); }
   const mf = path.join(r.dir, "config.merged.json"), body = JSON.stringify(r.load.merged, null, 1) + "\n";
   if (!fs.existsSync(mf) || fs.readFileSync(mf, "utf8") !== body) { fs.mkdirSync(r.dir, { recursive: true }); fs.writeFileSync(mf, body); }
   const w = r.st.pending["meta/config"];
@@ -1762,7 +1786,8 @@ function cmdCheck(a, log) {
   if (!(last && stable(last.data) === stable(r.load.page))) r.pinned("set", "meta", "config", r.load.page);
   log(`config: ${r.writes.some((x) => x.key === "meta/config") ? "changed, write it" : "unchanged"}`);
   queueRules(r, rs, rd);
-  r.finish(log);
+  flush();
+  r.finish(out);
 }
 
 // ---- status: what the agent does now, one write of meta/status.
@@ -1791,6 +1816,12 @@ function cleanText(v, max) {
   let out = "";
   for (const ch of s) { if (out.length + ch.length > max - 3) break; out += ch; }
   return out + "...";
+}
+// A result text as stored: cleaned, and refused when it is longer than the page shows (S.max.result).
+function resultText(v, cmd) {
+  const s = cleanText(v, Infinity);
+  if (s.length > S.max.result) fail(`${cmd}: the text is ${s.length} characters and a result holds ${S.max.result}. Shorten it`);
+  return s;
 }
 function cmdStatus(a, log) {
   const r = new Run(a); r.needConfig(); r.needConfirmed();
@@ -1833,7 +1864,7 @@ function readWatch(file) {
     const w = JSON.parse(fs.readFileSync(file, "utf8"));
     return isPlain(w) && typeof w.dump === "string" && w.dump !== "" && path.resolve(w.dump) === path.resolve(path.dirname(file), "watch-dump") && P.intIn(w.limit, 1, 1000, null) !== null && P.intIn(w.poll, 0, w.limit, null) !== null &&
       P.intIn(w.seconds, 60, 86400, null) !== null && (!Object.hasOwn(w, "watcher") || plainId(w.watcher)) &&
-      (!Object.hasOwn(w, "stopped") || typeof w.stopped === "boolean") ? w : null;
+      (!Object.hasOwn(w, "stopped") || typeof w.stopped === "boolean") && (!Object.hasOwn(w, "polled") || Number.isFinite(P.stampMs(w.polled))) ? w : null;
   } catch (e) { return null; }
 }
 // A watch file is written to a temp file in its folder and renamed over the old one: a reader sees the old or the new.
@@ -1855,6 +1886,9 @@ function keepWatch(file, w, notWatch, tail) {
   if (now2.watcher !== w.watcher || now2.started !== w.started) return false;
   writeWatch(file, w, "waiting", tail); return true;
 }
+// A watcher that polled within two poll intervals is alive even after the end time of its window, which does not
+// count the time a poll itself takes: a plain watch leaves it be. Only --restart replaces it then.
+const polledLately = (w) => typeof w.polled === "string" && Number.isFinite(P.stampMs(w.polled)) && nowMs() - P.stampMs(w.polled) < 2 * w.seconds * 1000;
 const COMMENTS_LINE = "comments: if this session has not run P5 for this board yet, run it now.";
 // The watcher's prompt: the text block of references/watch.md with every value filled in.
 function briefText(url, dump, wf, id) {
@@ -1889,7 +1923,7 @@ function cmdWatch(a, log) {
     log("--- brief"); log(briefText(r.st.url, cur.dump, wf, cur.watcher)); log("--- end");
     if (w.comment) log(COMMENTS_LINE);
     return;
-  } else if (cur && cur.poll < cur.limit && !cur.reported && !cur.stopped && P.stampMs(cur.until) > nowMs() && !has(a, "restart")) {
+  } else if (cur && cur.poll < cur.limit && !cur.reported && !cur.stopped && !has(a, "restart") && (P.stampMs(cur.until) > nowMs() || polledLately(cur))) {
     log(`wake ${w.mode}: a watcher runs until ${cur.until}; start none. Only when the operator asks to watch again: node ${SELF} watch --restart${stateArg(a)}`);
     if (w.comment) log(COMMENTS_LINE);
   } else {
