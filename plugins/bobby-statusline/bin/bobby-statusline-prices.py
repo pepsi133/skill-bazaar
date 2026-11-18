@@ -18,9 +18,12 @@ Rules this file keeps:
     one. The check keeps the script out of pipelines; it is for a manual run.
   * Two questions, both with No as the default: before the download, and
     before the write. A local file has no download, so it has one question.
-  * The download is one GET request over TLS. No cookie, no credentials, and
-    nothing about the machine, the user or the session is sent. A redirect is
-    followed only to the same host and port. The whole download has 30 seconds.
+    What was typed before a question was on the screen is thrown away.
+  * The download is one GET request for each address, over TLS. No cookie, no
+    credentials of the user, and nothing about the machine, the user or the
+    session is sent. At most three redirects are followed, and only to the
+    same host and port. The whole download has 30 seconds, the name lookup
+    included. The proxy that applies is shown before the first question.
   * Every string that comes from the server or from a file is stripped of
     control characters before it is printed.
   * Python standard library only.
@@ -46,10 +49,12 @@ import os
 import re
 import stat
 import sys
+import unicodedata
 from urllib.parse import urlsplit
 
 TIMEOUT_S = 15  # one connect or one read
-TOTAL_S = 30  # the whole download, wall clock
+TOTAL_S = 30  # the whole download, wall clock, the name lookup included
+REDIRECTS = 3  # followed at most, all on the confirmed host
 SIZE_CAP = 20 * 1024 * 1024
 TLS_PORT = 443
 USER_AGENT = "price-list-fetch"
@@ -74,15 +79,14 @@ class Refused(Exception):
     """A reason to stop that is shown to the user as one line."""
 
 
-class TimeUp(Exception):
-    """The whole download took longer than TOTAL_S."""
-
-
-# C0, DEL and C1, the direction marks, overrides and isolates, and the line
-# separators: the same set the status line strips, as numbers, so that this
-# file holds none of those characters itself.
+# C0, DEL and C1, the direction marks, overrides and isolates, the line
+# separators and the surrogates: the same set the status line strips, as
+# numbers, so that this file holds none of those characters itself. On top of
+# that, every format character (Unicode category Cf) goes: a zero-width space
+# or a soft hyphen in a host name is not seen and changes the name.
 UNPRINTABLE = (
     (0x00, 0x1F), (0x7F, 0x9F), (0x061C, 0x061C), (0x200E, 0x200F), (0x2028, 0x202E), (0x2066, 0x2069),
+    (0xD800, 0xDFFF),
 )
 
 
@@ -93,7 +97,10 @@ def clean(text, cap: int = 400) -> str:
     there. Neither may move the cursor, clear the screen or reorder the line.
     """
     text = text if isinstance(text, str) else str(text)
-    kept = "".join(c for c in text if not any(low <= ord(c) <= high for low, high in UNPRINTABLE))
+    kept = "".join(
+        c for c in text
+        if not any(low <= ord(c) <= high for low, high in UNPRINTABLE) and unicodedata.category(c) != "Cf"
+    )
     return kept[:cap]
 
 
@@ -109,7 +116,14 @@ def load_render():
     if spec is None or spec.loader is None:
         raise Refused("cannot load %s" % path)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    # This script writes one key of one file. A bytecode cache next to the
+    # status line script would be a second thing it writes.
+    keep = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.dont_write_bytecode = keep
     return mod
 
 
@@ -119,7 +133,8 @@ def load_render():
 
 
 def is_url(source: str) -> bool:
-    return re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:/", source) is not None
+    """True for an address. A scheme has two letters or more: `c:/x.json` is a path."""
+    return re.match(r"^[A-Za-z][A-Za-z0-9+.-]+:/", source) is not None
 
 
 def host_port(url: str) -> tuple:
@@ -129,12 +144,17 @@ def host_port(url: str) -> tuple:
 
 
 def checked_url(source: str) -> tuple:
-    """(url, host) for an address this script may fetch, or Refused."""
+    """(url, host, port) for an address this script may fetch, or Refused.
+
+    The host that is shown must be the host that gets the connection. A `%`
+    in the host part is decoded by the library after this check, and a letter
+    outside ASCII can look like another one, so both are refused.
+    """
     if source != clean(source, len(source)) or any(c.isspace() for c in source):
         raise Refused("refused: the address has a space or a control character in it")
     try:
         parts = urlsplit(source)
-        host, _ = host_port(source)
+        host, port = host_port(source)
     except ValueError:
         raise Refused("refused: the address cannot be read")
     if parts.scheme.lower() != SCHEME:
@@ -143,7 +163,46 @@ def checked_url(source: str) -> tuple:
         raise Refused("refused: the address has no host")
     if parts.username is not None or parts.password is not None:
         raise Refused("refused: an address with a user name or a password is not fetched")
-    return source, host
+    if "%" in parts.netloc:
+        raise Refused("refused: the host part of the address has a percent sign in it")
+    if not parts.netloc.isascii():
+        raise Refused("refused: the host name has a character outside ASCII. Write it in its ASCII form")
+    return source, host, port
+
+
+def proxy_note(host: str, port: int) -> str:
+    """The proxy that the download to this host goes through, for the banner.
+
+    The library takes it from the environment (and from the system settings
+    where the platform has them). Its host and port are shown, and where it
+    comes from. A user name or a password in it is not shown.
+    """
+    import urllib.request
+
+    proxy = urllib.request.getproxies().get(SCHEME)
+    if not proxy or urllib.request.proxy_bypass("%s:%d" % (host, port)):
+        return "none"
+    try:
+        parts = urlsplit("//" + proxy.split("//", 1)[-1])
+        where = "%s:%d" % (parts.hostname or "?", parts.port) if parts.port else parts.hostname or "?"
+    except ValueError:
+        where = "?"
+    origin = "the system settings"
+    for name in ("HTTPS_PROXY", "https_proxy"):  # the lower-case one wins, as in the library
+        if os.environ.get(name) == proxy:
+            origin = name
+    return "%s, from %s. The connection goes there first. Credentials in that setting go to the proxy" % (
+        clean(where), origin)
+
+
+def trust_note() -> str:
+    """Where the certificates come from when the environment names a place, or ''."""
+    notes = []
+    for name in ("SSL_CERT_FILE", "SSL_CERT_DIR"):
+        value = os.environ.get(name)
+        if value:
+            notes.append("%s (from %s)" % (clean(value), name))
+    return ", ".join(notes)
 
 
 def read_local(path: str) -> bytes:
@@ -175,6 +234,8 @@ def redirect_handler(url: str):
     confirmed = host_port(url)
 
     class SameHost(urllib.request.HTTPRedirectHandler):
+        max_redirections = REDIRECTS
+
         def redirect_request(self, req, fp, code, msg, headers, newurl):
             try:
                 parts = urlsplit(newurl)
@@ -193,52 +254,84 @@ def redirect_handler(url: str):
     return SameHost()
 
 
-def wall_clock(seconds: float):
+def give_up() -> None:
+    """The end of a download that took too long. Runs in the watchdog thread.
+
+    The main thread can be inside a name lookup or a connect that no signal
+    and no exception reaches, so the process is ended from here. Nothing is
+    written before the download is over, so nothing is left half done.
+    """
+    try:
+        sys.stdout.write("refused: the download took longer than %d s\nNothing written.\n" % TOTAL_S)
+        sys.stdout.flush()
+    finally:
+        os._exit(1)
+
+
+def watchdog(seconds: float):
     """Start the limit for the whole download. Returns the function that ends it.
 
     A timeout on the connection limits one connect and one read. A server that
-    answers one byte at a time never reaches it. The alarm limits the sum,
-    where the platform has one; the read loop checks the clock in any case.
+    answers one byte at a time never reaches it, and a name lookup has no
+    timeout at all. This timer needs no signal, so it holds on every platform
+    and in every thread. After the returned function ran, it does nothing.
     """
-    import signal
     import threading
 
-    if not hasattr(signal, "setitimer") or threading.current_thread() is not threading.main_thread():
-        return lambda: None
+    lock, over = threading.Lock(), []
 
-    def time_up(signum, frame):
-        raise TimeUp()
+    def fire():
+        with lock:
+            if not over:
+                give_up()
 
-    before = signal.signal(signal.SIGALRM, time_up)
-    signal.setitimer(signal.ITIMER_REAL, seconds)
+    timer = threading.Timer(seconds, fire)
+    timer.daemon = True
+    timer.start()
 
     def stop():
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, before)
+        with lock:
+            over.append(True)
+        timer.cancel()
 
     return stop
 
 
+def tls_context():
+    """The TLS settings of the download: the defaults of the library, and no key log."""
+    import ssl
+
+    # SSLKEYLOGFILE in the environment makes the library open that file and
+    # write the keys of the session to it. It is out of the way while the
+    # settings are made, so the file is not even created.
+    held = os.environ.pop("SSLKEYLOGFILE", None)
+    try:
+        context = ssl.create_default_context()
+    finally:
+        if held is not None:
+            os.environ["SSLKEYLOGFILE"] = held
+    context.keylog_filename = None
+    return context
+
+
 def download(url: str, context=None) -> bytes:
-    """One GET request. The body, at most SIZE_CAP bytes, or Refused.
+    """One GET request for each address. The body, at most SIZE_CAP bytes, or Refused.
 
     `context` is an ssl context for a test against a local listener. The
-    command line never sets it, so the system's certificate store decides.
+    command line never sets it.
     """
     import http.client
     import time
     import urllib.error
     import urllib.request
 
-    handlers = [redirect_handler(url)]
-    if context is not None:
-        handlers.append(urllib.request.HTTPSHandler(context=context))
-    opener = urllib.request.build_opener(*handlers)
-    opener.addheaders = [("User-Agent", USER_AGENT), ("Accept", ACCEPT)]
     late = "refused: the download took longer than %d s" % TOTAL_S
     deadline = time.monotonic() + TOTAL_S
-    stop = wall_clock(TOTAL_S)
+    stop = watchdog(TOTAL_S)  # before the name lookup
     try:
+        handlers = [redirect_handler(url), urllib.request.HTTPSHandler(context=context or tls_context())]
+        opener = urllib.request.build_opener(*handlers)
+        opener.addheaders = [("User-Agent", USER_AGENT), ("Accept", ACCEPT)]
         chunks, size = [], 0
         with opener.open(url, timeout=TIMEOUT_S) as resp:
             while True:
@@ -251,8 +344,10 @@ def download(url: str, context=None) -> bytes:
                 size += len(chunk)
                 if size > SIZE_CAP:
                     raise Refused("refused: the download is larger than %d MB" % (SIZE_CAP >> 20))
-    except TimeUp:
-        raise Refused(late)
+            if resp.length:
+                # The server named a length and closed before it. A list that
+                # is cut off is not the list.
+                raise Refused("refused: the download stopped early")
     except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as err:
         if isinstance(err, urllib.error.HTTPError):
             err.close()  # the reply of the server is not read
@@ -285,9 +380,11 @@ def litellm_row(raw: dict):
         return None
     if raw.get("mode") not in (None, "chat"):
         return None
-    read = _per_million(raw.get("cache_read_input_token_cost"))
-    five = _per_million(raw.get("cache_creation_input_token_cost"))
-    hour = _per_million(raw.get("cache_creation_input_token_cost_above_1hr"))
+    cache = ("cache_read_input_token_cost", "cache_creation_input_token_cost",
+             "cache_creation_input_token_cost_above_1hr")
+    read, five, hour = (_per_million(raw.get(key)) for key in cache)
+    if any(raw.get(key) is not None and price is None for key, price in zip(cache, (read, five, hour))):
+        return None  # a cache price that is there and is no number: not a row to guess at
     # A list that leaves a cache price out gets the standard multiple of input.
     return {
         "input": inp,
@@ -309,7 +406,7 @@ def parse_prices(body: bytes, render) -> dict:
     if not isinstance(data, dict):
         raise Refused("the price list is not a JSON object of model id -> prices")
 
-    found = {}
+    found, plain = {}, set()
     for key in sorted(k for k in data if isinstance(k, str)):
         raw = data[key]
         name = key.strip().lower()
@@ -323,8 +420,13 @@ def parse_prices(body: bytes, render) -> dict:
         model, fast = render.model_name(name)
         if fast:
             continue
-        # The plain id wins over a dated form of the same model.
-        if model not in found or name == model:
+        # The plain id wins over a dated form of the same model. Without a
+        # plain id the newest date wins: the keys come in order, so the later
+        # one takes the place of the earlier one.
+        if name == model:
+            plain.add(model)
+            found[model] = row
+        elif model not in plain:
             found[model] = row
     if not found:
         raise Refused("the price list has no usable row for a Claude model")
@@ -336,12 +438,23 @@ def parse_prices(body: bytes, render) -> dict:
 # --------------------------------------------------------------------------
 
 
-def read_config(path: str) -> dict:
-    """The configuration file as an object. Refused when it cannot be kept safe."""
+def file_mark(path: str):
+    """(inode, size, modification time) of a file, or None when it is not there."""
     try:
         info = os.lstat(path)
     except FileNotFoundError:
-        return {}
+        return None
+    except OSError as err:
+        raise Refused("cannot read %s: %s" % (path, err.strerror or err))
+    return (info.st_ino, info.st_size, info.st_mtime_ns)
+
+
+def read_config(path: str) -> tuple:
+    """(the configuration file as an object, its file_mark). Refused when it cannot be kept safe."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return {}, None
     except OSError as err:
         raise Refused("cannot read %s: %s" % (path, err.strerror or err))
     if not stat.S_ISREG(info.st_mode):
@@ -361,7 +474,7 @@ def read_config(path: str) -> dict:
         raise Refused(
             "refused: the prices key of %s is not an object. Correct it or remove it first" % path
         )
-    return data
+    return data, (info.st_ino, info.st_size, info.st_mtime_ns)
 
 
 def write_config(path: str, data: dict) -> None:
@@ -370,7 +483,10 @@ def write_config(path: str, data: dict) -> None:
     if not os.path.isdir(folder):
         raise Refused("refused: %s does not exist" % folder)
     tmp = os.path.join(folder, ".%s.%d.tmp" % (os.path.basename(path), os.getpid()))
-    body = (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    try:
+        body = (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    except ValueError:  # half of a surrogate pair in a key or a value
+        raise Refused("refused: %s holds text that cannot be written as UTF-8, so it is left alone" % path)
     try:
         try:
             os.unlink(tmp)
@@ -434,23 +550,27 @@ def changes(found: dict, render, current: dict) -> list:
 
 
 def same_model_keys(stored: dict, rows: list, render) -> list:
-    """Keys in the stored prices that name a model of a new row in another way.
+    """Keys in the stored prices that are the plain id of a new row, written another way.
 
-    The new row is written under the plain id. An older key for the same
-    model, such as a dated one, would still win for the id it is equal to, so
-    the old price would stay in use for that id. Such a key is removed in the
-    same write.
+    The new row is written under the plain id. Two kinds of older key would
+    keep the old price in use: the plain id with a date at its end, and the
+    plain id in other letter case or with spaces around it. Those are removed
+    in the same write. A key in a provider form, with `[1m]`, with `@` or with
+    `-fast` is a row of its own and stays, and so does a key whose row is
+    malformed, because such a row is not in use.
     """
     models = {row[0] for row in rows}
     doubles = []
     for key in sorted(k for k in stored if isinstance(k, str)):
-        name, fast = render.model_name(key)
-        if not fast and name in models and key.strip().lower() != name:
-            doubles.append((key, name))
+        if render.price_row(stored[key]) is None:
+            continue
+        model = render._undated(key.strip().lower())
+        if model in models and key != model:
+            doubles.append((key, model))
     return doubles
 
 
-def print_table(rows: list, doubles: list, out) -> None:
+def print_table(rows: list, doubles: list, out, dry: bool = False) -> None:
     out.write("USD per million tokens, old -> new. '-' means no price today.\n\n")
     for model, old, new, note in rows:
         out.write("%s%s\n" % (clean(model), "  (%s)" % note if note else ""))
@@ -461,7 +581,8 @@ def print_table(rows: list, doubles: list, out) -> None:
         if new[5] and not note:
             out.write("  above %d prompt tokens: %s\n" % (new[5][0], " / ".join(_num(p) for p in new[5][1:])))
     for key, model in doubles:
-        out.write("removed: the stored key %s, which is the same model as %s\n" % (clean(key), clean(model)))
+        out.write("%s: the stored key %s, which is the same model as %s\n" % (
+            "would remove" if dry else "removed", clean(key), clean(model)))
     out.write("\n")
 
 
@@ -470,7 +591,29 @@ def print_table(rows: list, doubles: list, out) -> None:
 # --------------------------------------------------------------------------
 
 
-def confirmed(ask, question: str) -> bool:
+def typed_ahead_guard():
+    """The function that throws away pending terminal input, or None without termios.
+
+    A `y` that was typed, or pasted with the command, before a question was on
+    the screen would answer a question that nobody read.
+    """
+    try:
+        import termios
+    except ImportError:
+        return None
+
+    def discard():
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+
+    return discard
+
+
+def confirmed(ask, question: str, discard=None) -> bool:
+    if discard is not None:
+        try:
+            discard()
+        except Exception:
+            return False  # the pending input cannot be thrown away, so nothing counts as a yes
     try:
         answer = ask(question + " [y/N] ")
     except (EOFError, KeyboardInterrupt):
@@ -494,7 +637,7 @@ def parse_args(argv: list):
     return (source, dry) if source else None
 
 
-def run(argv: list, ask, out) -> int:
+def run(argv: list, ask, out, discard=None) -> int:
     parsed = parse_args(argv)
     if parsed is None:
         out.write(USAGE)
@@ -503,20 +646,25 @@ def run(argv: list, ask, out) -> int:
     render = load_render()
 
     if is_url(source):
-        url, host = checked_url(source)
+        url, host, port = checked_url(source)
+        trust = trust_note()
         out.write(
             "Download a price list.\n"
             "  address : %s\n"
-            "  host    : %s\n"
-            "  sends   : one GET request with the headers User-Agent: %s and Accept: %s,\n"
-            "            plus the headers HTTP itself needs. No cookie, no credentials,\n"
-            "            nothing about this machine, this user or a session.\n"
-            "  limits  : TLS only, a redirect only to this host and port, %d s for the\n"
-            "            whole download, %d MB.\n"
-            "            A proxy from the environment is used when one is set.\n"
-            % (clean(url), clean(host), USER_AGENT, ACCEPT, TOTAL_S, SIZE_CAP >> 20)
+            "  host    : %s:%d\n"
+            "  proxy   : %s\n"
+            "%s"
+            "  sends   : one GET request for each address, with the headers User-Agent: %s\n"
+            "            and Accept: %s, plus the headers HTTP itself needs. No cookie,\n"
+            "            no credentials of yours, nothing about this machine, this user\n"
+            "            or a session.\n"
+            "  limits  : TLS only, at most %d redirects and only to this host and port,\n"
+            "            %d s for the whole download with the name lookup, %d MB.\n"
+            % (clean(url), clean(host), port, proxy_note(host, port),
+               "  trust   : certificate store %s\n" % trust if trust else "",
+               USER_AGENT, ACCEPT, REDIRECTS, TOTAL_S, SIZE_CAP >> 20)
         )
-        if not confirmed(ask, "Download from %s?" % clean(host)):
+        if not confirmed(ask, "Download from %s:%d?" % (clean(host), port), discard):
             out.write("Nothing downloaded. Nothing written.\n")
             return 1
         body = download(url)
@@ -526,7 +674,7 @@ def run(argv: list, ask, out) -> int:
 
     found = parse_prices(body, render)
     path = os.path.join(render.config_home(), render.CONFIG_FILE)
-    config = read_config(path)
+    config, seen = read_config(path)
     stored = config.get("prices", {})
     current = render.price_table(render._user_prices(stored))
     rows = changes(found, render, current)
@@ -536,13 +684,17 @@ def run(argv: list, ask, out) -> int:
     if not rows:
         out.write("Nothing to write.\n")
         return 0
-    print_table(rows, doubles, out)
+    print_table(rows, doubles, out, dry)
     if dry:
         out.write("Dry run. Nothing written.\n")
         return 0
-    if not confirmed(ask, "Write these %d rows into the prices key of %s?" % (len(rows), clean(path))):
+    if not confirmed(ask, "Write these %d rows into the prices key of %s?" % (len(rows), clean(path)), discard):
         out.write("Nothing written.\n")
         return 1
+    if file_mark(path) != seen:
+        # Another program wrote the file while the question waited. The rows
+        # here were made from the old content, and a write would undo that change.
+        raise Refused("refused: the configuration file changed while the question waited. Run again")
 
     for key, _ in doubles:
         del stored[key]
@@ -580,10 +732,22 @@ def main(argv: list, ask=None, tty=None, out=None) -> int:
             "downloads and before it writes. Nothing was done.\n"
         )
         return 2
+    discard = None
+    if ask is None:
+        ask, discard = input, typed_ahead_guard()
+        if discard is None:
+            sys.stderr.write(
+                "bobby-statusline-prices: this platform has no termios module, so input that\n"
+                "was typed before a question cannot be thrown away. Nothing was done.\n"
+            )
+            return 2
     try:
-        return run(argv[1:], ask or input, out)
+        return run(argv[1:], ask, out, discard)
     except Refused as err:
         out.write("%s\nNothing written.\n" % clean(err))
+        return 1
+    except KeyboardInterrupt:
+        out.write("\nStopped. Nothing written.\n")
         return 1
 
 

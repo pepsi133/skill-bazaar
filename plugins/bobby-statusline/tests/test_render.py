@@ -1149,6 +1149,12 @@ class TestPrices(LedgerBase):
         for name in (
             "claude-opus-5-5-12345678",
             "claude-opus-5-5-19991231",
+            "claude-opus-5-5-20000101",
+            "claude-opus-5-5-20191231",
+            "claude-opus-5-5-20260101-fast-20260101",
+            "claude-opus-5-5@not-a-date",
+            "claude-opus-5-5@20261301",
+            "claude-opus-5-5@latest",
             "claude-opus-5-5-20261301",
             "claude-opus-5-5-20260100",
             "claude-opus-5-5-20260230",
@@ -1164,9 +1170,43 @@ class TestPrices(LedgerBase):
             with self.subTest(model=name):
                 self.assertEqual(self.cost(name), (0.0, True))
         self.assertAlmostEqual(self.cost("claude-opus-5-5-20280229")[0], 37.2)  # a leap day
+        self.assertAlmostEqual(self.cost("claude-opus-5-5-20200101")[0], 37.2)  # the first year that counts
+        for name in ("claude-opus-5-5@20260101", "claude-opus-5-5@20260101[1m]", "claude-opus-5-5[1m]@20260101",
+                     "us.anthropic.claude-opus-5-5-v2:0", "us.anthropic.claude-opus-5-5-v999:999"):
+            with self.subTest(model=name):
+                self.assertAlmostEqual(self.cost(name)[0], 37.2)
         self.assertAlmostEqual(self.cost("claude-opus-5-5-20260101-fast")[0], 74.4)
         self.append(self.transcript, assistant("msg_1", model="claude-opus-5-5-12345678", inp=1000000))
         self.assertEqual(self.cost_segment(), "~$0.00?")
+
+    def test_price_limit_holds_for_the_price_that_is_used(self):
+        base = {"output": 1, "cacheRead": 0, "cacheWrite": 0}
+        # The limit itself is a price. One step above it is not.
+        self.assertEqual(BS.price_row([100000, 1, 0, 0, 0])[0], 100000.0)
+        self.assertIsNone(BS.price_row([100000.01, 1, 0, 0, 0]))
+        self.assertEqual(BS.price_row(dict(base, input=100000))[0], 100000.0)
+        # A multiplier counts: the product is what a request pays.
+        self.assertEqual(BS.price_row(dict(base, input=100, multiplier=1000))[0], 100000.0)
+        self.assertIsNone(BS.price_row(dict(base, input=100.01, multiplier=1000)))
+        self.assertIsNone(BS.price_row(dict(base, input=100000, multiplier=2)))
+        self.assertIsNone(BS.price_row(dict(base, input=0.001, multiplier=1001)), "the multiplier has a limit too")
+        high = dict(base, input=60000, threshold=1000)
+        self.assertIsNone(BS.price_row(dict(base, input=1, multiplier=2, above=high)))
+        self.assertEqual(BS.price_row(dict(base, input=1, multiplier=1.5, above=high))[5][1], 90000.0)
+
+    def test_plain_user_key_wins_over_another_key_for_the_same_model(self):
+        """Whatever the order of the keys is, the plain id is the row of its model."""
+        for other in ("claude-opus-5-5-20260101", "anthropic.claude-opus-5-5"):  # sorts after, sorts before
+            with self.subTest(other=other):
+                user = BS._user_prices({other: [9, 9, 9, 9, 9], "claude-opus-5-5": [1, 1, 1, 1, 1]})
+                table = BS.price_table(user)
+                self.assertEqual(BS.price_for("claude-opus-5-5-20270101", table)[0][0], 1.0)
+                self.assertEqual(BS.price_for(other, table)[0][0], 9.0)  # the key as written keeps its row
+
+    def test_reset_time_far_away_has_no_stamp(self):
+        self.assertNotEqual(BS._clock(NOW + 399 * 86400, NOW), "")
+        self.assertEqual(BS._clock(NOW + 401 * 86400, NOW), "")
+        self.assertEqual(BS._clock(NOW - 401 * 86400, NOW), "")
 
     def test_mythos_5_has_a_row(self):
         self.assertAlmostEqual(self.cost("claude-mythos-5")[0], 10 + 50 + 1 + 12.5 + 20)
@@ -1934,6 +1974,7 @@ class TestLedgerLimits(LedgerBase):
         self.totals()
         whole = self.totals()
         self.assertEqual(whole["read"], 0)
+        counted = sorted(self.stored()["sub"])
         for name in ("agent-zz-new.jsonl", "agent-zy-new.jsonl", "agent-!first.jsonl"):
             with self.subTest(new=name):
                 self.append(self.agent(name), assistant("new_" + name, inp=1))
@@ -1944,8 +1985,17 @@ class TestLedgerLimits(LedgerBase):
                 self.assertIsNotNone(
                     BS.ledger_load(self.sidecar, self.transcript, BS.price_tiers(BS.price_table()))
                 )
-        # The file that sorts first took the place of the last one that fitted.
+        # A new file does not put a counted one out, wherever it sorts: the
+        # number would go down.
+        self.assertEqual(sorted(self.stored()["sub"]), counted)
+        self.assertTrue(self.totals()["partial"])
+        # A place that a removed transcript leaves goes to the first new one.
+        os.unlink(self.agent(counted[5]))
+        self.settle_directories()
+        result = self.totals()
         self.assertIn("agent-!first.jsonl", self.stored()["sub"])
+        self.assertNotIn(counted[5], self.stored()["sub"])
+        self.assertEqual(result["sub"]["claude-opus-5-5"]["n"][0], 2000)
 
     def test_removed_transcript_leaves_the_sum(self):
         self.append(self.transcript, assistant("msg_main", inp=1))
@@ -2021,13 +2071,20 @@ class TestLedgerLimits(LedgerBase):
             return (turn["at"] - 16) % count
 
         BS._walk_start = in_order
-        seen = []
+        seen, found_and_left = [], False
         for _ in range(40):
-            seen.append(self.totals()["sub"]["claude-opus-5-5"]["n"][0])
+            result = self.totals()
+            seen.append(result["sub"]["claude-opus-5-5"]["n"][0])
             if seen[-1] == 300:
                 break
+            if cold[-1] in self.stored()["todo"]:
+                # The round found it after the time was over, so it only put
+                # it on the list. The next render reads it.
+                found_and_left = True
+                self.assertEqual(result["read"], 0)
         self.assertEqual(seen[0], 200, "the first render did not get that far")
         self.assertEqual(seen[-1], 300, seen)
+        self.assertTrue(found_and_left, "the round read a transcript after its time was over")
         # And a render with no time does not look at all 200 of them.
         looked, lstat = [], os.lstat
 
@@ -2046,7 +2103,13 @@ class TestLedgerLimits(LedgerBase):
 
     def test_the_round_starts_at_another_place_on_every_render(self):
         self.assertEqual(BS._walk_start(1), 0)
-        starts = {BS._walk_start(7) for _ in range(2000)}
+        # A clock that stands still, as a coarse one does between two renders.
+        clock = BS.time.time_ns
+        BS.time.time_ns = lambda: 1789000000 * 10**9
+        try:
+            starts = {BS._walk_start(7) for _ in range(2000)}
+        finally:
+            BS.time.time_ns = clock
         self.assertEqual(starts, set(range(7)), "a part of the list never gets its turn")
         # The place is not kept, so a render that finds nothing new writes nothing.
         self.append(self.transcript, assistant("msg_main", inp=1))
@@ -2533,11 +2596,371 @@ class TestPayloadShapes(LedgerBase):
         self.assertIn(" [31m| ", row)
 
 
+class TestLedgerEdges(LedgerBase):
+    """What the row shows when a transcript cannot be read, and the edges of the limits."""
+
+    one_line_files = TestLedgerLimits.one_line_files
+    stored = TestLedgerLimits.stored
+    settle_directories = TestLedgerLimits.settle_directories
+
+    def not_root(self):
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root reads every file")
+
+    # -- time ---------------------------------------------------------------------
+
+    def test_clock_is_looked_at_after_every_long_line(self):
+        """A run of lines of 1 to 4 MB: each is one buffer, and each buffer ends at the clock."""
+        blob = json.dumps({"type": "user", "message": {"content": "x" * (3 << 19)}})
+        self.append(self.transcript, *([blob] * 12), assistant("msg_1", inp=1000000))
+        size = os.path.getsize(self.transcript)
+        BS.LEDGER_BUDGET_MS = 0
+        reads = []
+        for _ in range(60):
+            result = self.totals()
+            reads.append(result["read"])
+            if not result["partial"]:
+                break
+        self.assertFalse(result["partial"])
+        self.assertEqual(sum(reads), size)
+        self.assertLess(max(reads), 4 << 20, "one render read more than a few buffers")
+        self.assertGreaterEqual(len(reads), 6)
+        self.assertEqual(result["main"]["claude-opus-5-5"]["n"][0], 1000000)
+
+    # -- what cannot be read ------------------------------------------------------
+
+    def test_transcript_that_cannot_be_read_keeps_the_mark(self):
+        self.not_root()
+        self.append(self.transcript, assistant("msg_main", inp=1000000))
+        self.one_line_files(3)
+        locked = self.agent("agent-00001.jsonl")
+        os.chmod(locked, 0)
+        self.addCleanup(os.chmod, locked, 0o600)
+        for _ in range(3):
+            result = self.totals()
+            self.assertTrue(result["partial"], "a transcript is missing from the number and the row does not say so")
+            self.assertEqual(result["sub"]["claude-opus-5-5"]["n"][0], 2, "the others are counted")
+        self.assertEqual(self.cost_segment(), "~$4.00+")
+        # Nothing new was read, so nothing is written again.
+        stamp = os.stat(self.sidecar).st_mtime_ns
+        os.utime(self.sidecar, ns=(stamp - 10**9, stamp - 10**9))
+        self.assertTrue(self.totals()["partial"])
+        self.assertEqual(os.stat(self.sidecar).st_mtime_ns, stamp - 10**9)
+        # An append to another transcript is still seen.
+        self.append(self.agent("agent-00002.jsonl"), assistant("more", inp=7))
+        self.assertEqual(self.totals()["sub"]["claude-opus-5-5"]["n"][0], 9)
+        os.chmod(locked, 0o600)
+        result = self.totals()
+        self.assertFalse(result["partial"])
+        self.assertEqual(result["sub"]["claude-opus-5-5"]["n"][0], 10)
+
+    def test_unreadable_transcript_does_not_stop_the_look_at_the_others(self):
+        """With one on the list for ever, a transcript that is not in work still gets its turn."""
+        self.not_root()
+        self.append(self.transcript, assistant("msg_main", inp=1))
+        self.one_line_files(80)
+        self.settle_directories()
+        locked = self.agent("agent-00040.jsonl")
+        os.chmod(locked, 0)
+        self.addCleanup(os.chmod, locked, 0o600)
+        self.totals()
+        stored = self.stored()
+        self.assertEqual(stored["todo"], ["agent-00040.jsonl"])
+        cold = [key for key in stored["sub"] if key not in stored["live"] and key != "agent-00040.jsonl"]
+        self.append(self.agent(cold[-1]), assistant("late", inp=100))
+        result = self.totals()
+        self.assertEqual(result["sub"]["claude-opus-5-5"]["n"][0], 179)
+        self.assertTrue(result["partial"])
+
+    def test_directory_that_cannot_be_listed_keeps_the_mark(self):
+        self.not_root()
+        self.append(self.transcript, assistant("msg_main", inp=1000000))
+        self.one_line_files(2)
+        self.one_line_files(2, "workflows", "wf1")
+        locked = os.path.join(self.subagents, "workflows", "wf1")
+        os.chmod(locked, 0)
+        self.addCleanup(os.chmod, locked, 0o700)
+        for _ in range(2):
+            result = self.totals()
+            self.assertTrue(result["partial"])
+            self.assertEqual(result["sub"]["claude-opus-5-5"]["n"][0], 2)
+        os.chmod(locked, 0o700)
+        result = self.totals()
+        self.assertFalse(result["partial"])
+        self.assertEqual(result["sub"]["claude-opus-5-5"]["n"][0], 4)
+
+    def test_session_without_a_subagents_directory_has_no_mark(self):
+        self.append(self.transcript, assistant("msg_main", inp=1000000))
+        self.assertEqual(self.cost_segment(), "~$4.00")
+        self.assertEqual(BS.ledger_files(self.transcript, time.time_ns()), ([], False, {"": 0}))
+
+    # -- the limits ------------------------------------------------------------------
+
+    def test_empty_directory_below_the_depth_limit_has_no_mark(self):
+        self.append(self.transcript, assistant("msg_main", inp=1))
+        self.one_line_files(1, "a", "b")
+        deep = os.path.join(self.subagents, "a", "b", "c")
+        os.makedirs(os.path.join(deep, "d"))
+        self.settle_directories()
+        self.assertFalse(self.totals()["partial"])
+        self.assertFalse(self.totals()["partial"])
+        # A transcript that appears there later brings the mark.
+        with open(os.path.join(deep, "agent-late.jsonl"), "wb") as fh:
+            fh.write(assistant("late", inp=1).encode() + b"\n")
+        result = self.totals()
+        self.assertTrue(result["partial"])
+        self.assertEqual(result["sub"]["claude-opus-5-5"]["n"][0], 1)
+
+    def test_directory_that_changed_just_now_is_listed_again(self):
+        self.one_line_files(1)
+        changed = os.lstat(self.subagents).st_mtime_ns
+        settle = BS.LEDGER_SETTLE_NS
+        self.assertEqual(settle, 2 * 10**9)
+        self.assertEqual(BS.ledger_files(self.transcript, changed + settle)[2], {"": 0})
+        self.assertEqual(BS.ledger_files(self.transcript, changed + settle + 1)[2], {"": changed})
+        self.assertFalse(BS.ledger_listed(self.transcript, {"": 0}))
+        self.assertTrue(BS.ledger_listed(self.transcript, {"": changed}))
+
+    def test_more_model_ids_than_the_sum_holds_go_to_the_unknown_one(self):
+        """The sidecar that was written is one that loads, however many model ids there are."""
+        self.append(self.transcript, assistant("msg_main", inp=1))
+        for i in range(140):
+            self.append(self.agent("agent-%03d.jsonl" % i), assistant("m%d" % i, model="model-%03d" % i, inp=10))
+        self.settle_directories()
+        result = self.totals()
+        self.assertFalse(result["partial"])
+        stored = self.stored()
+        self.assertEqual(len(stored["sum"]), BS.LEDGER_SUM_MODELS)
+        self.assertIn("?", stored["sum"])
+        self.assertIsNotNone(BS.ledger_load(self.sidecar, self.transcript, BS.price_tiers(BS.price_table())))
+        again = self.totals()
+        self.assertEqual(again["read"], 0, "the ledger was built again from zero")
+        tokens = sum(tup[0] for buckets in again["sub"].values() for tup in buckets.values())
+        self.assertEqual(tokens, 1400)
+        self.assertEqual(again["sub"]["?"]["n"][0], 10 * (140 - BS.LEDGER_SUM_MODELS + 1))
+        self.assertTrue(self.cost_segment().endswith("?"))
+        # A transcript that goes takes its tokens out of the place they went to.
+        os.unlink(self.agent("agent-139.jsonl"))
+        os.unlink(self.agent("agent-000.jsonl"))
+        self.settle_directories()
+        after = self.totals()
+        tokens = sum(tup[0] for buckets in after["sub"].values() for tup in buckets.values())
+        self.assertEqual(tokens, 1380)
+        self.assertNotIn("model-000", after["sub"])
+
+    def test_merge_with_a_limit(self):
+        into = {}
+        for i in range(6):
+            BS._merge_totals(into, {"m%d" % i: {"n": [1, 0, 0, 0, 0, 0]}}, 1, 4)
+        self.assertEqual(sorted(into), ["?", "m0", "m1", "m2"])
+        self.assertEqual(into["?"]["n"][0], 3)
+        BS._merge_totals(into, {"m5": {"n": [1, 0, 0, 0, 0, 0]}}, -1, 4)
+        self.assertEqual(into["?"]["n"][0], 2)
+        BS._merge_totals(into, {"m0": {"n": [1, 0, 0, 0, 0, 0]}}, -1, 4)
+        self.assertNotIn("m0", into)
+        BS._merge_totals(into, {"gone": {"n": [9, 0, 0, 0, 0, 0]}}, -1, 4)
+        self.assertNotIn("?", into)
+        self.assertNotIn("gone", into)
+        # Without a limit every model has its own entry.
+        free = {}
+        for i in range(200):
+            BS._merge_totals(free, {"m%d" % i: {"n": [1, 0, 0, 0, 0, 0]}})
+        self.assertEqual(len(free), 200)
+
+    def test_request_with_an_absurd_raw_number_is_left_out(self):
+        """The raw value decides, before a number that cannot be held is turned into 0."""
+        def line(mid, **fields):
+            base = {"input_tokens": 0, "output_tokens": 5}
+            base.update(fields)
+            return json.dumps({"type": "assistant", "message": {"id": mid, "model": "claude-opus-5-5", "usage": base}})
+
+        self.append(
+            self.transcript,
+            assistant("msg_1", inp=1000000),
+            line("big_int", input_tokens=10**15),
+            line("bigger_int", input_tokens=10**30),
+            line("big_float", cache_read_input_tokens=1e30),
+            line("infinite", input_tokens=float("inf")),
+            line("not_a_number", output_tokens=float("nan")),
+            line("split", cache_creation_input_tokens=5, cache_creation={"ephemeral_1h_input_tokens": 10**16}),
+            line("search", server_tool_use={"web_search_requests": 10**12}),
+            line("just_over", input_tokens=10**9 + 1),
+        )
+        result = self.totals()
+        self.assertEqual(result["main"], {"claude-opus-5-5": {"n": [1000000, 0, 0, 0, 0, 0]}})
+        self.assertEqual(self.cost_segment(), "~$4.00")
+        self.assertEqual(list(self.stored()["main"]["ids"]), ["msg_1"])
+        # The limit itself is a request.
+        self.append(self.transcript, line("at_the_limit", input_tokens=10**9, output_tokens=0))
+        self.assertEqual(self.totals()["main"]["claude-opus-5-5"]["n"][0], 1000000 + 10**9)
+
+    # -- which transcripts are looked at first ------------------------------------------
+
+    def test_the_thirty_two_written_last_are_the_ones_in_work(self):
+        self.append(self.transcript, assistant("msg_main", inp=1))
+        self.one_line_files(40)
+        now = time.time()
+        for i in range(40):  # agent-00000 is the newest
+            os.utime(self.agent("agent-%05d.jsonl" % i), (now - i, now - i))
+        self.totals()
+        self.assertEqual(self.stored()["live"], ["agent-%05d.jsonl" % i for i in range(32)])
+
+    def test_transcript_in_work_is_read_before_the_ones_that_wait(self):
+        self.append(self.transcript, assistant("msg_1", inp=1))
+        self.one_line_files(5)
+        BS.LEDGER_BUDGET_MS = 0
+        first = self.totals()
+        self.assertEqual(first["main"]["claude-opus-5-5"]["n"][0], 1)
+        self.assertEqual(self.stored()["todo"], ["agent-%05d.jsonl" % i for i in range(5)])
+        self.append(self.transcript, assistant("msg_2", inp=1))
+        second = self.totals()
+        self.assertEqual(second["main"]["claude-opus-5-5"]["n"][0], 2, "the main transcript waited behind the others")
+        self.assertEqual(second["sub"], {})
+
+    # -- the sidecar directory -------------------------------------------------------------
+
+    def test_sidecars_are_pruned_after_thirty_days(self):
+        folder = BS.ledger_dir()
+        os.makedirs(folder)
+        now = time.time()
+        for name, days in (("young.json", 29), ("old.json", 31)):
+            path = os.path.join(folder, name)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("{}")
+            os.utime(path, (now - days * 86400, now - days * 86400))
+        BS.ledger_prune(now)
+        self.assertEqual(os.listdir(folder), ["young.json"])
+
+    def test_directories_are_private_whatever_the_umask_is(self):
+        self.append(self.transcript, assistant("msg_1", inp=1))
+        before = os.umask(0o277)
+        try:
+            result = self.totals()
+        finally:
+            os.umask(before)
+        self.assertIsNotNone(result)
+        for folder in (os.path.dirname(BS.ledger_dir()), BS.ledger_dir()):
+            self.assertEqual(os.stat(folder).st_mode & 0o777, 0o700)
+        self.assertTrue(os.path.isfile(self.sidecar))
+
+
+class TestOutputEdges(Base):
+    """Input and output that no encoding takes: the row is still a row."""
+
+    def run_bytes(self, payload: bytes, **env) -> subprocess.CompletedProcess:
+        environ = dict(os.environ, BOBBY_STATUSLINE_BILLING="cost")
+        environ.update(env)
+        return subprocess.run([sys.executable, SCRIPT], input=payload, capture_output=True, env=environ)
+
+    def test_half_of_a_surrogate_pair_in_a_name(self):
+        half = chr(92) + "ud800"  # the JSON escape of half a surrogate pair
+        payload = ('{"model": {"display_name": "Op%sus"}, "agent": {"name": "a%sb"}}' % (half, chr(92) + "udfff")).encode()
+        self.assertEqual(BS.clean(json.loads(payload)["model"]["display_name"]), "Opus")
+        for env in ({}, {"PYTHONIOENCODING": "ascii"}, {"PYTHONIOENCODING": "utf-8"}):
+            with self.subTest(env=env):
+                result = self.run_bytes(payload, **env)
+                self.assertEqual(result.returncode, 0)
+                self.assertIn(b"Opus", result.stdout)
+                self.assertIn(b"@ab", result.stdout)
+                self.assertEqual(result.stderr, b"")
+
+    def test_output_that_cannot_hold_a_character(self):
+        payload = json.dumps({"model": {"display_name": "Opus " + chr(0xE9) + chr(0x4E2D)}}).encode()
+        for encoding, want in (("ascii", b"Opus ??"), ("latin-1", b"Opus \xe9?"), ("utf-8", b"Opus \xc3\xa9\xe4\xb8\xad")):
+            with self.subTest(encoding=encoding):
+                result = self.run_bytes(payload, PYTHONIOENCODING=encoding)
+                self.assertEqual(result.returncode, 0)
+                self.assertIn(want, result.stdout)
+                self.assertIn(b"ctx ?%", result.stdout)
+                self.assertEqual(result.stderr, b"")
+        result = self.run_bytes(payload, PYTHONIOENCODING="ascii", BOBBY_STATUSLINE_GLYPHS="unicode",
+                                BOBBY_STATUSLINE_SEPARATOR=" " + chr(0xB7) + " ")
+        self.assertIn(b"ctx ?% ? ", result.stdout)
+
+    def test_emit_and_read_take_a_stream_of_text_only(self):
+        saved = sys.stdout, sys.stdin
+        sys.stdout, sys.stdin = io.StringIO(), io.StringIO('{"model": {"display_name": "Opus"}}')
+        try:
+            code = BS.main(["bobby-statusline"])
+            row = sys.stdout.getvalue()
+        finally:
+            sys.stdout, sys.stdin = saved
+        self.assertEqual(code, 0)
+        self.assertIn("Opus", row)
+
+    def test_byte_that_is_not_utf8_on_stdin(self):
+        payload = b'{"model": {"display_name": "Op\x9bus"}, "agent": {"name": "a\xffb"}}'
+        for env in ({}, {"LC_ALL": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0"}, {"PYTHONIOENCODING": "latin-1"}):
+            with self.subTest(env=env):
+                result = self.run_bytes(payload, **env)
+                self.assertEqual(result.returncode, 0)
+                self.assertNotIn(b"\x9b", result.stdout)
+                self.assertNotIn(b"\xff", result.stdout)
+                self.assertNotIn(b"\x1b", result.stdout)
+                self.assertIn(b"Op", result.stdout)
+                self.assertIn(b"ctx ?%", result.stdout)
+
+    def test_brackets_thousands_deep_in_a_file_that_is_read(self):
+        deep = "[" * 70000
+        state = os.path.join(self.config, "limit-guard")
+        os.makedirs(state)
+        for path in (os.path.join(self.config, "bobby-statusline.json"), os.path.join(state, "state.json")):
+            with self.subTest(file=os.path.basename(path)):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(deep)
+                self.assertIsNone(BS.read_json(path, BS.CONFIG_MAX))
+                result = self.run_bytes(read_fixture("full.json").encode())
+                self.assertEqual(result.returncode, 0)
+                self.assertIn(b"ctx 132k/1M", result.stdout)
+                self.assertEqual(result.stderr, b"")
+                os.unlink(path)
+
+    def test_config_file_with_a_byte_order_mark_is_read(self):
+        with open(os.path.join(self.config, "bobby-statusline.json"), "w", encoding="utf-8-sig") as fh:
+            json.dump({"layout": "two-row", "prices": {"my-model": [1, 2, 3, 4, 5]}}, fh)
+        cfg = BS.load_config()
+        self.assertEqual(cfg["layout"], "two-row")
+        self.assertEqual(cfg["prices"], {"my-model": (1.0, 2.0, 3.0, 4.0, 5.0, None)})
+
+    def test_large_config_file_is_read_and_has_its_limits(self):
+        path = os.path.join(self.config, "bobby-statusline.json")
+        rows = {"model-%03d" % i: [1, 2, 3, 4, 5] for i in range(300)}
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"note": "x" * 300000, "layout": "two-row", "prices": rows}, fh)
+        cfg = BS.load_config()
+        self.assertEqual(cfg["layout"], "two-row", "a file of 300 KB was not read")
+        self.assertEqual(len(cfg["prices"]), 256)
+        self.assertEqual(BS.CONFIG_MAX, 1 << 20)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"note": "x" * (BS.CONFIG_MAX + 10), "layout": "two-row"}, fh)
+        self.assertEqual(BS.load_config()["layout"], "one-row", "above the limit the file is not used")
+
+    def test_install_prints_samples_that_are_json(self):
+        result = subprocess.run([sys.executable, SCRIPT, "install"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0)
+        blocks, block = [], None
+        for line in result.stdout.split("\n"):
+            if line == "{":
+                block = []
+            if block is not None:
+                block.append(line)
+            if line == "}" and block is not None:
+                blocks.append(json.loads("\n".join(block)))
+                block = None
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[0]["statusLine"]["type"], "command")
+        self.assertEqual(blocks[1]["layout"], "one-row")
+        self.assertEqual(blocks[1]["priority"], list(BS.PRIORITY))
+        self.assertNotIn("//", result.stdout.replace(os.path.abspath(SCRIPT), ""))
+
+
 # Runs one render under an audit hook, in a process of its own. The hook writes
 # each event to a pipe that the test holds. There is no list in this process
 # that the audited code could find and empty, and neither `runpy` nor
 # `unittest` is loaded, so the render cannot tell this run from a real one by
-# looking for them.
+# looking for them. The driver runs with -B: a render that loads the limit-guard
+# gate would write the bytecode cache of the gate on its first run, and those
+# events are not the ones of a later run.
 AUDIT_DRIVER = r"""
 import os, sys
 def arm(fd, write=os.write):
@@ -2662,11 +3085,18 @@ class TestNoEgress(LedgerBase):
             if isinstance(n, (self.ast.FunctionDef, self.ast.AsyncFunctionDef))
         ]
 
-    def callers_of(self, name):
-        return sorted(
-            fn.name for fn in self.functions()
-            if any(isinstance(n, self.ast.Name) and n.id == name for n in self.ast.walk(fn))
-        )
+    def callers_of(self, name, tree=None):
+        """The functions that name `name`, and "<module>" when code outside every function does."""
+        tree = tree or self.tree
+        kinds = (self.ast.FunctionDef, self.ast.AsyncFunctionDef)
+
+        def names(node):
+            return any(isinstance(n, self.ast.Name) and n.id == name for n in self.ast.walk(node))
+
+        found = [fn.name for fn in self.ast.walk(tree) if isinstance(fn, kinds) and names(fn)]
+        if any(names(stmt) for stmt in tree.body if not isinstance(stmt, kinds)):
+            found.append("<module>")
+        return sorted(found)
 
     def problems(self, source: str) -> list:
         """What the roundabout-access rules find in a piece of source."""
@@ -2772,6 +3202,15 @@ class TestNoEgress(LedgerBase):
         self.assertEqual(self.callers_of("run_selftest"), ["main"])
         self.assertEqual(self.callers_of("run_demo"), ["main"])
 
+    def test_a_name_at_module_level_is_a_caller(self):
+        """`TIMER = _measure` outside every function, and `TIMER()` in the render, is a way to it."""
+        source = "def _measure():\n    pass\n\nTIMER = _measure\n\ndef main():\n    TIMER()\n"
+        self.assertEqual(self.callers_of("_measure", self.ast.parse(source)), ["<module>"])
+        source = "class Holder:\n    timer = _measure\n"
+        self.assertEqual(self.callers_of("_measure", self.ast.parse(source)), ["<module>"])
+        source = "def run_selftest():\n    def inner():\n        _measure()\n"
+        self.assertEqual(self.callers_of("_measure", self.ast.parse(source)), ["inner", "run_selftest"])
+
     def test_the_price_script_is_unknown_to_the_status_line(self):
         self.assertTrue(os.path.isfile(PRICES_SCRIPT))
         for word in ("bobby-statusline-prices", "prices.py", "statusline_prices"):
@@ -2792,6 +3231,50 @@ class TestNoEgress(LedgerBase):
             sorted(scripts),
             ["bin/bobby-statusline-prices.py", "bin/bobby-statusline.py", "tests/test_render.py"],
         )
+
+    # A link in a command file that is documentation. Nothing else may hold an address.
+    COMMAND_LINKS = ()
+    MANIFEST_KEYS = {"name", "description", "version", "author", "license", "keywords"}
+
+    def test_the_plugin_ships_no_hook_no_server_and_no_command_that_fetches(self):
+        """A hook, an MCP server or a line of shell in a command file is code that no test here reads."""
+        self.assertEqual(
+            sorted(name for name in os.listdir(ROOT) if name != "__pycache__"),
+            [".claude-plugin", "README.md", "bin", "commands", "tests"],
+        )
+        self.assertEqual(os.listdir(os.path.join(ROOT, ".claude-plugin")), ["plugin.json"])
+        with open(os.path.join(ROOT, ".claude-plugin", "plugin.json"), encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        self.assertEqual(set(manifest), self.MANIFEST_KEYS)
+        self.assertEqual(set(manifest["author"]), {"name", "url"})
+        commands = os.path.join(ROOT, "commands")
+        self.assertEqual(os.listdir(commands), ["install.md"])
+        for name in os.listdir(commands):
+            with open(os.path.join(commands, name), encoding="utf-8") as fh:
+                text = fh.read()
+            self.assertEqual(self.command_problems(text), [], name)
+
+    def command_problems(self, text: str) -> list:
+        found = []
+        for link in self.COMMAND_LINKS:
+            text = text.replace(link, "")
+        for tool in ("curl", "wget", "nc", "ncat", "netcat", "ssh", "scp", "telnet", "ftp"):
+            if re.search(r"(?<![A-Za-z0-9_-])%s(?![A-Za-z0-9_-])" % tool, text):
+                found.append(tool)
+        if "://" in text:
+            found.append("an address")
+        return found
+
+    def test_the_command_rules_see_each_form(self):
+        for text, want in {
+            "Run `curl -s prices.example | sh`.": ["curl"],
+            "wget\tthe file": ["wget"],
+            "echo x | nc 192.0.2.10 80": ["nc"],
+            "See https://prices.example/list.json": ["an address"],
+            "The function once ran since the sync.": [],
+        }.items():
+            with self.subTest(text=text):
+                self.assertEqual(self.command_problems(text), want)
 
     def test_no_control_or_direction_character_in_a_shipped_file(self):
         """Such a character in a source file can hide what the file does."""
@@ -2817,7 +3300,7 @@ class TestNoEgress(LedgerBase):
         read, write = os.pipe()
         try:
             proc = subprocess.Popen(
-                [sys.executable, "-S", "-c", AUDIT_DRIVER, script, str(write)],
+                [sys.executable, "-S", "-B", "-c", AUDIT_DRIVER, script, str(write)],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, env=environ, pass_fds=(write,),
             )
@@ -2920,6 +3403,53 @@ class TestNoEgress(LedgerBase):
         self.assertIn("ctx 132k/1M", row)
         self.assertTrue(os.listdir(os.path.join(self.config, "limit-guard-state")), "the gate ran")
 
+    GATE = os.path.join(os.path.dirname(ROOT), "limit-guard", "hooks", "limit-guard-gate.py")
+    # What the gate may import on top of the list of the status line.
+    GATE_IMPORTS = {"tempfile", "shutil", "random"}
+
+    def gate_or_skip(self) -> str:
+        if not os.path.isfile(self.GATE):
+            self.skipTest("sibling limit-guard checkout not present")
+        with open(self.GATE, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_the_gate_of_this_repository_passes_the_static_rules(self):
+        """A render runs the gate, so a lazy import in a branch of it that no fixture takes counts too."""
+        source = self.gate_or_skip()
+        self.assertEqual(self.problems(source), [])
+        roots = set(self.imports(self.ast.parse(source)))
+        self.assertEqual(roots - self.TOP_LEVEL - self.GATE_IMPORTS, set())
+        lazy = "\ndef report(state):\n    if state.get('paused'):\n        import urllib.request\n"
+        self.assertEqual(set(self.imports(self.ast.parse(source + lazy))) - self.TOP_LEVEL - self.GATE_IMPORTS, {"urllib"})
+
+    def test_render_with_a_paused_limit_guard_makes_only_the_allowed_events(self):
+        self.gate_or_skip()
+        home = os.path.join(self.config, "limit-guard-state")
+        os.makedirs(home)
+        with open(os.path.join(home, "state.json"), "w", encoding="utf-8") as fh:
+            json.dump({"paused": True, "manual": True, "until": time.time() + 1800, "reason": "test"}, fh)
+        events, row = self.audit(
+            SCRIPT, read_fixture("full.json"), BOBBY_STATUSLINE_LIMIT_GUARD=self.GATE, LIMIT_GUARD_HOME=home,
+        )
+        self.assertEqual(audit_violations(events, gate=True), [])
+        self.assertIn("PAUSED", row)
+
+    def test_audited_render_with_a_gate_writes_no_bytecode_file(self):
+        """The audit runs with -B, so its events are the same on a first run and on a later one."""
+        source = self.gate_or_skip()
+        hooks = os.path.join(self.config, "fresh", "hooks")
+        os.makedirs(hooks)
+        gate = os.path.join(hooks, "limit-guard-gate.py")
+        with open(gate, "w", encoding="utf-8") as fh:
+            fh.write(source)
+        events, row = self.audit(
+            SCRIPT, read_fixture("full.json"), unset=("PYTHONDONTWRITEBYTECODE",),
+            BOBBY_STATUSLINE_LIMIT_GUARD=gate, LIMIT_GUARD_HOME=os.path.join(self.config, "limit-guard-state"),
+        )
+        self.assertEqual(audit_violations(events, gate=True), [])
+        self.assertIn("ctx 132k/1M", row)
+        self.assertEqual(os.listdir(hooks), ["limit-guard-gate.py"])
+
     def test_render_that_finds_its_gate_by_itself_makes_only_the_allowed_events(self):
         """With no path given, the script looks for a gate next to itself and in
         the plugin cache. Whatever it finds and runs there is audited too."""
@@ -2929,6 +3459,57 @@ class TestNoEgress(LedgerBase):
         )
         self.assertEqual(audit_violations(events, gate=True), [])
         self.assertIn("ctx 132k/1M", row)
+
+
+def on_a_pty(argv: list, answers=(), ahead: bytes = b"", hold: float = 0.0, env=None, close: bool = False) -> dict:
+    """Run a command on a pseudo terminal and answer its questions.
+
+    `ahead` is typed at once, before the command wrote anything. Each of
+    `answers` is typed when a new `[y/N]` is on the screen. With `hold`, the
+    run waits that long after the last answer was used up and a further
+    question appeared, and reports whether the command still waited then.
+    With `close`, the terminal is closed after that instead of a kill.
+    """
+    import pty
+    import select
+
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, close_fds=True, env=env)
+    os.close(slave)
+    if ahead:
+        os.write(master, ahead)
+    answers, seen, used, waited, held = list(answers), b"", 0, None, None
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        ready, _, _ = select.select([master], [], [], 0.1)
+        if ready:
+            try:
+                data = os.read(master, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            seen += data
+        elif proc.poll() is not None:
+            break
+        if seen.count(b"[y/N]") > used:
+            if answers:
+                os.write(master, answers.pop(0))
+                used += 1
+            elif hold:
+                held = held or time.time()
+                if time.time() - held >= hold:
+                    waited = proc.poll() is None
+                    break
+    if waited and close:
+        os.close(master)
+        master = None
+    elif proc.poll() is None:
+        proc.kill()
+    proc.wait(timeout=30)
+    if master is not None:
+        os.close(master)
+    return {"code": proc.returncode, "seen": seen, "waited": waited}
 
 
 def load_prices_script():
@@ -3066,45 +3647,82 @@ class TestPriceScript(Base):
                 self.assertFalse(os.path.exists(self.config_file))
         with open(PRICES_SCRIPT, encoding="utf-8") as fh:
             source = fh.read()
-        self.assertNotIn("os.environ", source)
         self.assertNotIn("getenv", source)
+        # The environment is read in three places. Two make a line of the
+        # banner: which proxy applies, and where the certificates come from.
+        # The third keeps the key log variable away from the TLS settings.
+        import ast
+
+        readers = set()
+        for fn in ast.walk(ast.parse(source)):
+            if isinstance(fn, ast.FunctionDef) and any(
+                isinstance(node, ast.Attribute) and node.attr == "environ" for node in ast.walk(fn)
+            ):
+                readers.add(fn.name)
+        self.assertEqual(readers, {"proxy_note", "trust_note", "tls_context"})
+        for name in ("BOBBY_YES", "CI", "DEBIAN_FRONTEND", "BOBBY_STATUSLINE_YES"):
+            os.environ[name] = "1"
+        code, _ = self.run_main("--from", self.source, answers=[])
+        self.assertEqual(code, 1)
+        self.assertFalse(os.path.exists(self.config_file))
+
+    def pty_or_skip(self):
+        try:
+            import pty  # noqa: F401
+            import termios  # noqa: F401
+        except ImportError:
+            self.skipTest("no pseudo terminal on this platform")
 
     def test_through_a_real_terminal(self):
-        try:
-            import pty
-            import select
-        except ImportError:
-            self.skipTest("no pty on this platform")
+        self.pty_or_skip()
         for answer, code, written in ((b"n\n", 1, False), (b"y\n", 0, True)):
             with self.subTest(answer=answer):
-                master, slave = pty.openpty()
-                proc = subprocess.Popen(
-                    [sys.executable, PRICES_SCRIPT, "--from", self.source],
-                    stdin=slave, stdout=slave, stderr=slave, close_fds=True,
-                )
-                os.close(slave)
-                os.write(master, answer)
-                seen = b""
-                deadline = time.time() + 30
-                while time.time() < deadline:
-                    ready, _, _ = select.select([master], [], [], 0.2)
-                    if ready:
-                        try:
-                            data = os.read(master, 4096)
-                        except OSError:
-                            break
-                        if not data:
-                            break
-                        seen += data
-                    elif proc.poll() is not None:
-                        break
-                proc.wait(timeout=30)
-                os.close(master)
-                self.assertEqual(proc.returncode, code, seen.decode("utf-8", "replace"))
-                self.assertIn(b"[y/N]", seen)
+                run = on_a_pty([sys.executable, PRICES_SCRIPT, "--from", self.source], answers=[answer])
+                self.assertEqual(run["code"], code, run["seen"].decode("utf-8", "replace"))
+                self.assertIn(b"[y/N]", run["seen"])
                 self.assertEqual(os.path.exists(self.config_file), written)
                 if written:
                     os.unlink(self.config_file)
+
+    def test_answer_typed_before_the_question_is_thrown_away(self):
+        """A `y` typed ahead, or pasted with the command, answers nothing."""
+        self.pty_or_skip()
+        run = on_a_pty(
+            [sys.executable, PRICES_SCRIPT, "--from", self.source], ahead=b"y\ny\n", hold=1.0, close=True
+        )
+        self.assertIn(b"Write these", run["seen"])
+        self.assertTrue(run["waited"], "the question was answered by what was typed before it")
+        self.assertNotIn(b"Written", run["seen"])
+        self.assertFalse(os.path.exists(self.config_file))
+        # The same question takes an answer that is typed after it.
+        run = on_a_pty(
+            [sys.executable, PRICES_SCRIPT, "--from", self.source], ahead=b"n\nn\n", answers=[b"y\n"]
+        )
+        self.assertEqual(run["code"], 0, run["seen"].decode("utf-8", "replace"))
+        self.assertTrue(os.path.exists(self.config_file))
+
+    def test_without_termios_it_does_nothing(self):
+        self.mod.typed_ahead_guard = lambda: None
+        out = io.StringIO()
+        saved = sys.stderr
+        sys.stderr = io.StringIO()
+        try:
+            code = self.mod.main(["prices", "--from", self.source], tty=lambda: True, out=out)
+            said = sys.stderr.getvalue()
+        finally:
+            sys.stderr = saved
+        self.assertEqual(code, 2)
+        self.assertIn("termios", said)
+        self.assertFalse(os.path.exists(self.config_file))
+
+    def test_question_is_not_asked_when_the_typed_input_cannot_be_thrown_away(self):
+        def broken():
+            raise OSError("no terminal")
+
+        self.assertFalse(self.mod.confirmed(lambda q: "y", "Go?", broken))
+        calls = []
+        self.assertTrue(self.mod.confirmed(lambda q: "y", "Go?", lambda: calls.append(1)))
+        self.assertEqual(calls, [1])
 
     # -- the address ------------------------------------------------------------
 
@@ -3175,7 +3793,7 @@ class TestPriceScript(Base):
             elif isinstance(stmt, ast.ImportFrom):
                 top.add(stmt.module)
         self.assertEqual(
-            top, {"__future__", "importlib.util", "json", "os", "re", "stat", "sys", "urllib.parse"}
+            top, {"__future__", "importlib.util", "json", "os", "re", "stat", "sys", "unicodedata", "urllib.parse"}
         )
         local = {}
         for fn in ast.walk(tree):
@@ -3190,7 +3808,10 @@ class TestPriceScript(Base):
             local,
             {"download": {"http.client", "time", "urllib.error", "urllib.request"},
              "redirect_handler": {"urllib.error", "urllib.request"},
-             "wall_clock": {"signal", "threading"}},
+             "proxy_note": {"urllib.request"},
+             "tls_context": {"ssl"},
+             "watchdog": {"threading"},
+             "typed_ahead_guard": {"termios"}},
         )
         for word in ("subprocess", "socket", "os.system", "popen", "Cookie", "Authorization"):
             self.assertNotIn(word, source)
@@ -3465,6 +4086,10 @@ class TestPriceScript(Base):
             chr(c) for c in (0x061C, 0x200E, 0x200F, 0x2028, 0x2029, 0x202A, 0x202E, 0x2066, 0x2069)
         ) + "f"
         self.assertEqual(self.mod.clean(hostile), "a[2Jbcdef")
+        # Format characters that are not seen: zero-width space, soft hyphen,
+        # byte order mark, word joiner. And half of a surrogate pair.
+        unseen = "".join(chr(c) for c in (0x200B, 0x00AD, 0xFEFF, 0x2060, 0xD800, 0xDFFF))
+        self.assertEqual(self.mod.clean("pri" + unseen + "ces"), "prices")
         accented = "caf" + chr(0xE9) + " 1.5"  # a letter above ASCII stays
         self.assertEqual(self.mod.clean(accented), accented)
         self.assertEqual(len(self.mod.clean("x" * 5000)), 400)
@@ -3474,14 +4099,15 @@ class TestPriceScript(Base):
     def test_file_name_and_stored_key_are_printed_clean(self):
         source = os.path.join(self.config, "li\x1b[31mst.json")
         os.rename(self.source, source)
-        hostile = "\x1b[2J\u202eanthropic.claude-opus-5-5"
+        # A key that is the plain id with characters around it that strip() takes off.
+        hostile = "\x1f" + chr(0x2028) + "Claude-Opus-5-5" + chr(0x2029)
         with open(self.config_file, "w", encoding="utf-8") as fh:
             json.dump({"prices": {hostile: [9, 9, 9, 9, 9]}}, fh)
         code, text = self.run_main("--from", source, answers=["n"])
         self.assertEqual(code, 1)
-        self.assertIn("removed: the stored key [2Janthropic.claude-opus-5-5", text)
+        self.assertIn("removed: the stored key Claude-Opus-5-5, which", text)
         for char in text + "".join(self.asked):
-            self.assertFalse(ord(char) == 0x1B or ord(char) == 0x202E, repr(char))
+            self.assertTrue(char == "\n" or 0x20 <= ord(char) < 0x7F, repr(char))
 
     def test_refusal_text_is_printed_clean(self):
         """A refusal names the file, and a file name can hold an escape sequence."""
@@ -3499,35 +4125,280 @@ class TestPriceScript(Base):
     # -- the configuration file -------------------------------------------------
 
     def test_stored_key_for_the_same_model_is_removed_in_the_same_write(self):
-        before = {"prices": {
+        """Only the plain id with a date, or in other letter case, would keep the old price in use."""
+        goes = {
             "claude-opus-5-5-20260101": [9, 9, 9, 9, 9],
-            "us.anthropic.claude-opus-5-5-v1:0": [8, 8, 8, 8, 8],
+            " Claude-Opus-5-5 ": [9, 9, 9, 9, 9],
+            "CLAUDE-OPUS-5-5-20250301": [9, 9, 9, 9, 9],
+        }
+        stays = {
+            "us.anthropic.claude-opus-5-5-v1:0": [8, 8, 8, 8, 8],  # a regional price, as the README says
+            "anthropic.claude-opus-5-5": [8, 8, 8, 8, 8],
+            "claude-opus-5-5[1m]": [8, 8, 8, 8, 8],
+            "claude-opus-5-5@20260101": [8, 8, 8, 8, 8],
             "claude-opus-5-5-fast": [7, 7, 7, 7, 7],
+            "claude-opus-5-5-20260102": "a note, not a row",
+            "claude-opus-5-5-12345678": [6, 6, 6, 6, 6],
             "my-model": [1, 2, 3, 4, 5],
-        }}
+        }
+        before = {"prices": dict(goes, **stays)}
         with open(self.config_file, "w", encoding="utf-8") as fh:
             json.dump(before, fh)
         code, text = self.run_main("--from", self.source, answers=["n"])
         self.assertEqual(code, 1)
-        self.assertIn("removed: the stored key claude-opus-5-5-20260101, which is the same model as claude-opus-5-5", text)
-        self.assertIn("removed: the stored key us.anthropic.claude-opus-5-5-v1:0", text)
-        self.assertNotIn("removed: the stored key claude-opus-5-5-fast", text)
-        self.assertNotIn("removed: the stored key my-model", text)
-        self.assertLess(text.index("removed:"), len(text))
+        for key in goes:
+            self.assertIn("removed: the stored key %s, which is the same model as claude-opus-5-5" % key, text)
+        for key in stays:
+            self.assertNotIn("the stored key %s," % key, text)
+        self.assertEqual(text.count("removed:"), len(goes))
         self.assertEqual(self.stored(), before, "No at the question leaves every key")
+
+        code, text = self.run_main("--from", self.source, "--dry-run")
+        self.assertEqual(text.count("would remove: the stored key"), len(goes))
+        self.assertNotIn("\nremoved:", text)
+        self.assertEqual(self.stored(), before)
 
         code, text = self.run_main("--from", self.source, answers=["y"])
         self.assertEqual(code, 0, text)
         prices = self.stored()["prices"]
-        self.assertNotIn("claude-opus-5-5-20260101", prices)
-        self.assertNotIn("us.anthropic.claude-opus-5-5-v1:0", prices)
-        self.assertEqual(prices["my-model"], [1, 2, 3, 4, 5])
-        self.assertEqual(prices["claude-opus-5-5-fast"], [7, 7, 7, 7, 7])
+        for key in goes:
+            self.assertNotIn(key, prices)
+        for key, row in stays.items():
+            self.assertEqual(prices[key], row)
         self.assertEqual(prices["claude-opus-5-5"]["input"], 3.0)
         # The dated id now takes the new price, not the old stored one.
         table = BS.price_table(BS.load_config()["prices"])
         usd, _ = BS.ledger_cost({"claude-opus-5-5-20260101": {"n": [1000000, 0, 0, 0, 0, 0]}}, table)
         self.assertEqual(usd, 3.0)
+
+    def test_newest_dated_row_wins_when_the_list_has_no_plain_id(self):
+        row = {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
+        newer = {"input_cost_per_token": 5e-06, "output_cost_per_token": 6e-06}
+        found = self.mod.parse_prices(json.dumps({
+            "claude-new-9-20250101": row, "claude-new-9-20260101": newer, "claude-new-9-20240101": row,
+        }).encode(), BS)
+        self.assertEqual(found["claude-new-9"][:2], (5.0, 6.0))
+        # The plain id wins over every dated one, wherever it sorts.
+        for plain in ("claude-new-9", "Claude-New-9"):
+            found = self.mod.parse_prices(json.dumps({
+                plain: row, "claude-new-9-20260101": newer, "claude-new-9-20990101": newer,
+            }).encode(), BS)
+            self.assertEqual(found["claude-new-9"][:2], (1.0, 2.0), plain)
+
+    def test_fast_row_of_a_list_is_not_taken(self):
+        row = {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
+        found = self.mod.parse_prices(json.dumps({"claude-new-9-fast": row, "claude-other-1": row}).encode(), BS)
+        self.assertEqual(sorted(found), ["claude-other-1"])
+
+    def test_cache_price_of_the_wrong_type_drops_the_row(self):
+        base = {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
+        for field in ("cache_read_input_token_cost", "cache_creation_input_token_cost",
+                      "cache_creation_input_token_cost_above_1hr"):
+            for value in ("cheap", True, [1]):
+                with self.subTest(field=field, value=value):
+                    self.assertIsNone(self.mod.litellm_row(dict(base, **{field: value})))
+            self.assertEqual(self.mod.litellm_row(dict(base, **{field: None}))["cacheRead"], 0.1)
+
+    def test_row_above_the_price_limit_after_its_multiplier_is_not_written(self):
+        """A row that the status line would drop is not shown and not written."""
+        rows = {
+            "claude-big-1": {"input": 100000, "output": 1, "cacheRead": 0, "cacheWrite": 0, "multiplier": 1000},
+            "claude-fine-1": {"input": 100, "output": 1, "cacheRead": 0, "cacheWrite": 0, "multiplier": 1000},
+        }
+        with open(self.source, "w", encoding="utf-8") as fh:
+            json.dump(rows, fh)
+        code, text = self.run_main("--from", self.source, answers=["y"])
+        self.assertEqual(code, 0, text)
+        self.assertNotIn("claude-big-1", text)
+        self.assertEqual(sorted(self.stored()["prices"]), ["claude-fine-1"])
+        self.assertEqual(sorted(BS.load_config()["prices"]), ["claude-fine-1"])
+        self.assertEqual(BS.load_config()["prices"]["claude-fine-1"][0], 100000.0)
+
+    def test_drive_letter_path_is_a_file_and_not_an_address(self):
+        self.assertFalse(self.mod.is_url("c:/prices/list.json"))
+        self.assertTrue(self.mod.is_url("ab:/x"))
+        code, text = self.run_main("--from", "c:/prices/list.json", answers=["y"])
+        self.assertEqual(code, 1)
+        self.assertIn("cannot read c:/prices/list.json", text)
+
+    def test_limits_of_the_download_are_the_stated_ones(self):
+        self.assertEqual(self.mod.TOTAL_S, 30)
+        self.assertEqual(self.mod.SIZE_CAP, 20 * 1024 * 1024)
+        self.assertEqual(self.mod.REDIRECTS, 3)
+        code, text = self.run_main("--from", "https://prices.example/list.json", answers=["n"])
+        self.assertIn("at most 3 redirects and only to this host and port", text)
+        self.assertIn("30 s for the whole download with the name lookup, 20 MB", text)
+        self.assertIn("one GET request for each address", text)
+
+    # -- the banner -------------------------------------------------------------------
+
+    def test_banner_names_the_proxy_and_never_its_credentials(self):
+        for key in list(os.environ):
+            if key.lower().endswith("_proxy"):
+                del os.environ[key]
+        code, text = self.run_main("--from", "https://prices.example/list.json", answers=["n"])
+        self.assertIn("  proxy   : none\n", text)
+        os.environ["https_proxy"] = "http://puser:psecret@192.0.2.10:3128"
+        code, text = self.run_main("--from", "https://prices.example/list.json", answers=["n"])
+        self.assertIn("  proxy   : 192.0.2.10:3128, from https_proxy.", text)
+        self.assertIn("Credentials in that setting go to the proxy", text)
+        self.assertNotIn("psecret", text + "".join(self.asked))
+        self.assertNotIn("puser", text + "".join(self.asked))
+        # A host on the no_proxy list gets no proxy, and the banner says so.
+        os.environ["no_proxy"] = "prices.example"
+        code, text = self.run_main("--from", "https://prices.example/list.json", answers=["n"])
+        self.assertIn("  proxy   : none\n", text)
+        del os.environ["https_proxy"], os.environ["no_proxy"]
+        os.environ["HTTPS_PROXY"] = "proxy.example:8080"
+        code, text = self.run_main("--from", "https://prices.example/list.json", answers=["n"])
+        self.assertIn("  proxy   : proxy.example:8080, from HTTPS_PROXY.", text)
+        self.assertEqual(self.fetched, [])
+
+    def test_banner_names_a_certificate_store_from_the_environment(self):
+        os.environ.pop("SSL_CERT_FILE", None)
+        os.environ.pop("SSL_CERT_DIR", None)
+        code, text = self.run_main("--from", "https://prices.example/list.json", answers=["n"])
+        self.assertNotIn("certificate store", text)
+        os.environ["SSL_CERT_FILE"] = "/etc/other\x1b[2J/bundle.pem"
+        code, text = self.run_main("--from", "https://prices.example/list.json", answers=["n"])
+        self.assertIn("  trust   : certificate store /etc/other[2J/bundle.pem (from SSL_CERT_FILE)\n", text)
+        os.environ["SSL_CERT_DIR"] = "/etc/other-certs"
+        code, text = self.run_main("--from", "https://prices.example/list.json", answers=["n"])
+        self.assertIn("/etc/other-certs (from SSL_CERT_DIR)", text)
+
+    def test_tls_settings_write_no_key_log(self):
+        keys = os.path.join(self.config, "keys.log")
+        os.environ["SSLKEYLOGFILE"] = keys
+        self.assertIsNone(self.mod.tls_context().keylog_filename)
+        self.assertFalse(os.path.exists(keys))
+        self.assertEqual(os.environ["SSLKEYLOGFILE"], keys, "the variable of the user is put back")
+        import ssl
+
+        self.assertEqual(self.mod.tls_context().verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(self.mod.tls_context().check_hostname)
+
+    def test_question_names_the_host_and_the_port(self):
+        code, text = self.run_main("--from", "https://prices.example:8443/list.json", answers=["n"])
+        self.assertEqual(self.asked, ["Download from prices.example:8443? [y/N] "])
+        self.assertIn("  host    : prices.example:8443\n", text)
+        self.asked.clear()
+        code, text = self.run_main("--from", "https://Prices.Example/list.json", answers=["n"])
+        self.assertEqual(self.asked, ["Download from prices.example:443? [y/N] "])
+
+    def test_host_that_can_differ_from_the_one_shown_is_refused(self):
+        dot = chr(0x3002)  # a full stop of another script, which a resolver reads as "."
+        for address in (
+            "https://127.0.0.1%3A8443/list.json",
+            "https://prices%2Eexample/list.json",
+            "https://prices" + dot + "example/list.json",
+            "https://pric" + chr(0x0435) + "s.example/list.json",  # a Cyrillic letter
+            "https://prices" + chr(0x200B) + ".example/list.json",
+            "https://prices" + chr(0x00AD) + ".example/list.json",
+            "https://" + chr(0xFEFF) + "prices.example/list.json",
+        ):
+            with self.subTest(address=address.encode("unicode_escape")):
+                code, text = self.run_main("--from", address, answers=["y", "y"])
+                self.assertEqual(code, 1)
+                self.assertIn("refused", text)
+                self.assertEqual(self.asked + self.fetched, [])
+        # A percent sign in the path is not in the host part.
+        code, text = self.run_main("--from", "https://prices.example/a%20b.json", answers=["n"])
+        self.assertEqual(len(self.asked), 1)
+
+    # -- the configuration file, while the question waits ------------------------------
+
+    def test_config_that_changed_during_the_question_is_not_written_over(self):
+        with open(self.config_file, "w", encoding="utf-8") as fh:
+            json.dump({"layout": "two-row", "separator": " | "}, fh)
+        other = json.dumps({"layout": "one-row", "billing": "cost", "prices": {"my-model": [1, 2, 3, 4, 5]}})
+
+        def another_program_writes(question):
+            self.asked.append(question)
+            with open(self.config_file, "w", encoding="utf-8") as fh:
+                fh.write(other)
+            return "y"
+
+        out = io.StringIO()
+        code = self.mod.main(["prices", "--from", self.source], ask=another_program_writes, tty=lambda: True, out=out)
+        self.assertEqual(code, 1)
+        self.assertIn("the configuration file changed", out.getvalue())
+        self.assertIn("Nothing written", out.getvalue())
+        with open(self.config_file, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), other)
+        self.assertEqual(sorted(os.listdir(self.config)), ["bobby-statusline.json", "list.json"])
+
+    def test_config_that_appeared_or_went_during_the_question_is_not_written(self):
+        def appears(question):
+            with open(self.config_file, "w", encoding="utf-8") as fh:
+                fh.write("{}")
+            return "y"
+
+        out = io.StringIO()
+        self.assertEqual(self.mod.main(["prices", "--from", self.source], ask=appears, tty=lambda: True, out=out), 1)
+        with open(self.config_file, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "{}")
+
+        def goes(question):
+            os.unlink(self.config_file)
+            return "y"
+
+        out = io.StringIO()
+        self.assertEqual(self.mod.main(["prices", "--from", self.source], ask=goes, tty=lambda: True, out=out), 1)
+        self.assertIn("the configuration file changed", out.getvalue())
+        self.assertFalse(os.path.exists(self.config_file))
+
+    def test_same_size_rewrite_during_the_question_is_seen(self):
+        with open(self.config_file, "w", encoding="utf-8") as fh:
+            fh.write('{"layout": "two-row"}')
+        stamp = os.stat(self.config_file).st_mtime_ns
+
+        def same_size(question):
+            with open(self.config_file, "w", encoding="utf-8") as fh:
+                fh.write('{"layout": "one-row"}')
+            os.utime(self.config_file, ns=(stamp + 5 * 10**6, stamp + 5 * 10**6))
+            return "y"
+
+        out = io.StringIO()
+        self.assertEqual(self.mod.main(["prices", "--from", self.source], ask=same_size, tty=lambda: True, out=out), 1)
+        with open(self.config_file, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), '{"layout": "one-row"}')
+
+    def test_config_with_half_a_surrogate_pair_is_left_alone(self):
+        body = '{"note": "\\ud800", "layout": "two-row"}'
+        with open(self.config_file, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        code, text = self.run_main("--from", self.source, answers=["y"])
+        self.assertEqual(code, 1)
+        self.assertIn("cannot be written as UTF-8", text)
+        with open(self.config_file, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), body)
+        self.assertEqual(sorted(os.listdir(self.config)), ["bobby-statusline.json", "list.json"])
+
+    def test_interrupt_during_the_download_gives_no_traceback(self):
+        def interrupted(url):
+            raise KeyboardInterrupt()
+
+        self.mod.download = interrupted
+        code, text = self.run_main("--from", "https://prices.example/list.json", answers=["y", "y"])
+        self.assertEqual(code, 1)
+        self.assertIn("Stopped. Nothing written.", text)
+        self.assertFalse(os.path.exists(self.config_file))
+
+    def test_a_run_leaves_no_bytecode_file_next_to_the_scripts(self):
+        """The script writes one key of one file. A cache of the status line script is a second thing."""
+        import shutil
+
+        copy = os.path.join(self.config, "copy")
+        shutil.copytree(os.path.join(ROOT, "bin"), os.path.join(copy, "bin"), ignore=shutil.ignore_patterns("__pycache__"))
+        self.pty_or_skip()
+        environ = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}
+        run = on_a_pty(
+            [sys.executable, os.path.join(copy, "bin", "bobby-statusline-prices.py"), "--from", self.source, "--dry-run"],
+            env=environ,
+        )
+        self.assertEqual(run["code"], 0, run["seen"])
+        self.assertIn(b"Dry run", run["seen"])
+        self.assertEqual(sorted(os.listdir(os.path.join(copy, "bin"))), ["bobby-statusline-prices.py", "bobby-statusline.py"])
 
     def test_prices_key_that_is_not_an_object_is_refused(self):
         for value in ([1, 2], "cheap", 5, None):
@@ -3629,6 +4500,7 @@ class TlsListener:
         self.client_side = ssl.create_default_context(cafile=cert)
         self.body = body
         self.requests = []
+        self.connections = 0
         self.done = threading.Event()
         self.sock = socket.socket()
         self.sock.bind(("127.0.0.1", 0))
@@ -3650,6 +4522,7 @@ class TlsListener:
                 conn, _ = self.sock.accept()
             except OSError:
                 return
+            self.connections += 1
             self.threading.Thread(target=self.serve, args=(conn,), daemon=True).start()
 
     def serve(self, conn):
@@ -3680,6 +4553,10 @@ class TlsListener:
         if path.startswith("/list.json"):
             send("200 OK", ["Content-Type: application/json", "Content-Length: %d" % len(self.body), cookie],
                  self.body)
+        elif path.startswith("/hop"):
+            send("302 Found", ["Location: /hop%d" % (int(path[4:]) + 1), "Content-Length: 0"])
+        elif path == "/cut-off":
+            send("200 OK", ["Content-Length: 100000"], self.body)
         elif path == "/again":
             send("302 Found", ["Location: /list.json", "Content-Length: 0", cookie])
         elif path == "/other-host":
@@ -3732,6 +4609,9 @@ class TestPriceDownload(Base):
     def setUp(self):
         super().setUp()
         self.mod = load_prices_script()
+        # The real one ends the process. Here it is recorded.
+        self.gave_up = []
+        self.mod.give_up = lambda: self.gave_up.append(time.monotonic())
         self.listener = TlsListener(*self.pair, self.BODY.encode())
         self.addCleanup(self.listener.close)
         # A proxy from the environment would take the request somewhere else.
@@ -3821,53 +4701,131 @@ class TestPriceDownload(Base):
         self.assertIn("download failed", text)
 
     def test_slow_server_ends_at_the_limit_for_the_whole_download(self):
-        import signal
-
-        if not hasattr(signal, "setitimer"):
-            self.skipTest("no interval timer on this platform")
-        before = signal.getsignal(signal.SIGALRM)
-        self.mod.TOTAL_S = 1
-        start = time.monotonic()
-        text = self.refused("/slow")
-        took = time.monotonic() - start
-        self.assertIn("took longer than 1 s", text)
-        self.assertGreaterEqual(took, 0.9)
-        self.assertLess(took, 5)
-        self.assertIs(signal.getsignal(signal.SIGALRM), before, "the alarm handler is put back")
-        self.assertEqual(signal.getitimer(signal.ITIMER_REAL)[0], 0, "no alarm is left running")
-
-    def test_slow_headers_end_at_the_limit_for_the_whole_download(self):
-        """Before the body, only the alarm can stop a server that sends a byte at a time."""
-        import signal
-
-        if not hasattr(signal, "setitimer"):
-            self.skipTest("no interval timer on this platform")
-        self.mod.TOTAL_S = 1
-        start = time.monotonic()
-        text = self.refused("/slow-head")
-        self.assertIn("took longer than 1 s", text)
-        self.assertLess(time.monotonic() - start, 5)
-
-    def test_slow_server_ends_at_the_limit_without_an_alarm(self):
-        """Off the main thread there is no alarm. The read loop asks the clock."""
+        """A body that comes a byte at a time: the read loop asks the clock, in any thread."""
         import threading
 
-        self.mod.TOTAL_S = 1
-        seen = []
+        for runner in ("main thread", "another thread"):
+            with self.subTest(runner=runner):
+                self.mod.TOTAL_S = 1
+                seen = []
 
-        def work():
-            start = time.monotonic()
-            try:
-                self.get("/slow")
-            except self.mod.Refused as err:
-                seen.append((str(err), time.monotonic() - start))
+                def work():
+                    start = time.monotonic()
+                    try:
+                        self.get("/slow")
+                    except self.mod.Refused as err:
+                        seen.append((str(err), time.monotonic() - start))
 
-        worker = threading.Thread(target=work)
-        worker.start()
-        worker.join(20)
-        self.assertEqual(len(seen), 1)
-        self.assertIn("took longer than 1 s", seen[0][0])
-        self.assertLess(seen[0][1], 5)
+                if runner == "main thread":
+                    work()
+                else:
+                    worker = threading.Thread(target=work)
+                    worker.start()
+                    worker.join(20)
+                self.assertEqual(len(seen), 1)
+                self.assertIn("took longer than 1 s", seen[0][0])
+                self.assertGreaterEqual(seen[0][1], 0.9)
+                self.assertLess(seen[0][1], 5)
+
+    def test_watchdog_fires_at_the_limit_and_not_after_the_download_returned(self):
+        self.mod.TOTAL_S = 0.5
+        self.assertEqual(self.get("/list.json"), self.BODY.encode())
+        time.sleep(1.0)
+        self.assertEqual(self.gave_up, [], "the watchdog fired after the download was over")
+        # A download that is refused ends the watchdog too.
+        self.refused("/garbage")
+        time.sleep(1.0)
+        self.assertEqual(self.gave_up, [])
+        # And it does fire while a download is still going.
+        self.mod.TIMEOUT_S = 3
+        start = time.monotonic()
+        self.refused("/stall")
+        self.assertEqual(len(self.gave_up), 1)
+        self.assertLess(self.gave_up[0] - start, 1.5)
+        self.assertGreaterEqual(self.gave_up[0] - start, 0.45)
+
+    LATE_DRIVER = (
+        "import importlib.util, signal, socket, ssl, sys, time\n"
+        # Nothing may reach the main thread, as in a name lookup that never
+        # answers: no alarm is delivered, and the stand-in below does not return.
+        "if hasattr(signal, 'pthread_sigmask'):\n"
+        "    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})\n"
+        "spec = importlib.util.spec_from_file_location('prices', sys.argv[1])\n"
+        "mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\n"
+        "mod.TOTAL_S = 1\n"
+        "if sys.argv[4] == 'lookup':\n"
+        "    socket.getaddrinfo = lambda *a, **k: time.sleep(25)\n"
+        "real = mod.download\n"
+        "mod.download = lambda url: real(url, context=ssl.create_default_context(cafile=sys.argv[3]))\n"
+        "sys.exit(mod.main(['prices', '--from', sys.argv[2]], ask=lambda q: 'y', tty=lambda: True))\n"
+    )
+
+    def test_whole_download_ends_at_the_limit_where_no_signal_arrives(self):
+        """Headers a byte at a time, and a name lookup that does not answer.
+
+        Neither reaches the read loop, and an alarm does not reach a main
+        thread that is inside a name lookup. The watchdog ends the process.
+        """
+        config_file = os.path.join(self.config, "bobby-statusline.json")
+        for case, path in (("headers", "/slow-head"), ("lookup", "/list.json")):
+            with self.subTest(case=case):
+                before = self.listener.connections
+                start = time.monotonic()
+                result = subprocess.run(
+                    [sys.executable, "-c", self.LATE_DRIVER, PRICES_SCRIPT, self.listener.url(path),
+                     self.pair[0], case],
+                    capture_output=True, text=True, timeout=120,
+                )
+                took = time.monotonic() - start
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("refused: the download took longer than 1 s\nNothing written.\n", result.stdout)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertLess(took, 8)
+                self.assertFalse(os.path.exists(config_file))
+                if case == "lookup":
+                    self.assertEqual(self.listener.connections, before)
+
+    def test_body_that_stops_before_its_stated_length_is_refused(self):
+        self.assertIn("stopped early", self.refused("/cut-off"))
+
+    def test_no_more_than_three_redirects_are_followed(self):
+        text = self.refused("/hop0")
+        self.assertIn("download failed", text)
+        self.assertEqual(len(self.listener.requests), 4, "the first request and three redirects")
+        self.assertEqual(self.head(3)[0], "GET /hop3 HTTP/1.1")
+
+    def test_certificate_store_from_the_environment_is_used_and_no_key_log_is_written(self):
+        """What the banner names is what happens: SSL_CERT_FILE decides, SSLKEYLOGFILE does nothing."""
+        keys = os.path.join(self.config, "keys.log")
+        os.environ["SSL_CERT_FILE"] = self.pair[0]
+        os.environ["SSLKEYLOGFILE"] = keys
+        self.assertEqual(self.mod.download(self.listener.url("/list.json")), self.BODY.encode())
+        self.assertFalse(os.path.exists(keys))
+
+    def test_answer_typed_before_the_download_question_starts_no_download(self):
+        try:
+            import pty  # noqa: F401
+            import termios  # noqa: F401
+        except ImportError:
+            self.skipTest("no pseudo terminal on this platform")
+        environ = dict(os.environ, SSL_CERT_FILE=self.pair[0])
+        run = on_a_pty(
+            [sys.executable, PRICES_SCRIPT, "--from", self.listener.url("/list.json")],
+            ahead=b"y\ny\n", hold=1.0, close=True, env=environ,
+        )
+        self.assertIn(b"Download from 127.0.0.1:%d? [y/N]" % self.listener.port, run["seen"])
+        self.assertTrue(run["waited"], "the question was answered by what was typed before it")
+        self.assertEqual(self.listener.connections, 0)
+        self.assertNotIn(b"Written", run["seen"])
+        self.assertFalse(os.path.exists(os.path.join(self.config, "bobby-statusline.json")))
+        # With the answers typed after the questions, the same command downloads and writes.
+        run = on_a_pty(
+            [sys.executable, PRICES_SCRIPT, "--from", self.listener.url("/list.json")],
+            ahead=b"n\n", answers=[b"y\n", b"y\n"], env=environ,
+        )
+        self.assertEqual(run["code"], 0, run["seen"].decode("utf-8", "replace"))
+        self.assertEqual(len(self.listener.requests), 1)
+        self.assertIn(b"certificate store", run["seen"])
 
     def test_reply_that_is_not_http_is_refused(self):
         self.assertIn("download failed", self.refused("/garbage"))

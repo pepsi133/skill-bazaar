@@ -22,10 +22,10 @@ Measured end to end under WSL2, including the interpreter start and the `limit-g
 capture:
 
 ```
-render only     fixtures=8 runs=160  median=0.86ms  p95=1.18ms
-end to end      runs=30  median=44.2ms  p95=45.4ms  max=46.3ms
-estimate scan   runs=7  median=51.7ms  p95=52.7ms  max=53.4ms  catch-up only, over budget
-estimate idle   runs=20  median=44.3ms  p95=45.5ms  max=45.6ms
+render only     fixtures=8 runs=160  median=0.91ms  p95=1.34ms
+end to end      runs=30  median=45.1ms  p95=46.5ms  max=47.3ms
+estimate scan   runs=7  median=51.3ms  p95=51.6ms  max=52.8ms  catch-up only, over budget
+estimate idle   runs=20  median=45.1ms  p95=46.0ms  max=46.2ms
 ```
 
 Run `bin/bobby-statusline.py --selftest` to reproduce these numbers. It fails when the p95
@@ -271,8 +271,12 @@ part, because the payload does not split it.
 - Every `agent-*.jsonl` file in the `subagents` directory next to it, inside three limits:
   three directory levels, which covers `subagents/workflows/<id>/`, 512 directories, and
   2000 files. The files are taken in the order of their names. What is past a limit is not
-  counted. The `+` marker stays on the row for as long as a limit cuts the list, because
-  the number is then a lower bound.
+  counted. The `+` marker stays on the row for as long as a limit leaves a transcript
+  out, because the number is then a lower bound. A transcript that was counted keeps its
+  place: with 2000 counted, a new file is left out wherever its name sorts, so the number
+  does not go down.
+- A transcript that cannot be read, or a directory that cannot be listed, is not counted.
+  The `+` marker stays for as long as that holds.
 - Only lines whose top-level type is `assistant`. One API response is several lines with one
   message id, so an id counts once.
 
@@ -287,6 +291,10 @@ When the progress file cannot be written, a later render starts from zero. A tot
 render read to the end is correct, and it shows. A total that one render did not finish
 would be another number on each render, so the segment shows `$?` then.
 
+When the progress file is deleted, or is from an earlier version of the plugin, the scan
+starts again from the first byte. Until it caught up, the row shows a number with `+` that
+is lower than the one before.
+
 The file is written to a temporary name in the same directory and then renamed. It has mode
 0600. The plugin creates the two directories above it with mode 0700 and leaves the mode of
 a directory that already exists as it is. A new session deletes the files of sessions that
@@ -300,9 +308,10 @@ above these, such as the configuration directory itself, are not checked.
 
 ### Time
 
-Reading has 5 milliseconds for each render. The load and the write of the progress file
-are outside that limit. Each render reads at least one line, so a slow machine still moves
-forward. A render continues after the transcript that the last render read, so one
+Reading has 5 milliseconds for each render. The clock is looked at between two lines and
+after each buffer of 1 MB, so a render can pass the limit by the time that one buffer
+takes. The load and the write of the progress file are outside that limit. Each render
+reads at least one line, so a slow machine still moves forward. A render continues after the transcript that the last render read, so one
 transcript that never stops growing does not hold up the others. While the scan is not
 complete the `+` marker shows.
 
@@ -313,9 +322,9 @@ A render does not look at every transcript:
 - The list of files is made again only when a directory under `subagents` changed. So a
   new subagent transcript is seen on the next render.
 - With time left inside the 5 milliseconds, the other transcripts get their `lstat`, at
-  least 16 of them in each render. The round starts at another place on each render. An
-  append to one of them is seen late when there are more of them than the time allows:
-  on the next render with up to about 1000 transcripts, after about 2 renders with 2000.
+  least 16 of them in each render. The round starts at a random place on each render. An
+  append to one of them is seen some renders late when there are more of them than the
+  time allows.
 
 Measured under WSL2. `In process` is the estimate alone. `Whole render` is the process
 from start to end, without and with the `limit-guard` gate:
@@ -377,15 +386,17 @@ the row to `prices`.
 **Which row a model gets.** The model id is made lower-case, and these parts are removed:
 
 - a provider prefix that ends in `anthropic.`
-- an `@` suffix and a `[1m]` suffix
-- a `-v1:0` suffix, on an id that had the `anthropic.` prefix only
+- a `[1m]` suffix
+- an `@` with a date after it, such as `@20260101`
+- a version suffix of the form `-v1:0`, with any two numbers, on an id that had the
+  `anthropic.` prefix only
 - a date: eight digits that are a day of the years 2020 to 2099
 
 One `-fast` at the end selects the fast rate. What is left must be equal to the id of a row.
 There is no prefix match: `claude-opus-5-5-20260101` and `us.anthropic.claude-opus-5-5-v1:0`
 are `claude-opus-5-5`, and `claude-opus-5-1` is not `claude-opus-5`. An id that only looks
-like one of these forms gets no row: `claude-opus-5-5-12345678`, `claude-opus-5-5-v2` and
-`claude-opus-5-5-fast-fast`. A model with no row counts as $0 and the `?` marker appears,
+like one of these forms gets no row: `claude-opus-5-5-12345678`, `claude-opus-5-5-v2`,
+`claude-opus-5-5@latest` and `claude-opus-5-5-fast-fast`. A model with no row counts as $0 and the `?` marker appears,
 so a new model is never priced as an older one without a sign.
 
 ### Your own prices
@@ -433,7 +444,11 @@ The rules:
 - A row of yours replaces the built-in row whole. For Haiku 5.5, write the `above` part
   again, or the higher rate is gone.
 - A row that is malformed is ignored: a wrong number of prices, a price that is not a
-  number, that is negative, or that is above 100,000.
+  number, that is negative, or that is above 100,000. The limit holds for the price after
+  the `multiplier`.
+- The configuration file is read up to 1 MB. A larger file is not used at all. Of the rows
+  in `prices`, the first 256 are used. A byte order mark at the start of the file is
+  accepted.
 - The `modelPricing` setting has one `multiplier` for the whole table. Here `multiplier`
   belongs to one row.
 - A row that is added or removed, or a threshold that changes, makes the next render read
@@ -455,8 +470,13 @@ nothing.
 - A transcript holds one JSON object on each line. A transcript that another tool wrote
   again with one object across several lines is not counted.
 - An `assistant` line longer than 4 MB is not counted. Such a line is not held in memory.
-- A request with more than 1,000,000,000 tokens in one field is not a request. It is
-  ignored, and the rest of the session is counted.
+- A request with more than 1,000,000,000 tokens in one field, or with a field that is not a
+  finite number, is not a request. It is ignored, and the rest of the session is counted.
+- With more than 128 different model ids in the subagent transcripts of one session, the
+  ids past that number are counted together as an unknown model, at $0 and with the `?`
+  marker.
+- A directory below the third level is not read. The `+` marker shows when such a
+  directory holds an `agent-*.jsonl` file.
 - An append to a subagent transcript that is not among the 32 written last is seen some
   renders late. See [Time](#time).
 - A message id counts once in each transcript. Three cases can count a response twice: an
@@ -479,7 +499,9 @@ the estimate, the two badge flag files, its configuration file, and the `limit-g
 state.
 
 What it writes: the progress file of the estimate under
-`${CLAUDE_CONFIG_DIR:-~/.claude}/bobby-statusline/usage/`, and nothing else.
+`${CLAUDE_CONFIG_DIR:-~/.claude}/bobby-statusline/usage/`. When `limit-guard` is installed,
+Python also keeps its bytecode cache of the gate script in a `__pycache__` directory next
+to that script, as it does for every module that a program imports. Nothing else.
 
 Two tests guard this:
 
@@ -503,6 +525,15 @@ Two things are outside that claim. `--selftest` starts copies of this script to 
 And when `limit-guard` is installed, the status line runs its gate script in the same
 process: see [The companion plugin](#the-companion-plugin-limit-guard).
 
+The claim covers the code of this plugin and the `limit-guard` gate of this repository.
+The tests read both: the static rules and the runtime check also run on that gate,
+including a render in the paused state. A render executes the gate file that
+`BOBBY_STATUSLINE_LIMIT_GUARD` names, or the one that it finds in the plugin cache. A
+different file at that place is outside the claim.
+
+The tests also fail when the plugin gets a `hooks` directory or an `.mcp.json` file, when
+its manifest gets a new key, or when a command file names a download tool or an address.
+
 ## Optional: update the prices
 
 The built-in table is fixed for each release of the plugin. When a price changes before the
@@ -521,39 +552,63 @@ know that it exists. The `/bobby-statusline:install` command does not run it eit
   or an `https` address that you type. `http` and every other scheme are refused. A
   redirect is followed only to the same host and port over `https`, and only when the new
   address has no user name in it. Every other redirect is refused, and the message names
-  both hosts.
+  both hosts. At most three redirects are followed.
+- **The host that is shown gets the connection.** An address with a `%` in its host part,
+  or with a host name that has a character outside ASCII, is refused. The question names
+  the host and the port.
 - **A local file needs no network.** On a machine with no outside access, get the price
   list in any way you trust and pass its path.
-- **It asks first, twice.** Before a download it prints the address, the host and what it
-  sends, and asks. Before it writes it prints the old and the new price of each model, and
-  asks again. Both questions default to No. A local file has no download, so it has one
-  question.
+- **It asks first, twice.** Before a download it prints the address, the host, the proxy
+  and what it sends, and asks. Before it writes it prints the old and the new price of each
+  model, and asks again. Both questions default to No. A local file has no download, so it
+  has one question.
+- **An answer counts only after its question.** What was typed, or pasted with the
+  command, before a question was on the screen is thrown away. The script needs the
+  `termios` module for that. Without it, as on Windows, the script does nothing.
 - **It needs a terminal.** Standard input, standard output and standard error must all be
   terminals. With one of them redirected it does nothing and exits with an error. No flag
   and no environment variable answers the questions. A terminal is not proof of a person,
   because a program can make one. The check keeps the script out of pipelines. The script
   is for a manual run.
-- **It sends no data.** The download is one `GET` request with a fixed, generic
-  `User-Agent`. No cookie, no credentials, and nothing about the machine, the user or a
-  session. The whole download has 30 seconds, and it stops at 20 MB. A proxy from the
-  environment is used when one is set. Text from the server or from a file is printed
-  without control characters.
+- **It sends no data.** The download is one `GET` request for each address, so at most
+  four with three redirects on the same host, each with a fixed, generic `User-Agent`. No
+  cookie, no credentials of yours, and nothing about the machine, the user or a session.
+  Text from the server or from a file is printed without control characters.
+- **It has limits.** The whole download has 30 seconds, the name lookup included. At that
+  time the script prints the refusal and ends. It stops at 20 MB. A body that ends before
+  the length that the server named is refused.
+- **It shows the proxy.** When the environment sets a proxy for the host, the connection
+  goes to the proxy first. The script prints the host and the port of the proxy and the
+  name of the variable before the first question, or `proxy : none`. A user name or a
+  password inside that variable goes to the proxy. The script does not print them.
+- **It shows another certificate store.** When `SSL_CERT_FILE` or `SSL_CERT_DIR` is set,
+  the certificates come from there, and the script prints that path before the first
+  question. `SSLKEYLOGFILE` has no effect: no key log is written.
 - **It writes one key.** The rows that differ go into `prices` in `bobby-statusline.json`.
   Every other key stays. The file is written to a temporary name and renamed, with mode
-  0600. `--dry-run` shows the table and writes nothing. A stored key that names the model
-  of a new row in another way, such as a dated id, is removed in the same write, and the
-  table shows it as `removed` before the question. If that key stayed, it would keep the
-  old price in use.
+  0600. `--dry-run` shows the table and writes nothing. It writes no other file: no
+  bytecode cache next to the scripts.
+- **It removes a key that would keep the old price in use.** The new row goes under the
+  plain model id. A stored key that is that id with a date at its end, or that id in other
+  letter case, is removed in the same write. The table shows it as `removed` before the
+  question, and as `would remove` with `--dry-run`. A key in a provider form, with
+  `[1m]`, with `@` or with `-fast` is a row of its own and stays.
+- **It does not write over a change.** When another program changed the configuration
+  file while the second question waited, the script writes nothing and asks you to run it
+  again.
 - **It leaves a file in a bad state alone.** A configuration file that is not valid JSON,
   that has no write permission, or whose `prices` value is not an object is not changed.
   The script says why and writes nothing. A byte order mark at the start of the
-  configuration file or of the price list is accepted.
+  configuration file or of the price list is accepted. `Ctrl-C` at any point stops the
+  script with nothing written.
 
 Two formats are read: the LiteLLM price file (`input_cost_per_token` and its relatives, in
 USD for each token), and the row shape of Claude Code's `modelPricing` setting. Only rows
-whose model id starts with `claude-` are kept, a dated id is folded into its model, and a
-number that is negative, not finite, or above 100,000 USD for each million tokens drops its
-row. A row with a provider prefix is not taken: add such a row by hand. When the list has
+whose model id starts with `claude-` are kept. A dated id is folded into its model: the
+plain id wins, and without one the newest date wins. A number that is negative, not finite,
+or above 100,000 USD for each million tokens after its `multiplier` drops its row, and so
+does a cache price that is not a number. A row with a provider prefix or with `-fast` is
+not taken: add such a row by hand. When the list has
 no long-prompt rates for a model that has them now, the ones in use are kept and the table
 says so.
 
@@ -572,7 +627,7 @@ claude plugin install limit-guard@skill-bazaar
 
 When `limit-guard` is installed, the status line loads its gate script and runs it in the
 same Python process on every render. That script is code of another plugin. The gate
-does local file work only, and the runtime test above also renders with the gate of this
+does local file work only, and the tests above also read and render the gate of this
 repository: no socket, no process. It writes its cache, its pause state and its
 log under `${CLAUDE_CONFIG_DIR:-~/.claude}/limit-guard/`. Without `limit-guard` the status
 line works as before and shows no pause. [The limit-guard bridge](#the-limit-guard-bridge)
@@ -760,7 +815,7 @@ cd plugins/bobby-statusline && python3 -m unittest discover -s tests -p 'test_*.
 python3 bin/bobby-statusline.py --selftest
 ```
 
-312 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
+367 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
 oversize, escape bytes, whitelist), the billing modes, the color thresholds, both layouts,
 the configuration layers, the prompt cache states and colors, the pause state, the
 `limit-guard` bridge including an old gate and a raising gate, the slash command's contract,
@@ -774,12 +829,13 @@ progress file of the wrong shape), every row of the price table, the row matchin
 long-prompt rate, the cost sources for the three account shapes, payload fields of the
 wrong type or of an absurd size, and the absence of network code (`TestNoEgress`).
 
-For the price update script they cover the questions and the terminal check, the
-configuration file in each bad state, and the text that is printed (`TestPriceScript`, no
+For the price update script they cover the questions and the terminal check, input that
+was typed before a question, the banner, the configuration file in each bad state and a
+change to it during a question, and the text that is printed (`TestPriceScript`, no
 network). `TestPriceDownload` runs the download against a TLS listener on `127.0.0.1`:
-the exact request, the redirect rules, the size limit and both time limits. It makes its
-certificate with the `openssl` command in a temporary directory, and it is skipped where
-that command is absent.
+the exact request, the redirect rules, the size limit and the time limits, with a name
+lookup that does not answer among them. It makes its certificate with the `openssl`
+command in a temporary directory, and it is skipped where that command is absent.
 
 Every test isolates `CLAUDE_CONFIG_DIR` into a temporary directory, including the tests that
 run the script as a subprocess, so a run reads none of the developer's own session state and

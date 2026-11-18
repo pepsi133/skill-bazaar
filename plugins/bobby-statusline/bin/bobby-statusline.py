@@ -69,8 +69,14 @@ STE_FLAG = ".ste-active"
 # --------------------------------------------------------------------------
 
 
+CONFIG_MAX = 1 << 20  # characters of the configuration file that are read
+
+
 def read_text(path: str, limit: int = 65536) -> str | None:
-    """Read a regular file, refusing symlinks and pipes. None on absence or any error."""
+    """Read a regular file, refusing symlinks and pipes. None on absence or any error.
+
+    A byte order mark at the start is not part of the text.
+    """
     try:
         if os.path.islink(path):
             return None
@@ -78,29 +84,30 @@ def read_text(path: str, limit: int = 65536) -> str | None:
     except OSError:
         return None
     try:
-        with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as fh:
+        with os.fdopen(fd, "r", encoding="utf-8-sig", errors="replace") as fh:
             return fh.read(limit)
     except OSError:
         return None
 
 
-def read_json(path: str) -> dict | None:
-    raw = read_text(path)
+def read_json(path: str, limit: int = 65536) -> dict | None:
+    raw = read_text(path, limit)
     if not raw:
         return None
     try:
         val = json.loads(raw)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):  # RecursionError: brackets thousands deep
         return None
     return val if isinstance(val, dict) else None
 
 
-# C0, DEL, C1, the direction marks, overrides and isolates, and the two line
-# separators. C1 matters because 0x9b is a second CSI introducer in some
+# C0, DEL, C1, the direction marks, overrides and isolates, the two line
+# separators, and the surrogates. A surrogate alone is no character: an output
+# stream cannot encode it, and the row would be lost. C1 matters because 0x9b is a second CSI introducer in some
 # terminals, a direction mark can visually reorder a row so that a low
 # percentage reads as a high one, and a line separator can break the row.
 CONTROL = re.compile(
-    r"[\x00-\x1f\x7f\u0080-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]"
+    r"[\x00-\x1f\x7f\u0080-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ud800-\udfff]"
 )
 
 
@@ -161,7 +168,7 @@ IDENTITY_ROW = ("paused", "vim", "flags", "model", "effort", "mode", "agent", "p
 def load_config() -> dict:
     cfg = json.loads(json.dumps(DEFAULTS))  # deep copy, stdlib only
 
-    stored = read_json(os.path.join(config_home(), CONFIG_FILE)) or {}
+    stored = read_json(os.path.join(config_home(), CONFIG_FILE), CONFIG_MAX) or {}
     for key in ("layout", "billing", "cost_source", "glyphs", "separator"):
         if isinstance(stored.get(key), str):
             cfg[key] = stored[key]
@@ -611,7 +618,8 @@ LEDGER_CHUNK = 1 << 20
 LEDGER_MAX_LINE = 4 << 20  # a longer line is skipped, never held in memory
 LEDGER_HEAD = 256  # bytes of a transcript that identify it
 LEDGER_MAX_SIDECAR = 8 << 20
-LEDGER_MAX_MODELS = 32
+LEDGER_MAX_MODELS = 32  # model ids of one transcript
+LEDGER_SUM_MODELS = 4 * LEDGER_MAX_MODELS  # model ids of all subagent transcripts together
 REQUEST_MAX = 10**9  # tokens in one field of one request. More is not a request.
 TOKEN_MAX = 10**15  # one stored number
 TOKENS_SANE = 10**12  # a session total above this is not shown
@@ -676,6 +684,26 @@ def usage_tuple(usage: dict) -> list:
         hour,
         searches,
     ]
+
+
+def _absurd(usage: dict) -> bool:
+    """True when a field of a request holds a number that no request has.
+
+    The raw values are looked at, before usage_tuple() turns what it cannot
+    hold into 0: a field of 1e30, or infinity, is not a request of 0 tokens.
+    """
+    detail, tools = usage.get("cache_creation"), usage.get("server_tool_use")
+    vals = [usage.get(key) for key in (
+        "input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")]
+    if isinstance(detail, dict):
+        vals += [detail.get("ephemeral_5m_input_tokens"), detail.get("ephemeral_1h_input_tokens")]
+    if isinstance(tools, dict):
+        vals.append(tools.get("web_search_requests"))
+    # `not val <= limit` is also True for NaN.
+    return any(
+        isinstance(val, (int, float)) and not isinstance(val, bool) and not val <= REQUEST_MAX
+        for val in vals
+    )
 
 
 def _new_entry() -> dict:
@@ -784,11 +812,11 @@ def ledger_count(entry: dict, line: bytes, threshold) -> None:
     if not isinstance(usage, dict):
         return
 
-    tup = usage_tuple(usage)
-    if max(tup) > REQUEST_MAX:
+    if _absurd(usage):
         # No request has a billion tokens. One broken line must not turn the
         # total of the whole session into "$?", so it is left out, id and all.
         return
+    tup = usage_tuple(usage)
     ids = entry["ids"]
     mid = msg.get("id")
     mid = clean(mid, 128) if isinstance(mid, str) and mid else None
@@ -829,7 +857,8 @@ def ledger_scan(path: str, entry: dict, deadline: float, threshold) -> bool:
 
     The offset moves only past complete lines, so a line that Claude Code is
     still writing is read by a later render. The clock is looked at only after
-    the offset moved, so every call makes progress. A line longer than
+    the offset moved, so every call makes progress, and it is looked at after
+    every buffer of up to LEDGER_CHUNK bytes. A line longer than
     LEDGER_MAX_LINE is not held: the `skip` flag and the offset record how far
     into it the scan is, and a later render goes on from there.
     """
@@ -885,14 +914,31 @@ def ledger_scan(path: str, entry: dict, deadline: float, threshold) -> bool:
                     entry["off"] += used
                     return False
             entry["off"] += whole
+            # One long line is one buffer, so the look at the clock between
+            # lines never comes for a run of them.
+            if time.perf_counter() >= deadline:
+                return entry["off"] >= info.st_size  # True: that was the last of it
 
 
-def ledger_files(transcript: str, wall_ns: int) -> tuple:
+def _holds_transcript(path: str) -> bool:
+    """True when a directory has an agent-*.jsonl file in it."""
+    with os.scandir(path) as it:
+        return any(
+            item.name.startswith("agent-") and item.name.endswith(".jsonl")
+            and item.is_file(follow_symlinks=False)
+            for item in it
+        )
+
+
+def ledger_files(transcript: str, wall_ns: int, known=()) -> tuple:
     """(keys, cut, dirs): the subagent transcripts of a session.
 
     `keys` are paths below the `subagents` directory, sorted. `cut` is True
-    when a limit left transcripts out: more than LEDGER_MAX_FILES files, more
-    than LEDGER_MAX_DIRS directories, or a directory below LEDGER_MAX_DEPTH.
+    when transcripts are left out: more than LEDGER_MAX_FILES files, more
+    than LEDGER_MAX_DIRS directories, a transcript in a directory below
+    LEDGER_MAX_DEPTH, or a directory that cannot be listed. With more files
+    than the limit, the ones in `known` stay: a transcript that was counted is
+    not put out by a new one, so the number does not go down.
     `dirs` maps each directory that was listed to its modification time, which
     changes when a file is added to it or removed from it, so the next render
     can tell that the list still holds. A symlink is never followed:
@@ -922,7 +968,15 @@ def ledger_files(transcript: str, wall_ns: int) -> tuple:
                     if item.is_dir(follow_symlinks=False):
                         if depth < LEDGER_MAX_DEPTH:
                             stack.append((item.path, rel + name + "/", depth + 1))
-                        else:
+                            continue
+                        # Too deep to be read. It is watched all the same, so
+                        # that a transcript which appears there brings the mark.
+                        if len(dirs) >= LEDGER_MAX_DIRS:
+                            cut = True
+                            continue
+                        deep = item.stat(follow_symlinks=False).st_mtime_ns
+                        dirs[rel + name + "/"] = deep if wall_ns - deep > LEDGER_SETTLE_NS else 0
+                        if _holds_transcript(item.path):
                             cut = True
                     elif (
                         name.startswith("agent-")
@@ -930,12 +984,18 @@ def ledger_files(transcript: str, wall_ns: int) -> tuple:
                         and item.is_file(follow_symlinks=False)
                     ):
                         found.append(rel + name)
+        except FileNotFoundError:
+            dirs[rel] = 0  # no subagents yet, or gone since it was seen
         except OSError:
+            # It is there and cannot be listed. What it holds is not counted.
             dirs[rel] = 0
-            continue
+            cut = True
     found.sort()
     if len(found) > LEDGER_MAX_FILES:
-        found, cut = found[:LEDGER_MAX_FILES], True
+        old = [key for key in found if key in known]
+        new = [key for key in found if key not in known]
+        found = sorted(old[:LEDGER_MAX_FILES] + new[: max(0, LEDGER_MAX_FILES - len(old))])
+        cut = True
     return found, cut, dirs
 
 
@@ -950,7 +1010,7 @@ def ledger_listed(transcript: str, dirs) -> bool:
         if type(changed) is not int or changed <= 0 or type(rel) is not str:
             return False
         parts = [p for p in rel.split("/") if p]
-        if len(parts) >= LEDGER_MAX_DEPTH or any(p in (".", "..") for p in parts):
+        if len(parts) > LEDGER_MAX_DEPTH or any(p in (".", "..") for p in parts):
             return False
         try:
             info = os.lstat(os.path.join(session, "subagents", *parts))
@@ -1006,7 +1066,7 @@ def ledger_load(path: str, transcript: str, tiers: list) -> dict | None:
         _key_list(raw.get("live"), 2 * LEDGER_ID_FILES)
         _key_list(raw.get("todo"), LEDGER_MAX_FILES + 1)
         _checked_entry(raw.get("main"))
-        _checked_totals(raw.get("sum"), 4 * LEDGER_MAX_MODELS)
+        _checked_totals(raw.get("sum"), LEDGER_SUM_MODELS)
         return {key: raw.get(key) for key in ("cut", "dirs", "todo", "live", "main", "sub", "sum")}
     except (OSError, ValueError, RecursionError):
         return None
@@ -1069,12 +1129,25 @@ def ledger_prune(wall: float) -> None:
         pass
 
 
-def _merge_totals(into: dict, totals: dict, sign: int = 1) -> None:
+def _merge_totals(into: dict, totals: dict, sign: int = 1, cap: int = 0) -> None:
+    """Add `totals` to `into`, or take them away with sign -1.
+
+    With `cap`, `into` never holds more model ids than that: the ones past it
+    go to "?", which has no price and brings the mark. What is taken away and
+    has no entry of its own went there too.
+    """
     for model, buckets in totals.items():
+        if model not in into:
+            if sign < 0 or (cap and model != "?" and len(into) >= cap - 1):
+                model = "?"
+            if sign < 0 and model not in into:
+                continue
         for name, tup in buckets.items():
             bucket = into.setdefault(model, {}).setdefault(name, list(ZERO))
             for i, n in enumerate(tup):
-                bucket[i] = max(0, bucket[i] + sign * n)
+                bucket[i] = max(0, min(TOKEN_MAX, bucket[i] + sign * n))
+        if sign < 0 and not any(any(tup) for tup in into[model].values()):
+            del into[model]  # an empty entry would still take a place
 
 
 def ledger_totals(data: dict, table: dict | None = None) -> dict | None:
@@ -1101,7 +1174,9 @@ def ledger_totals(data: dict, table: dict | None = None) -> dict | None:
 
 def _walk_start(count: int) -> int:
     """Where the look at the transcripts that are not in work starts in this render."""
-    return time.time_ns() // 1000 % count
+    # Not from the clock: a coarse clock gives the same start to every render,
+    # and a part of the list would then never get its turn.
+    return int.from_bytes(os.urandom(4), "big") % count
 
 
 def _ledger_totals(data: dict, table: dict, fresh: bool) -> dict | None:
@@ -1142,7 +1217,7 @@ def _ledger_totals(data: dict, table: dict, fresh: bool) -> dict | None:
     # 1. Which transcripts exist. A directory's modification time changes when
     # a file is added or removed, so the list is made again only then.
     if not ledger_listed(transcript, state["dirs"]):
-        found, cut, dirs = ledger_files(transcript, time.time_ns())
+        found, cut, dirs = ledger_files(transcript, time.time_ns(), sub)
         names = set(found)
         # A list that is the same as before changes nothing, so it writes
         # nothing: a session with no subagents is listed on every render.
@@ -1153,7 +1228,9 @@ def _ledger_totals(data: dict, table: dict, fresh: bool) -> dict | None:
             # Gone, or beyond a limit now. Its tokens leave the sum with it, so
             # that the sidecar never holds more entries than it may load.
             gone = sub.pop(key)
-            _merge_totals(state["sum"], _checked_totals(gone.get("t") if type(gone) is dict else None), -1)
+            _merge_totals(
+                state["sum"], _checked_totals(gone.get("t") if type(gone) is dict else None), -1, LEDGER_SUM_MODELS
+            )
         for key in found:
             if key not in sub:
                 sub[key] = _new_entry()
@@ -1197,8 +1274,9 @@ def _ledger_totals(data: dict, table: dict, fresh: bool) -> dict | None:
 
     read, touched = 0, set()
 
-    def scan(key) -> bool:
-        """Read one transcript. True when it is read to its end, or cannot be read."""
+    def scan(key):
+        """Read one transcript. True: read to its end. False: the time ran out.
+        None: it cannot be read, so what it holds is not in the number."""
         nonlocal read
         entry = entry_of(key)
         if entry is None:
@@ -1208,28 +1286,35 @@ def _ledger_totals(data: dict, table: dict, fresh: bool) -> dict | None:
         try:
             done = ledger_scan(path_of(key), entry, deadline, threshold)
         except OSError:
-            return True
+            return None
         read += max(0, entry["off"] - before)
         touched.add(key)
         mtimes[key] = entry["mt"] / 1e9
         if key:
-            _merge_totals(state["sum"], was, -1)
-            _merge_totals(state["sum"], entry["t"], 1)
+            _merge_totals(state["sum"], was, -1, LEDGER_SUM_MODELS)
+            _merge_totals(state["sum"], entry["t"], 1, LEDGER_SUM_MODELS)
         return done
 
     # 3. The reading, inside the time limit. Each transcript in turn: one that
     # is not finished goes to the end of the line, so a transcript that never
     # stops growing cannot keep the others waiting. The first one always moves,
     # whatever the clock says.
+    # One that cannot be read stays on the list, which keeps the mark on the
+    # row, and does not hold up the ones after it.
     deadline = time.perf_counter() + LEDGER_BUDGET_MS / 1000.0
-    moved = False
+    moved, blocked = False, set()
     for _ in range(len(todo)):
         if moved and time.perf_counter() >= deadline:
             break
         key = todo.pop(0)
+        done = scan(key)
+        if done is None:
+            todo.append(key)
+            blocked.add(key)
+            continue
         waiting.discard(key)
         moved = dirty = True
-        if not scan(key):
+        if not done:
             todo.append(key)
             waiting.add(key)
             break
@@ -1239,7 +1324,7 @@ def _ledger_totals(data: dict, table: dict, fresh: bool) -> dict | None:
     # time allows. The round starts at another place on every render, so no
     # part of the list waits for ever, and the place is not kept: to keep it
     # would write the whole sidecar on every render.
-    if not todo and len(sub) > len(hot) - 1:
+    if blocked.issuperset(todo) and len(sub) > len(hot) - 1:
         keys = list(sub)
         first = _walk_start(len(keys))
         seen = set(hot)
@@ -1249,11 +1334,18 @@ def _ledger_totals(data: dict, table: dict, fresh: bool) -> dict | None:
             if step and step % 16 == 0 and time.perf_counter() >= deadline:
                 break
             key = keys[(first + step) % len(keys)]
-            if key in seen or not changed(key):
+            if key in seen or key in blocked or not changed(key):
                 continue
             dirty = True
-            if time.perf_counter() >= deadline or not scan(key):
+            if time.perf_counter() >= deadline:
                 todo.append(key)
+                break
+            done = scan(key)
+            if not done:
+                todo.append(key)
+                if done is None:
+                    blocked.add(key)
+                    continue
                 break
 
     partial = bool(todo) or state["cut"]
@@ -1392,7 +1484,11 @@ def price_row(val):
         if not 0 < limit <= THRESHOLD_MAX:
             return None
         tier = (limit,) + tuple(p * factor for p in high)
-    return tuple(p * factor for p in vals) + (tier,)
+    row = tuple(p * factor for p in vals)
+    # The limit is for the price that is used, so after the multiplier.
+    if max(row + (tier[1:] if tier else ())) > PRICE_MAX:
+        return None
+    return row + (tier,)
 
 
 def _undated(name: str) -> str:
@@ -1409,8 +1505,8 @@ def _undated(name: str) -> str:
 def model_name(model: str) -> tuple:
     """('claude-opus-5-5', fast) from any written form of a model id.
 
-    Lower case, no provider prefix, no `@` suffix, and at most one each of
-    `[1m]`, a Bedrock version, a date and `-fast`. Anything else stays in the
+    Lower case, no provider prefix, and at most one each of `[1m]`, a date
+    after an `@`, a Bedrock version, a date and `-fast`. Anything else stays in the
     name, so an id like `claude-opus-5-5-12345678` or `...-fast-fast` matches
     no row. `fast` is True for a deployment name that ends in `-fast`.
     """
@@ -1418,8 +1514,13 @@ def model_name(model: str) -> tuple:
     cut = name.find("anthropic.")
     if cut >= 0:
         name = name[cut + len("anthropic."):]
-    name = name.split("@", 1)[0]
-    if name.endswith(LONG_TAIL):
+    long = name.endswith(LONG_TAIL)
+    if long:
+        name = name[: -len(LONG_TAIL)]
+    head, at, tail = name.partition("@")
+    if at and _undated("-" + tail) == "":
+        name = head  # `@20260101`. Any other text after an `@` stays, and matches no row.
+    if not long and name.endswith(LONG_TAIL):
         name = name[: -len(LONG_TAIL)]
     if cut >= 0:
         name = BEDROCK_TAIL.sub("", name)
@@ -1879,16 +1980,19 @@ costs one python3 start every 30 seconds while the session is idle.
 Preferences live in %s. Every key is optional:
 
 {
-  "layout": "one-row",        // one-row | two-row
-  "billing": "auto",          // auto | plan | cost | both
-  "cost_source": "auto",      // auto | payload | estimate
-  "glyphs": "ascii",          // ascii | unicode
+  "layout": "one-row",
+  "billing": "auto",
+  "cost_source": "auto",
+  "glyphs": "ascii",
   "color": true,
   "separator": " | ",
   "segments": { "worktree": true },
   "priority": [%s],
   "prices": { "claude-opus-5-5": [4, 20, 0.2, 5, 8] }
 }
+
+layout is one-row or two-row. billing is auto, plan, cost or both. cost_source
+is auto, payload or estimate. glyphs is ascii or unicode.
 
 cost_source decides where the cost segment gets its number. "payload" shows
 cost.total_cost_usd from Claude Code, which is absent on some accounts and then
@@ -2169,6 +2273,33 @@ def _measure_estimate(timed) -> list:
 # --------------------------------------------------------------------------
 
 
+def read_stdin() -> str:
+    """The payload. A byte that is not UTF-8 becomes U+FFFD, whatever the locale is."""
+    stream = sys.stdin
+    try:
+        raw = stream.buffer
+    except AttributeError:  # a stream of text only
+        return stream.read()
+    return raw.read().decode("utf-8", "replace")
+
+
+def emit(text: str) -> None:
+    """Write the row. A character that the output cannot encode becomes `?`.
+
+    With an ASCII or Latin-1 output, one such character in a model name would
+    otherwise raise, and the whole row would be lost.
+    """
+    stream = sys.stdout
+    try:
+        raw, encoding = stream.buffer, stream.encoding
+    except AttributeError:  # a stream of text only
+        stream.write(text)
+        return
+    stream.flush()
+    raw.write(text.encode(encoding or "utf-8", "replace"))
+    raw.flush()
+
+
 def main(argv: list) -> int:
     arg = argv[1] if len(argv) > 1 else ""
     if arg == "install":
@@ -2182,11 +2313,11 @@ def main(argv: list) -> int:
         return 0
 
     try:
-        stdin_text = sys.stdin.read()
+        stdin_text = read_stdin()
     except Exception:
         stdin_text = ""
     try:
-        sys.stdout.write(render(stdin_text) + "\n")
+        emit(render(stdin_text) + "\n")
     except Exception:
         # An empty status line is a small loss. A traceback rendered into the
         # status bar on every keystroke is not.
