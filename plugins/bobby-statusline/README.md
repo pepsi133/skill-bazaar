@@ -17,12 +17,12 @@ The whole render is allowed about 50. So this plugin replaces the chain rather t
 extending it: one process reads stdin once, imports `limit-guard` in the same interpreter,
 and prints.
 
-Measured end to end on the maintainer's machine, WSL2, 30 runs, including the interpreter
-start and the `limit-guard` capture:
+Measured end to end under WSL2, 30 runs, including the interpreter start and the
+`limit-guard` capture:
 
 ```
-render only     median 0.80ms   p95 1.03ms
-end to end      median 30.1ms   p95 32.7ms   max 34.8ms
+render only     median 0.84ms   p95 1.20ms
+end to end      median 42.1ms   p95 43.4ms   max 45.6ms
 ```
 
 Run `bin/bobby-statusline.py --selftest` to reproduce both numbers. It fails when the
@@ -187,7 +187,7 @@ Three layers, later wins: built-in defaults, then the JSON file, then the enviro
 | `separator` | any short string | the text between segments |
 | `segments` | sparse object | lists only what differs from the default |
 | `priority` | list of keys | drop order, most protected first. Unlisted keys go to the end |
-| `prices` | object | price overrides for the estimate: a model id prefix and five numbers |
+| `prices` | object | price overrides for the estimate: a model id and its prices. See [Your own prices](#your-own-prices) |
 
 Environment overrides, useful for one project or one experiment:
 
@@ -221,7 +221,7 @@ comes from. With both on `auto`, the shape of the payload decides:
 | Account | Payload | Row in `auto` | Transcripts read |
 |---|---|---|---|
 | Subscription (Pro, Max) | `rate_limits` present | `5h` and `7d`, no cost segment | no |
-| API key, billed by token | no `rate_limits`, `cost.total_cost_usd` present | `$0.42`, the number from Claude Code | no |
+| API key, billed by token | no `rate_limits`, `cost.total_cost_usd` present | `$0.42`, the number from Claude Code, subagents included | no |
 | Partner platform or enterprise gateway | no `rate_limits`, no `cost.total_cost_usd` | `~$0.42 (sub $0.10)`, the estimate | yes |
 
 A subscription session shows a cost only when `billing` is `cost` or `both`. Any session
@@ -229,22 +229,23 @@ shows the estimate when `cost_source` is `estimate`.
 
 ## The cost estimate
 
-The payload has the token usage of the main session only. On some accounts it has no
-`cost.total_cost_usd`, and the cost segment shows `$?`. The estimate fills that gap. It adds
-up the token usage that Claude Code writes to the session transcripts, for the main session
-and for every subagent, and multiplies it by a price table.
+On some accounts the payload has no `cost.total_cost_usd`, and the cost segment shows `$?`.
+The estimate fills that gap. It adds up the token usage that Claude Code writes to the
+session transcripts, for the main session and for every subagent, and multiplies it by a
+price table.
 
 ```
 ~$1.63                  an estimate. No subagent cost, or less than one cent
 ~$1.63 (sub $0.40)      1.63 in total, of which 0.40 is subagents
 ~$1.63+ (sub $0.40)     the scan is not finished. The number grows on the next renders
 ~$1.63?                 a model with no price is in the session. It counts as 0
-$?                      no transcript, no usable session id, or a read failure
+$?                      no transcript, no usable session id, a read failure, or a total
+                        that is outside any sane range
 ```
 
 | `cost_source` | Cost segment |
 |---|---|
-| `payload` | `cost.total_cost_usd` from Claude Code, `$?` when it is absent. No transcript is read |
+| `payload` | `cost.total_cost_usd` from Claude Code, `$?` when it is absent or not a number. No transcript is read |
 | `estimate` | always the estimate |
 | `auto` | the payload number when it is a number, the estimate when it is not |
 
@@ -255,20 +256,53 @@ part, because the payload does not split it.
 
 - The main transcript, from `transcript_path` in the payload.
 - Every `agent-*.jsonl` file in the `subagents` directory next to it, down to three levels,
-  which covers `subagents/workflows/<id>/`. No more than 2000 files.
-- Only lines whose type is `assistant`. One API response is several lines with one message
-  id, so an id counts once.
+  which covers `subagents/workflows/<id>/`. No more than 2000 files. Files past that
+  number are not counted.
+- Only lines whose top-level type is `assistant`. One API response is several lines with one
+  message id, so an id counts once.
 
 A render reads only the bytes that were appended since the last render. The progress is in
-`${CLAUDE_CONFIG_DIR:-~/.claude}/bobby-statusline/usage/<session id>.json`: a byte offset
-and the token totals for each transcript. The directory has mode 0700 and the file has mode
-0600. The file is written to a temporary name and then renamed. Symlinks are refused on every
-path. A new session deletes the files of sessions that are more than 30 days old.
+`${CLAUDE_CONFIG_DIR:-~/.claude}/bobby-statusline/usage/<session id>.json`: for each
+transcript a byte offset, its token totals, its inode, and a checksum of its first 256
+bytes. A transcript that got smaller, or whose inode or first bytes changed, is read again
+from the start.
 
-The scan has 15 milliseconds for each render. A long session that is seen for the first
-time needs a few renders, and the `+` marker shows until the scan is complete. About 12 MB
-of transcripts took three renders on the maintainer's machine. After that a render that
-finds nothing new costs about 0.15 milliseconds.
+The file is written to a temporary name in the same directory and then renamed. It has mode
+0600. The plugin creates the two directories above it with mode 0700 and leaves the mode of
+a directory that already exists as it is. A new session deletes the files of sessions that
+are more than 30 days old.
+
+What is refused: a transcript, a `subagents` directory, a session directory, or any entry
+below them that is a symlink, and anything that is not a regular file, such as a named pipe.
+The same holds for the progress file and its two directories. When one of those two
+directories is a symlink the segment shows `$?` and nothing is written. Path components
+above these, such as the configuration directory itself, are not checked.
+
+### Time
+
+Reading has 15 milliseconds for each render. The clock starts after the progress file is
+loaded and every transcript got one `lstat`, and each render reads at least one line, so a
+slow machine still moves forward. A render continues after the transcript that the last
+render read, so one transcript that never stops growing does not hold up the others. While
+the scan is not complete the `+` marker shows.
+
+Measured in process under WSL2, without the interpreter start:
+
+| Session | First time | Later, nothing new | Later, one new line |
+|---|---|---|---|
+| 1 main and 6 subagent transcripts, 12 MB | 4 renders | 0.16 ms | 0.5 ms |
+| 200 subagent transcripts | 5 renders | 1.5 ms | 2.4 ms |
+| 1000 subagent transcripts | 23 renders | 6.5 ms | 9.5 ms |
+| 2000 subagent transcripts | 44 renders | 13 ms | 19 ms |
+| one line of 10 MB to 50 MB in a transcript | 1 render | | |
+
+The cost with many transcripts is the progress file, which holds an entry for each one, and
+one `lstat` for each. `--selftest` measures the estimate on a small synthetic session and
+prints it on its own line.
+
+A line longer than 4 MB is not held in memory. The scan steps over it, across several
+renders if it must, and the progress file records how far it is. Such a line is a pasted
+image or document in a `user` line. An `assistant` line of that size would not be counted.
 
 The scan runs only when the cost segment is shown and its source is the estimate. With
 `payload`, or with `auto` and a payload number, nothing is read and nothing is written.
@@ -277,30 +311,40 @@ The scan runs only when the cost segment is shown and its source is the estimate
 
 Built-in list prices, in USD for each million tokens:
 
-| Model id prefix | Input | Output | Cache read |
+| Model id | Input | Output | Cache read |
 |---|---|---|---|
 | `claude-fable-5-2`, `claude-mythos-5-2` | 8 | 40 | 0.20 |
 | `claude-fable-5-1`, `claude-mythos-5-1` | 10 | 50 | 0.25 |
-| `claude-fable-5` | 10 | 50 | 1.00 |
+| `claude-fable-5`, `claude-mythos-5` | 10 | 50 | 1.00 |
 | `claude-opus-5-5` | 4 | 20 | 0.20 |
 | `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6` | 5 | 25 | 0.50 |
 | `claude-sonnet-5-5` | 2 | 10 | 0.10 |
 | `claude-sonnet-5` | 2 | 10 | 0.20 |
 | `claude-sonnet-4-6` | 3 | 15 | 0.30 |
-| `claude-haiku-5-5` | 0.10 | 0.50 | 0.01 |
+| `claude-haiku-5-5`, prompt up to 100,000 tokens | 0.10 | 0.50 | 0.01 |
+| `claude-haiku-5-5`, prompt above 100,000 tokens | 0.50 | 2.50 | 0.05 |
 | `claude-haiku-4-5` | 1 | 5 | 0.10 |
 
 A cache write with a 5 minute TTL costs 1.25 times the input price. A cache write with a
 1 hour TTL costs 2 times the input price. A web search costs $0.01 for each request. Fast
-mode doubles the token prices.
+mode doubles the token prices. A deployment name that ends in `-fast` gets the fast rate
+too.
 
-The model id is made lower-case before the lookup. A provider prefix that ends in
+Haiku 5.5 is priced by the length of the prompt. Each request is priced on its own: when its
+input tokens plus its cache reads plus its cache writes are above 100,000, the whole request
+pays the higher row. The estimate does the same for each line of a transcript.
+
+**Which row a model gets.** The model id is made lower-case. A provider prefix that ends in
 `anthropic.`, an `@` suffix, a `[1m]` suffix, a `-v1:0` suffix and an 8-digit date are
-removed. Then the longest prefix that matches wins, so `claude-opus-5-5` is not priced as
-`claude-opus-5`.
+removed. What is left must be equal to the id of a row. There is no prefix match:
+`claude-opus-5-5-20260101` and `us.anthropic.claude-opus-5-5-v1:0` are `claude-opus-5-5`,
+and `claude-opus-5-1` is not `claude-opus-5`. A model with no row counts as $0 and the `?`
+marker appears, so a new model is never priced as an older one without a sign.
 
-To change a price or add a model, put it in `bobby-statusline.json`. The five numbers are
-input, output, cache read, cache write 5m and cache write 1h:
+### Your own prices
+
+Put a row in `bobby-statusline.json` to change a price or to add a model. The five numbers
+are input, output, cache read, cache write 5m and cache write 1h:
 
 ```json
 {
@@ -311,39 +355,155 @@ input, output, cache read, cache write 5m and cache write 1h:
 }
 ```
 
-An entry of yours replaces the built-in entry with the same prefix. An entry that is not a
-list of five numbers is ignored. Prices come from this table and from your file only.
-Nothing is downloaded.
+A row can also be an object. `input`, `output`, `cacheRead` and `cacheWrite` are the names
+that a row of Claude Code's `modelPricing` setting has, so the rows of that table can be
+pasted here. `cacheWrite5m` and `cacheWrite1h` give the two cache write prices apart,
+`multiplier` scales every price of the row, and `above` holds the prices of a request whose
+prompt is above a threshold:
+
+```json
+{
+  "prices": {
+    "claude-opus-5-5": { "input": 4, "output": 20, "cacheRead": 0.2, "cacheWrite": 5 },
+    "claude-haiku-5-5": {
+      "input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite5m": 0.125, "cacheWrite1h": 0.2,
+      "above": { "threshold": 100000, "input": 0.5, "output": 2.5, "cacheRead": 0.05,
+                 "cacheWrite5m": 0.625, "cacheWrite1h": 1 }
+    }
+  }
+}
+```
+
+The rules:
+
+- A key covers its own model and no other version. The key is reduced in the same way as a
+  model id, so `claude-opus-5-5`, `claude-opus-5-5-20260101` and
+  `us.anthropic.claude-opus-5-5-v1:0` are three ways to write the same key.
+- A model id that is equal to a key as written takes that row first. So a row keyed
+  `us.anthropic.claude-opus-5-5-v1:0` can hold a regional price next to a row keyed
+  `claude-opus-5-5`.
+- A row of yours that matches always wins over the built-in row.
+- A row of yours replaces the built-in row whole. For Haiku 5.5, write the `above` part
+  again, or the higher rate is gone.
+- A row that is malformed is ignored: a wrong number of prices, a price that is not a
+  number, that is negative, or that is above 100,000.
+- The `modelPricing` setting has one `multiplier` for the whole table. Here `multiplier`
+  belongs to one row.
+- A row that is added or removed, or a threshold that changes, makes the next render read
+  the session again from the start, because the thresholds decide how a request was
+  counted.
+
+Prices come from the built-in table and from your file only. The status line downloads
+nothing.
 
 ### Limits
 
 - It is an estimate at list price, not a bill. A partner platform has its own price list,
   and a contract can have a discount. Use `prices` for those.
-- Claude Code makes a few requests that are in no transcript, such as the one that names the
-  session. The estimate does not contain them, so it is a little lower than the number from
-  Claude Code. In a long session with many such requests the difference was about 12 percent.
-- Haiku 5.5 has a higher rate for a prompt above 100K tokens. The estimate ignores that and
-  uses one rate.
-- When a transcript does not say how a cache write splits into 5 minute and 1 hour TTL, the
-  write counts at the 5 minute rate.
-- A model that the table does not know counts as $0 and the `?` marker appears.
+- It is lower than the number from Claude Code. See
+  [What this cannot show](#what-this-cannot-show) for the three causes.
+- A price multiplier for US-only inference is not applied.
+- When a transcript does not say how a cache write splits into 5 minute and 1 hour TTL, or
+  the split does not add up to the total, the write counts at the 5 minute rate.
+- Claude Code writes one JSON object on each line, with no space after a colon or a comma.
+  That is the form the scan looks for. A transcript that another tool wrote again in
+  another layout is not counted.
+- A message id counts once in each transcript. Three cases can count a response twice: an
+  id that comes back after 16 other ids, the same id in two transcripts, and a line with no
+  id. With more than 32 transcripts in work at once, the ones written least recently
+  remember only their newest id. None of these was seen in real sessions.
+- A transcript that was written again in place with the same size, the same first 256 bytes
+  and the same modification time is taken as unchanged.
 - The transcript of a session that was removed or rotated cannot be counted.
 
 ## No network access
 
-The plugin opens no connection. It has no network code, it starts no process during a
-render, and it downloads nothing, the prices included.
+The status line opens no connection and a render starts no process. Prices are in the
+script and in your configuration file. Nothing is downloaded and nothing is sent.
 
-It reads local files only: the payload on standard input, the session transcripts for the
-estimate, the two badge flag files, its configuration file, and the `limit-guard` state.
+What it reads, all of it local: the payload on standard input, the session transcripts for
+the estimate, the two badge flag files, its configuration file, and the `limit-guard`
+state.
 
-It writes one kind of file: the estimate's progress file under
-`${CLAUDE_CONFIG_DIR:-~/.claude}/bobby-statusline/usage/`. `limit-guard`, when it is
-installed, writes its own cache through its own code. `--selftest` is the only command that
-starts processes, and they are copies of this script.
+What it writes: the progress file of the estimate under
+`${CLAUDE_CONFIG_DIR:-~/.claude}/bobby-statusline/usage/`, and nothing else.
 
-`TestNoEgress` in the test suite parses the script and fails when it imports a network
-module, or when anything other than the selftest imports `subprocess`.
+Two tests hold this, and the claim is as wide as they are:
+
+- A static one. `bin/bobby-statusline.py` may import the modules on a short list, all from
+  the Python standard library and none with network code, and no other. It may not import
+  by a computed name. `subprocess` is on the list for `--selftest` only, and the test
+  checks that a render cannot reach that function.
+- A runtime one. Every fixture is rendered, with and without the estimate, under a Python
+  audit hook. The test fails on any socket event and on any process start. A control run
+  proves that the hook sees both.
+
+Two things are outside that claim. `--selftest` starts copies of this script to time them.
+And when `limit-guard` is installed, the status line runs its gate script in the same
+process: see [The companion plugin](#the-companion-plugin-limit-guard).
+
+## Optional: update the prices
+
+The built-in table is fixed for each release of the plugin. When a price changes before the
+next release, you can write the new price into `prices` by hand, or let a separate script
+do it:
+
+```bash
+python3 /path/to/plugins/bobby-statusline/bin/bobby-statusline-prices.py --from prices.json
+python3 /path/to/plugins/bobby-statusline/bin/bobby-statusline-prices.py --from <https address> --dry-run
+```
+
+It is optional and manual. The status line never runs it, never imports it, and does not
+know that it exists. The `/bobby-statusline:install` command does not run it either.
+
+- **You give the source.** The script has no built-in address. `--from` takes a local file
+  or an `https` address that you type. `http` and every other scheme are refused, and so is
+  a redirect to an address that is not `https`.
+- **A local file needs no network.** On a machine with no outside access, get the price
+  list in any way you trust and pass its path.
+- **It asks first, twice.** Before a download it prints the address, the host and what it
+  sends, and asks. Before it writes it prints the old and the new price of each model, and
+  asks again. Both questions default to No. A local file has no download, so it has one
+  question.
+- **It needs a terminal.** With input or output redirected it does nothing and exits with
+  an error. No flag and no environment variable answers the questions.
+- **It sends no data.** The download is one `GET` request with a fixed, generic
+  `User-Agent`. No cookie, no credentials, and nothing about the machine, the user or a
+  session. It stops after 15 seconds and at 20 MB. A proxy from the environment is used
+  when one is set.
+- **It writes one key.** The rows that differ go into `prices` in `bobby-statusline.json`.
+  Every other key stays. The file is written to a temporary name and renamed, with mode
+  0600. A configuration file that is not valid JSON is left alone. `--dry-run` shows the
+  table and writes nothing.
+
+Two formats are read: the LiteLLM price file (`input_cost_per_token` and its relatives, in
+USD for each token), and the row shape of Claude Code's `modelPricing` setting. Only rows
+whose model id starts with `claude-` are kept, a dated id is folded into its model, and a
+number that is negative, not finite, or above 100,000 USD for each million tokens drops its
+row. A row with a provider prefix is not taken: add such a row by hand. When the list has
+no long-prompt rates for a model that has them now, the ones in use are kept and the table
+says so.
+
+## The companion plugin: limit-guard
+
+`limit-guard` is in the same marketplace:
+<https://github.com/pepsi133/skill-bazaar/tree/main/plugins/limit-guard>. It pauses a
+session at the 5-hour or the 7-day usage window, and lets it go on after the reset. The two
+plugins are made for each other: `limit-guard` needs the `rate_limits`
+object, which Claude Code gives to the status line only, and this status line shows its
+pause as `PAUSED >14:05`.
+
+```bash
+claude plugin install limit-guard@skill-bazaar
+```
+
+When `limit-guard` is installed, the status line loads its gate script and runs it in the
+same Python process on every render. That script is code of another plugin. The gate
+does local file work only, and the runtime test above also renders with the gate of this
+repository: no socket, no process. It writes its cache, its pause state and its
+log under `${CLAUDE_CONFIG_DIR:-~/.claude}/limit-guard/`. Without `limit-guard` the status
+line works as before and shows no pause. [The limit-guard bridge](#the-limit-guard-bridge)
+has the details.
 
 ## Color
 
@@ -494,6 +654,23 @@ cost is one `python3` start every 30 seconds while the session sits idle.
 - **Your actual bill.** `cost.total_cost_usd` is computed client-side at list price and
   resets on `/clear`. The estimate is computed from list prices too. Neither knows a
   discount or the price list of a partner platform.
+- **The requests that are in no transcript.** Claude Code makes requests of its own beside
+  the conversation: the one that names the session, the session recap, prompt suggestions,
+  and others. It writes no usage line for them, so the estimate cannot count them, and it
+  reads lower than the number from Claude Code. The difference is small in a short session
+  and grows with the length of the session, because many of those requests read the whole
+  cached conversation. `cost.total_cost_usd` contains them. No transcript reader can.
+- **The compaction request.** `/compact` and automatic compaction send one request that
+  reads the whole conversation and writes the summary. It has no usage line either. On a
+  large model with a full context that one request can cost dollars.
+- **The history before a fork of a compacted session.** A session started with
+  `--fork-session` from a session that was compacted gets a transcript that holds only the
+  lines after the compaction, and no subagent files. The estimate of the fork starts there,
+  so it is lower than the payload number and has no `(sub ...)` part. A fork of a session
+  that was never compacted has the whole history. `--resume` and `--continue` keep the
+  session id and the transcript, so they lose nothing.
+- **A cost on the first render of a session.** The transcript file does not exist before
+  the first response, so the estimate shows `$?` for that one row.
 - **Subagent tokens in the context segment.** `context_window` describes the main session.
   The estimate counts subagent cost, but no segment shows a subagent's context.
 - **A cost split when Claude Code supplies the number.** `cost.total_cost_usd` is one
@@ -508,22 +685,27 @@ cd plugins/bobby-statusline && python3 -m unittest discover -s tests -p 'test_*.
 python3 bin/bobby-statusline.py --selftest
 ```
 
-154 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
+234 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
 oversize, escape bytes, whitelist), the billing modes, the color thresholds, both layouts,
-the configuration layers, the prompt cache states and colors, the pause state, the `limit-guard` bridge including an old gate
-and a raising gate, the slash command's contract, the usage ledger (one count for each message id, main and
-subagent totals, incremental reads, truncation, symlinks, the time limit), the price lookup,
-the cost sources for the three account shapes, the absence of network code, and one
-regression test per fixed defect
-(`TestAuditRegressions`, nine tests). Each of those fails against the code as it stood
-before its fix.
+the configuration layers, the prompt cache states and colors, the pause state, the
+`limit-guard` bridge including an old gate and a raising gate, the slash command's contract,
+and one regression test per fixed defect (`TestAuditRegressions`, nine tests). Each of those
+fails against the code as it stood before its fix.
+
+For the estimate they cover the ledger (one count for each message id, main and subagent
+totals, incremental reads, the time limit, a 10 MB line, 2000 transcripts, truncated and
+replaced transcripts, named pipes, every symlink case), every row of the price table, the
+row matching, the long-prompt rate, the cost sources for the three account shapes, payload
+fields of the wrong type, the absence of network code (`TestNoEgress`), and the price update
+script without any network (`TestPriceScript`).
 
 Every test isolates `CLAUDE_CONFIG_DIR` into a temporary directory, including the tests that
 run the script as a subprocess, so a run reads none of the developer's own session state and
 writes nothing into their real `limit-guard` cache. The ledger tests write synthetic
 transcripts into that temporary directory. `--selftest` does the same from a shell:
 it points `LIMIT_GUARD_HOME` at a temporary directory for the run, so the captures it measures
-never touch the real cache or pause state. The clock is pinned by passing
+never touch the real cache or pause state. Its `estimate` line renders a synthetic session
+in a throwaway configuration directory, because the fixtures have no transcript. The clock is pinned by passing
 `render(payload, now=...)`, so the expectations do not drift with the date and nothing in the
 environment can freeze a real session's countdown.
 

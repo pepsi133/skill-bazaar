@@ -41,5 +41,9 @@ show the change first and never guess at a path.
      the token usage in the session transcripts, subagents included, and shows it as
      `~$1.63 (sub $0.40)`.
 
+   If they ask how to change a price: `bin/bobby-statusline-prices.py` next to the script is
+   an optional tool that a person runs by hand in a terminal. Name it and stop there.
+   Do not run it: it asks its questions of a person, and it can download a file.
+
 Do not change any other setting, do not install anything, and do not edit files outside
 settings.json.
