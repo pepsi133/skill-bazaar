@@ -58,9 +58,9 @@ const CARDS = S.cardsDoc;
 const plain = (x) => JSON.parse(JSON.stringify(x));
 // The default board folder, under the working directory; --state names another place.
 const BOARD_DIR = ".board";
-// The clock: BOARD_NOW (any instant Date.parse reads) is the test hook. now() is a stamp in the config tz, so it
+// The clock: BOARD_NOW (any instant Date.parse reads) is the test hook; it counts only with BOARD_TEST=1. now() is a stamp in the config tz, so it
 // runs only after new Run(...) applied the config.
-const nowMs = () => { const v = process.env.BOARD_NOW; if (!v) return Date.now(); const t = Date.parse(v); if (isNaN(t)) fail("BOARD_NOW: not a time: " + q(v)); return t; };
+const nowMs = () => { const v = process.env.BOARD_TEST === "1" ? process.env.BOARD_NOW : ""; if (!v) return Date.now(); const t = Date.parse(v); if (isNaN(t)) fail("BOARD_NOW: not a time: " + q(v)); return t; };
 const now = () => P.stampIn(nowMs(), P.cfg.tz, false);
 // JSON, with what JSON leaves raw escaped too: DEL and the C1 controls, the line separators U+2028 and U+2029,
 // the bidi controls, U+200B and U+FEFF; never U+200C and U+200D, which words and emoji need. q quotes one text.

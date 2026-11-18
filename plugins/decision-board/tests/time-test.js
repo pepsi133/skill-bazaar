@@ -49,9 +49,8 @@ ok("tz: an IANA name or UTC; a bad name or a fixed offset keeps the default", ()
   assert.ok("tz" in P.DEFAULTS);
   P.applyConfig(null);
 });
-ok("the default zone is a valid IANA name the runtime accepts", () => {
-  assert.equal(typeof P.DEFAULTS.tz, "string");
-  assert.notEqual(P.DEFAULTS.tz, "UTC");
+ok("the default zone is UTC, a valid name the runtime accepts", () => {
+  assert.equal(P.DEFAULTS.tz, "UTC");
   assert.equal(P.tzOk(P.DEFAULTS.tz), true);
   assert.equal(P.normTz(P.DEFAULTS.tz), P.DEFAULTS.tz);
   assert.doesNotThrow(() => new Intl.DateTimeFormat("en-US", { timeZone: P.DEFAULTS.tz }));

@@ -8,7 +8,7 @@ Read this only to build a board or to change or republish the page. `S`, `P1` to
 2. Publish it with `P1`. Record the URL.
 3. Read `references/data-model.md`, then write `.board/config.json`. Ask the operator for `link_hosts`, the
    hosts card links may point to (a card needs no link; a link it carries must point to one of them).
-   `tz` defaults to `Europe/Warsaw`; set `tz` in `.board/config.json` to change it. Private values that hold for all the operator's boards on this machine
+   `tz` defaults to `UTC`; set `tz` in `.board/config.json` to change it. Private values that hold for all the operator's boards on this machine
    (`tz`, `week_start`, `link_hosts`, `tags`, `checks`, `people`) go in the user file instead, outside every repository: its path is on the
    `config layers:` line of `check` (data-model.md, "The config"). Ask which quick controls they want on the
    cards (`controls` in `references/data-model.md`); all are off by default.

@@ -57,6 +57,7 @@ const batch = (id, created, answers, x) => Object.assign({ id, created, itemIds:
 const BB = "b20260103T000000+0000-bbbb";
 // The page pure part, for its defaults (a test never names the default zone).
 const P = createRequire(import.meta.url)("./_page.js").load();
+process.env.BOARD_TEST = "1"; // BOARD_NOW counts only with this
 process.env.BOARD_NOW = "2026-02-01T12:00:00Z";
 process.env.BOARD_USER_CONFIG = "";
 // The fields that every open card needs: a valid link (the fixture config lists example.com), the first ask, and
@@ -2310,6 +2311,23 @@ ok("waiting --count: the script keeps the poll count, removes the dump, and name
   assert.equal(r.code, 1);
   assert.ok(r.lines[0].startsWith("waiting: ") && r.lines[0].endsWith('is not a watch file. Report "watch file missing, run node S watch" and stop'), r.text);
   assert.deepEqual(wait(b).lines, [BB], "the form without --count is unchanged");
+});
+ok("wait.sh: called by a relative path it prints the absolute path", () => {
+  const waitSh = path.join(SKILL, "assets", "wait.sh"), env = Object.assign({}, process.env, { BOARD_WAIT_CAP: "1" });
+  const r = spawnSync("bash", [path.relative(path.dirname(SKILL), waitSh), "2"], { cwd: path.dirname(SKILL), env, encoding: "utf8" });
+  assert.equal(r.stdout, `wait paused: run bash '${waitSh}' 1 again\n`, r.stderr);
+});
+ok("BOARD_NOW counts only with BOARD_TEST=1", () => {
+  const b = wakeBoard({ mode: "poll" }), was = process.env.BOARD_TEST;
+  try {
+    process.env.BOARD_NOW = "not a time";
+    process.env.BOARD_TEST = "1";
+    assert.ok(cmd(b, "watch").text.includes("BOARD_NOW: not a time"), "with BOARD_TEST=1 the variable is read");
+    delete process.env.BOARD_TEST;
+    const r = cmd(b, "watch");
+    assert.ok(!r.text.includes("BOARD_NOW"), "without it the variable is ignored: " + r.text);
+    assert.equal(r.code, 0, r.text);
+  } finally { process.env.BOARD_NOW = "2026-02-01T12:00:00Z"; process.env.BOARD_TEST = was; }
 });
 ok("wait.sh: over the cap it pauses and names the whole command", () => {
   const waitSh = path.join(SKILL, "assets", "wait.sh"), env = (cap) => ({ env: Object.assign({}, process.env, { BOARD_WAIT_CAP: cap }), encoding: "utf8" });

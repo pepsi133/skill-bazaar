@@ -22,3 +22,6 @@ Loop:
 ```
 
 On its report, the owning session does what the report says.
+
+At the poll limit `watch` starts no new window. Only when the operator asks to watch again, run `node S watch --restart`: it
+starts a new window and watcher, also inside a running window.

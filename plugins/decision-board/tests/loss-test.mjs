@@ -48,6 +48,7 @@ const ACKED = "b20260103T000000+0000-bbbb";
 // The note for an ack the board holds as handled whose cards are owed (no batch update stored).
 const cardsNote = (b, id = ACKED) => `note: the cards of ack ${id} are not on the board: node ${SELF} push batches/${id} --state ${JSON.stringify(b.state)}`;
 const ackNote = (b, id = ACKED) => `note: ack ${id} changed cards. If its batch call was refused or its reply lost: node ${SELF} push batches/${id} --state ${JSON.stringify(b.state)}; else do nothing`;
+process.env.BOARD_TEST = "1"; // BOARD_NOW counts only with this
 process.env.BOARD_NOW = "2026-02-01T12:00:00Z";
 process.env.BOARD_USER_CONFIG = "";
 

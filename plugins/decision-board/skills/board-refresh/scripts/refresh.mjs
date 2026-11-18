@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SELF = path.relative(process.cwd(), fileURLToPath(import.meta.url)) || "refresh.mjs";
-const DEFAULT_TZ = "Europe/Warsaw"; // the same as DEFAULTS.tz in board.html; refresh-test checks that they agree
+const DEFAULT_TZ = "UTC"; // the same as DEFAULTS.tz in board.html; refresh-test checks that they agree
 const USAGE = `Usage: node ${SELF} <command> ...
   map <rows.json> --map <map.json> --source <name> --out <cards.json> [--overrides <file>] [--config <.board/config.merged.json>]
       [--details <file>] [--min-rows <n>] [--allow-skipped]
@@ -125,7 +125,7 @@ function createdDate(v, tz) {
   return m ? m[1] : null;
 }
 // The day after today in the zone: a calendar add, not 24 hours.
-const tomorrow = (tz) => { const ms = process.env.BOARD_NOW ? Date.parse(process.env.BOARD_NOW) : Date.now(); const [y, m, d] = dayIn(ms, tz).split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d + 1)); return t.getUTCFullYear() + "-" + String(t.getUTCMonth() + 1).padStart(2, "0") + "-" + String(t.getUTCDate()).padStart(2, "0"); };
+const tomorrow = (tz) => { const ms = process.env.BOARD_TEST === "1" && process.env.BOARD_NOW ? Date.parse(process.env.BOARD_NOW) : Date.now(); const [y, m, d] = dayIn(ms, tz).split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d + 1)); return t.getUTCFullYear() + "-" + String(t.getUTCMonth() + 1).padStart(2, "0") + "-" + String(t.getUTCDate()).padStart(2, "0"); };
 
 function checkMap(m, file) {
   if (!isObj(m)) fail(file + ": not a JSON object");
@@ -309,6 +309,7 @@ function cmdXref(a, log) {
 const COMMANDS = { map: cmdMap, xref: cmdXref };
 export function run(argv, log = console.log) {
   try {
+    if (argv.includes("--help") || argv.includes("-h")) { log(USAGE); return 0; }
     const a = parseArgs(argv), cmd = COMMANDS[a._[0]];
     if (!cmd) { log(USAGE); return 2; }
     cmd(a, log);

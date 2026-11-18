@@ -21,6 +21,7 @@ let k = 0;
 const put = (name, v) => { const f = path.join(tmp, ++k + "-" + name); fs.writeFileSync(f, JSON.stringify(v)); return f; };
 const read = (f) => JSON.parse(fs.readFileSync(f, "utf8"));
 function sh(fn, ...argv) { const lines = []; const code = fn(argv, (l) => lines.push(...String(l).split("\n"))); return { code, lines, text: lines.join("\n") }; }
+process.env.BOARD_TEST = "1"; // BOARD_NOW counts only with this
 process.env.BOARD_NOW = "2026-02-01T12:00:00Z";
 process.env.BOARD_USER_CONFIG = "";
 const URL1 = "https://tracker.example.com/infra/-/issues/";
@@ -248,6 +249,13 @@ ok("map: created and due read Z, +hh:mm, +hhmm and +hh, with or without a space 
   const M2 = Object.assign({}, MAP, { due: "due_on" });
   assert.equal(one({ due_on: "2026-03-05T03:30:00+0500" }, M2, "--config", warsaw).cards[0].due, "2026-03-04");
   assert.equal(one({ due_on: "2026-03-05T03:30:00 +05" }, M2, "--config", warsaw).cards[0].due, "2026-03-04");
+});
+ok("--help and -h print the usage and exit 0, also after a command", () => {
+  for (const argv of [["--help"], ["-h"], ["map", "--help"], ["xref", "-h"]]) {
+    const r = sh(run, ...argv);
+    assert.deepEqual([r.code, r.lines[0].startsWith("Usage: node ")], [0, true], argv.join(" "));
+  }
+  assert.equal(sh(run).code, 2, "no command: the usage and 2");
 });
 ok("refresh's default zone is the page's", () => {
   const m = /const DEFAULT_TZ = "([^"]+)"/.exec(fs.readFileSync(REFRESH, "utf8"));
