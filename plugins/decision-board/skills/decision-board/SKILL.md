@@ -102,7 +102,7 @@ Claude Code with the claude.ai `Artifact` and `ArtifactData` tools. Load `Artifa
 
 - `P1`, publish: before the call, load the built-in skill `artifact-capabilities` once in the session; it is
   the authority on the syntax of the `capabilities` block and its access rules. Then `Artifact` with
-  `file_path` the absolute path of `.board/board.html`, `icon: "checklist"`, a one-sentence `description`,
+  `file_path` the absolute path of `.board/board.html`, `title` the title `node S page` printed, `icon: "checklist"`, a one-sentence `description`,
   and `capabilities` from `references/data-model.md`, "Access rules". Keep the artifact private (the
   default). Only `P1` loads that skill: the daily steps (sync, read, ack, watch) use `ArtifactData` alone
   and never load it.

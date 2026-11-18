@@ -2943,4 +2943,18 @@ ok("the path mend: a copied board folder names its own files and the original ke
   assert.equal(inDir(b.dir, () => writesOf(sh("push", "cards").lines).flat()[0].file_path), orig);
   assert.equal(inDir(copy, () => writesOf(sh("push", "cards").lines).flat()[0].file_path), c, "a path inside this out folder stays");
 });
+ok("page: the published page is titled <board title> [DB]; no title or the generic one is refused", () => {
+  const b = fresh(), out = path.join(b.board, "board.html");
+  cfgOf(b, (c) => { delete c.title; });
+  let r = cmd(b, "page");
+  assert.equal(r.code, 1); assert.match(r.text, /^page: set a title of this board/); assert.equal(fs.existsSync(out), false);
+  for (const t of ["Decision Board", " decision  board "]) { cfgOf(b, (c) => { c.title = t; }); assert.equal(cmd(b, "page").code, 1, t); }
+  cfgOf(b, (c) => { c.title = "Lab <net> & co"; });
+  r = cmd(b, "page");
+  assert.equal(r.code, 0, r.text);
+  assert.ok(r.text.includes('title "Lab <net> & co [DB]"'), r.text);
+  const html = fs.readFileSync(out, "utf8");
+  assert.ok(html.startsWith("<title>Lab &lt;net&gt; &amp; co [DB]</title>\n"));
+  assert.equal(html.slice(html.indexOf("\n")), fs.readFileSync(path.join(SKILL, "assets", "board.html"), "utf8").slice(fs.readFileSync(path.join(SKILL, "assets", "board.html"), "utf8").indexOf("\n")));
+});
 fs.rmSync(tmp, { recursive: true, force: true });

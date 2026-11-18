@@ -13,8 +13,8 @@ their order, the priorities and the tags. Cards due today show in a strip at the
 
 1. Install the skill: `claude plugin install decision-board@skill-bazaar`.
 2. Ask the agent to build a decision board. It follows `skills/decision-board/SKILL.md`: it
-   publishes `skills/decision-board/assets/board.html` as a private artifact with access rules, and writes the config:
-   the hosts that card links may point to, and the tabs if you want more than All. Private settings that
+   writes the config (a title of its own is required), and publishes the page as a private artifact titled `<title> [DB]`
+   with access rules. The config also holds the hosts that card links may point to, and the tabs if you want more than All. Private settings that
    hold for all your boards on one machine (time zone, hosts, tags) live in a user file outside any
    repository, `~/.config/decision-board/config.json` (see `references/data-model.md`).
 3. Open the artifact link in a signed-in claude.ai session, on any device.

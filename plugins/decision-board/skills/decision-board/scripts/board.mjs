@@ -24,6 +24,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WAIT_SH = path.resolve(HERE, "..", "assets", "wait.sh");
 const SELF = shq(path.relative(process.cwd(), fileURLToPath(import.meta.url)) || "board.mjs");
 const USAGE = `Usage: node ${SELF} <command> ... [--state <file>]
+  page                                      write .board/board.html from the asset, titled "<config title> [DB]"; refuses a missing or generic title
   check [--url <link>]                      merge the config layers, check them and the state; print the meta/config write when it changed; --url stores the artifact link for watch
   sync <file> [--source <s>] [<file> [--source <s>]]... [--allow-close]   add and change cards; a --source closes that source's cards its file no longer holds
   close <id>...                             close cards
@@ -91,6 +92,7 @@ export const FLAGS = {
   purge: ["state", "dump", "ids", "closed-before"],
   adopt: ["state", "dump", "dumped"],
   push: ["state"],
+  page: ["state"],
   status: ["state", "now", "next", "waiting", "idle"],
   watch: ["state", "restart"],
 };
@@ -1531,6 +1533,21 @@ function cmdPush(a, log) {
   r.finish(log);
 }
 
+// ---- page: the page to publish, titled with the board's own title.
+const TITLE_SUFFIX = " [DB]";
+function cmdPage(a, log) {
+  const r = new Run(a); r.needConfig();
+  const t = String(r.config && isPlain(r.config) && typeof r.config.title === "string" ? r.config.title : "").replace(/\s+/g, " ").trim();
+  if (!t || /^decision board$/i.test(t)) fail(`page: set a title of this board in ${rel(r.configFile)} (not empty, not "Decision Board"), then run page again`);
+  const full = t + TITLE_SUFFIX, esc = full.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const src = fs.readFileSync(path.join(HERE, "..", "assets", "board.html"), "utf8");
+  if (!/^<title>[^<]*<\/title>/.test(src)) fail("page: assets/board.html has no title on its first line");
+  const out = path.join(r.dir, "board.html");
+  fs.mkdirSync(r.dir, { recursive: true });
+  fs.writeFileSync(out, src.replace(/^<title>[^<]*<\/title>/, "<title>" + esc + "</title>"));
+  log(`page: ${shownPath(rel(out))} titled ${q(full)}. Publish it with P1 and title ${q(full)}`);
+}
+
 // ---- check: the config layers and the state, locally. Prints the meta/config write when the merged page keys changed.
 // The first folder from the folder of file up to the root that holds a .git entry, else "".
 function inGitTree(file) {
@@ -1844,7 +1861,7 @@ function cmdWatch(a, log) {
 
 // Both default folders hold a state file and no --state was given: .board is read, board is not.
 const oldBoard = (a) => !a.state && fs.existsSync(path.join(BOARD_DIR, "state.json")) && fs.existsSync(path.join("board", "state.json"));
-export const COMMANDS = { check: cmdCheck, sync: cmdSync, close: cmdClose, read: cmdRead, waiting: cmdWaiting, ack: cmdAck, status: cmdStatus, watch: cmdWatch, guide: cmdGuide, purge: cmdPurge, adopt: cmdAdopt, push: cmdPush };
+export const COMMANDS = { check: cmdCheck, sync: cmdSync, close: cmdClose, read: cmdRead, waiting: cmdWaiting, ack: cmdAck, status: cmdStatus, watch: cmdWatch, guide: cmdGuide, purge: cmdPurge, adopt: cmdAdopt, push: cmdPush, page: cmdPage };
 export function run(argv, log = console.log) {
   const a = parseArgs(argv), cmd = COMMANDS[a._[0]];
   if (!cmd) { log(USAGE); return 2; }

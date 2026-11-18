@@ -34,7 +34,7 @@ people) in the user file, outside every repository. Each layer is optional, but 
 
 | Field | Value | Default |
 |---|---|---|
-| `title` | The header and the browser tab title | "Decision board" |
+| `title` | The header and the browser tab title; the artifact title is `<title> [DB]`. Required: `page` refuses none and "Decision Board" | none |
 | `tz` | The operator's time zone: an IANA name such as `Europe/Warsaw`, or `UTC`. Every time the script and the page write carries its offset; the page and `read` show times in it, and the page footer names it | `UTC` |
 | `agent` | The name on the Send button and in the note box | `Claude` |
 | `tabs` | A list of `{id, label, match, rest}` | the All tab only |

@@ -1768,7 +1768,7 @@ button.undo { flex: none; min-height: 44px; min-width: 88px; padding: 6px 16px; 
     $("wake").hidden = !(wakeOutcome === "gesture" || wakeOutcome === "consent_required" || wakeOutcome === "rate_limited" || wakeOutcome === "not_ready" || wakeOutcome === "not_ready_sent");
     $("wakestate").textContent = wakeOutcome ? wakeNotice(cfg.wake, wakeOutcome) : "";
     $("ttl").textContent = boardTitle(meta);
-    document.title = boardTitle(meta);
+    document.title = boardTitle(meta) + " [DB]";
     $("newnote").placeholder = "A message to " + cfg.agent + " that is not tied to an item. It goes out with the next batch.";
     renderNotes();
     renderSync();
