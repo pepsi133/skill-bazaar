@@ -580,7 +580,9 @@ know that it exists. The `/bobby-statusline:install` command does not run it eit
 - **It shows the proxy.** When the environment sets a proxy for the host, the connection
   goes to the proxy first. The script prints the host and the port of the proxy and the
   name of the variable before the first question, or `proxy : none`. A user name or a
-  password inside that variable goes to the proxy. The script does not print them.
+  password inside that variable goes to the proxy. The script does not print them. The
+  script decides one time, and the download uses what it printed. An entry in `no_proxy`
+  that names the host counts with or without the port.
 - **It shows another certificate store.** When `SSL_CERT_FILE` or `SSL_CERT_DIR` is set,
   the certificates come from there, and the script prints that path before the first
   question. `SSLKEYLOGFILE` has no effect: no key log is written.
@@ -815,7 +817,7 @@ cd plugins/bobby-statusline && python3 -m unittest discover -s tests -p 'test_*.
 python3 bin/bobby-statusline.py --selftest
 ```
 
-367 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
+369 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
 oversize, escape bytes, whitelist), the billing modes, the color thresholds, both layouts,
 the configuration layers, the prompt cache states and colors, the pause state, the
 `limit-guard` bridge including an old gate and a raising gate, the slash command's contract,

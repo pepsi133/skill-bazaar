@@ -170,17 +170,31 @@ def checked_url(source: str) -> tuple:
     return source, host, port
 
 
-def proxy_note(host: str, port: int) -> str:
-    """The proxy that the download to this host goes through, for the banner.
+def proxy_for(host: str, port: int):
+    """The proxy for a download from this host, or None. Decided here, one time.
 
-    The library takes it from the environment (and from the system settings
-    where the platform has them). Its host and port are shown, and where it
-    comes from. A user name or a password in it is not shown.
+    The library takes the proxy from the environment (and from the system
+    settings where the platform has them). The banner prints what this
+    function returns, and the download gets exactly that, so the library does
+    not decide a second time with the address in another written form. A
+    no-proxy entry that names the host counts with or without the port.
     """
     import urllib.request
 
     proxy = urllib.request.getproxies().get(SCHEME)
-    if not proxy or urllib.request.proxy_bypass("%s:%d" % (host, port)):
+    if not proxy:
+        return None
+    if urllib.request.proxy_bypass(host) or urllib.request.proxy_bypass("%s:%d" % (host, port)):
+        return None
+    return proxy
+
+
+def proxy_note(proxy) -> str:
+    """The proxy line of the banner: host and port, and where it comes from.
+
+    A user name or a password in it is not shown.
+    """
+    if not proxy:
         return "none"
     try:
         parts = urlsplit("//" + proxy.split("//", 1)[-1])
@@ -314,11 +328,13 @@ def tls_context():
     return context
 
 
-def download(url: str, context=None) -> bytes:
+def download(url: str, context=None, proxy=None) -> bytes:
     """One GET request for each address. The body, at most SIZE_CAP bytes, or Refused.
 
-    `context` is an ssl context for a test against a local listener. The
-    command line never sets it.
+    `proxy` is what proxy_for() returned and the banner showed: the request
+    goes through it, or through no proxy at all when it is None. The library
+    is not left to look at the environment again. `context` is an ssl context
+    for a test against a local listener. The command line never sets it.
     """
     import http.client
     import time
@@ -329,7 +345,11 @@ def download(url: str, context=None) -> bytes:
     deadline = time.monotonic() + TOTAL_S
     stop = watchdog(TOTAL_S)  # before the name lookup
     try:
-        handlers = [redirect_handler(url), urllib.request.HTTPSHandler(context=context or tls_context())]
+        handlers = [
+            redirect_handler(url),
+            urllib.request.HTTPSHandler(context=context or tls_context()),
+            urllib.request.ProxyHandler({SCHEME: proxy} if proxy else {}),
+        ]
         opener = urllib.request.build_opener(*handlers)
         opener.addheaders = [("User-Agent", USER_AGENT), ("Accept", ACCEPT)]
         chunks, size = [], 0
@@ -647,6 +667,7 @@ def run(argv: list, ask, out, discard=None) -> int:
 
     if is_url(source):
         url, host, port = checked_url(source)
+        proxy = proxy_for(host, port)
         trust = trust_note()
         out.write(
             "Download a price list.\n"
@@ -660,14 +681,14 @@ def run(argv: list, ask, out, discard=None) -> int:
             "            or a session.\n"
             "  limits  : TLS only, at most %d redirects and only to this host and port,\n"
             "            %d s for the whole download with the name lookup, %d MB.\n"
-            % (clean(url), clean(host), port, proxy_note(host, port),
+            % (clean(url), clean(host), port, proxy_note(proxy),
                "  trust   : certificate store %s\n" % trust if trust else "",
                USER_AGENT, ACCEPT, REDIRECTS, TOTAL_S, SIZE_CAP >> 20)
         )
         if not confirmed(ask, "Download from %s:%d?" % (clean(host), port), discard):
             out.write("Nothing downloaded. Nothing written.\n")
             return 1
-        body = download(url)
+        body = download(url, proxy=proxy)
     else:
         body = read_local(source)
         out.write("Read %s (%d bytes). Nothing was downloaded.\n" % (clean(source), len(body)))

@@ -3560,8 +3560,9 @@ class TestPriceScript(Base):
             json.dump(self.LITELLM, fh)
         self.asked = []
         self.fetched = []
+        self.proxies = []
 
-        def no_download(url):
+        def no_download(url, proxy=None):
             self.fetched.append(url)
             raise AssertionError("a download was started")
 
@@ -3756,8 +3757,9 @@ class TestPriceScript(Base):
         with open(self.source, "rb") as fh:
             body = fh.read()
 
-        def download(url):
+        def download(url, proxy=None):
             self.fetched.append(url)
+            self.proxies.append(proxy)
             return body
 
         self.mod.download = download
@@ -3808,7 +3810,7 @@ class TestPriceScript(Base):
             local,
             {"download": {"http.client", "time", "urllib.error", "urllib.request"},
              "redirect_handler": {"urllib.error", "urllib.request"},
-             "proxy_note": {"urllib.request"},
+             "proxy_for": {"urllib.request"},
              "tls_context": {"ssl"},
              "watchdog": {"threading"},
              "typed_ahead_guard": {"termios"}},
@@ -4254,6 +4256,39 @@ class TestPriceScript(Base):
         self.assertIn("  proxy   : proxy.example:8080, from HTTPS_PROXY.", text)
         self.assertEqual(self.fetched, [])
 
+    def test_download_gets_the_proxy_that_the_banner_shows(self):
+        """The proxy is decided one time. A no-proxy entry counts with or without the port."""
+        for key in list(os.environ):
+            if key.lower().endswith("_proxy"):
+                del os.environ[key]
+        self.fake_download()
+        proxy = "http://puser:psecret@192.0.2.10:3128"
+        os.environ["https_proxy"] = proxy
+        cases = (
+            # the address, the no-proxy entry, the proxy that applies
+            ("https://prices.example/list.json", "prices.example:443", None),
+            ("https://prices.example/list.json", "prices.example", None),
+            ("https://prices.example:443/list.json", "prices.example", None),
+            ("https://prices.example:443/list.json", "prices.example:443", None),
+            ("https://prices.example:8443/list.json", "prices.example:8443", None),
+            ("https://prices.example/list.json", ".example", None),
+            ("https://prices.example/list.json", "*", None),
+            ("https://prices.example:8443/list.json", "prices.example:443", proxy),
+            ("https://prices.example/list.json", "other.example", proxy),
+            ("https://prices.example/list.json", "", proxy),
+        )
+        for address, entry, want in cases:
+            with self.subTest(address=address, no_proxy=entry):
+                os.environ["no_proxy"] = entry
+                self.proxies.clear()
+                code, text = self.run_main("--from", address, answers=["y", "n"])
+                self.assertEqual(self.proxies, [want])
+                if want:
+                    self.assertIn("  proxy   : 192.0.2.10:3128, from https_proxy.", text)
+                else:
+                    self.assertIn("  proxy   : none\n", text)
+                self.assertNotIn("psecret", text)
+
     def test_banner_names_a_certificate_store_from_the_environment(self):
         os.environ.pop("SSL_CERT_FILE", None)
         os.environ.pop("SSL_CERT_DIR", None)
@@ -4375,7 +4410,7 @@ class TestPriceScript(Base):
         self.assertEqual(sorted(os.listdir(self.config)), ["bobby-statusline.json", "list.json"])
 
     def test_interrupt_during_the_download_gives_no_traceback(self):
-        def interrupted(url):
+        def interrupted(url, proxy=None):
             raise KeyboardInterrupt()
 
         self.mod.download = interrupted
@@ -4756,7 +4791,7 @@ class TestPriceDownload(Base):
         "if sys.argv[4] == 'lookup':\n"
         "    socket.getaddrinfo = lambda *a, **k: time.sleep(25)\n"
         "real = mod.download\n"
-        "mod.download = lambda url: real(url, context=ssl.create_default_context(cafile=sys.argv[3]))\n"
+        "mod.download = lambda url, proxy=None: real(url, context=ssl.create_default_context(cafile=sys.argv[3]))\n"
         "sys.exit(mod.main(['prices', '--from', sys.argv[2]], ask=lambda q: 'y', tty=lambda: True))\n"
     )
 
@@ -4784,6 +4819,61 @@ class TestPriceDownload(Base):
                 self.assertFalse(os.path.exists(config_file))
                 if case == "lookup":
                     self.assertEqual(self.listener.connections, before)
+
+    def test_proxy_gets_a_connection_only_when_the_banner_names_it(self):
+        """A listener stands in as the proxy. The address has no port, and the no-proxy entry has one."""
+        import socket
+        import threading
+
+        stand_in = socket.socket()
+        stand_in.bind(("127.0.0.1", 0))
+        stand_in.listen(8)
+        self.addCleanup(stand_in.close)
+        got = []
+
+        def serve():
+            while True:
+                try:
+                    conn, _ = stand_in.accept()
+                except OSError:
+                    return
+                conn.settimeout(5)
+                try:
+                    got.append(conn.recv(4096))
+                except OSError:
+                    got.append(b"")
+                conn.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+        lookup = socket.getaddrinfo
+
+        def no_outside_lookup(host, *args, **kwargs):
+            if host == "prices.invalid":
+                raise socket.gaierror(-2, "Name or service not known")
+            return lookup(host, *args, **kwargs)
+
+        socket.getaddrinfo = no_outside_lookup
+        self.addCleanup(setattr, socket, "getaddrinfo", lookup)
+        os.environ["https_proxy"] = "http://puser:psecret@127.0.0.1:%d" % stand_in.getsockname()[1]
+        for entry, named in (("prices.invalid:443", False), ("prices.invalid", False), ("other.invalid", True)):
+            with self.subTest(no_proxy=entry):
+                os.environ["no_proxy"] = entry
+                del got[:]
+                out = io.StringIO()
+                code = self.mod.main(
+                    ["prices", "--from", "https://prices.invalid/list.json"], ask=lambda q: "y", tty=lambda: True, out=out
+                )
+                text = out.getvalue()
+                self.assertEqual(code, 1)
+                self.assertIn("download failed", text)
+                if named:
+                    self.assertIn("  proxy   : 127.0.0.1:%d, from https_proxy." % stand_in.getsockname()[1], text)
+                    self.assertEqual(len(got), 1)
+                    self.assertTrue(got[0].startswith(b"CONNECT prices.invalid:443 "))
+                else:
+                    self.assertIn("  proxy   : none\n", text)
+                    self.assertEqual(got, [], "the banner said none and the proxy got a connection")
+                self.assertNotIn("psecret", text)
 
     def test_body_that_stops_before_its_stated_length_is_refused(self):
         self.assertIn("stopped early", self.refused("/cut-off"))
@@ -4834,7 +4924,7 @@ class TestPriceDownload(Base):
         """The server chooses the text after the status code."""
         self.assertIn("\x1b[2J", self.refused("/reason"))  # the raw text does hold the sequence
         real = self.mod.download
-        self.mod.download = lambda url: real(url, context=self.listener.client_side)
+        self.mod.download = lambda url, proxy=None: real(url, context=self.listener.client_side, proxy=proxy)
         out = io.StringIO()
         code = self.mod.main(
             ["prices", "--from", self.listener.url("/reason")], ask=lambda q: "y", tty=lambda: True, out=out
@@ -4848,7 +4938,7 @@ class TestPriceDownload(Base):
 
     def test_whole_run_from_the_listener_writes_after_two_yes(self):
         real = self.mod.download
-        self.mod.download = lambda url: real(url, context=self.listener.client_side)
+        self.mod.download = lambda url, proxy=None: real(url, context=self.listener.client_side, proxy=proxy)
         asked, out = [], io.StringIO()
 
         def ask(question):
