@@ -2249,6 +2249,13 @@ ok("watch: at the poll limit it ends the window once and starts none; only watch
     });
   }
 });
+ok("watch --restart before any poll warns that the first status write may not have been passed; a plain first watch does not", () => {
+  const b = wakeBoard({ mode: "poll" }), note = (r) => r.lines.filter((l) => l.startsWith("note: meta/status"));
+  assert.deepEqual(note(atNow("2026-02-01T12:00:00Z", () => cmd(b, "watch"))), []);
+  const r = atNow("2026-02-01T12:10:00Z", () => cmd(b, "watch", "--restart"));
+  assert.equal(note(r).length, 1, r.text);
+  assert.ok(r.text.includes('"if_version":1'), "the restart pins to the stored next version, which the note questions");
+});
 ok("watch --restart: before until at the limit it starts one; inside a running window it starts a new one with a new id and poll 0", () => {
   let b = pollStarted();
   setWatch(b, { poll: 24 });
@@ -2989,6 +2996,32 @@ ok("wait.sh: the default cap keeps one call under the harness background limit",
   assert.match(fs.readFileSync(path.join(SKILL, "assets", "wait.sh"), "utf8"), /BOARD_WAIT_CAP:-150/);
   assert.ok(fs.readFileSync(path.join(SKILL, "references", "watch.md"), "utf8").includes("Bash timeout of 170000 ms"));
 });
+ok("close --result stores one text on each named card and writes it; an empty text is refused", () => {
+  const b = fresh();
+  apply(b, sync(b, [yn("a"), yn("b")]));
+  assert.equal(cmd(b, "close", "a", "--result").code, 1);
+  const r = cmd(b, "close", "a", "b", "--result", "moved", "to", "ticket $X");
+  assert.equal(r.code, 0, r.text);
+  assert.equal(r.lines[0], 'close: 2 cards closed, result "moved to ticket X" stored on 2');
+  apply(b, r);
+  assert.deepEqual(["a", "b"].map((id) => [card(b, id).status, card(b, id).result, card(b, id).result_at]), [["closed", "moved to ticket X", "2026-02-01T12:00:00+00:00"], ["closed", "moved to ticket X", "2026-02-01T12:00:00+00:00"]]);
+  assert.equal(doc(b, "cards", "main").data.cards.find((c) => c.id === "a").result, "moved to ticket X");
+  const again = cmd(b, "close", "a", "--result", "later");
+  assert.equal(again.lines[0], 'close: 0 cards closed, result "later" stored on 1', "an already closed card still takes the result");
+});
+ok("page: a [DB] suffix is stripped in any case, and the generic title is refused in any case", () => {
+  const b = fresh(false);
+  cfgOf(b, (c) => { c.title = "Mine [db]"; });
+  const r = cmd(b, "page");
+  assert.ok(r.text.includes('titled "Mine [DB]"'), r.text);
+  assert.ok(fs.readFileSync(path.join(SKILL, "assets", "board.html"), "utf8").includes('replace(/\\s*\\[DB\\]\\s*$/i, "")'), "the page script strips case-insensitively");
+});
+ok("wait.sh: the default cap is 150 seconds; a wait of 0 ends at once", () => {
+  const waitSh = path.join(SKILL, "assets", "wait.sh"), env = Object.assign({}, process.env);
+  delete env.BOARD_WAIT_CAP;
+  assert.equal(spawnSync("bash", [waitSh, "0"], { env, encoding: "utf8" }).stdout, "wait ended\n");
+  assert.ok(/BOARD_WAIT_CAP:-150\}/.test(fs.readFileSync(waitSh, "utf8")), "the default cap");
+});
 ok("page: titles are inserted literally, a trailing [DB] is not doubled, and a fresh folder needs no state", () => {
   const b = fresh(false), out = path.join(b.board, "board.html"), page = fs.readFileSync(path.join(SKILL, "assets", "board.html"), "utf8");
   const title = (t) => { cfgOf(b, (c) => { c.title = t; }); return cmd(b, "page"); };
@@ -3002,8 +3035,8 @@ ok("page: titles are inserted literally, a trailing [DB] is not doubled, and a f
   assert.equal(r.code, 0, r.text);
   assert.ok(fs.readFileSync(out, "utf8").startsWith("<title>Q \"x\" &lt;b&gt; &amp; &lt;/script&gt; [DB]</title>\n"));
   assert.equal(fs.readFileSync(out, "utf8").split("</script>").length, page.split("</script>").length, "no script tag is added");
-  for (const t of ["Decision Board [DB]", "  [DB] ", "   "]) assert.equal(title(t).code, 1, t);
-  assert.ok(page.includes('boardTitle(meta).replace(/\\s*\\[DB\\]\\s*$/, "") + " [DB]"'), "the page script strips one [DB] too");
+  for (const t of ["Decision Board [DB]", "decision board [db]", "  [db] ", "   "]) assert.equal(title(t).code, 1, t);
+  assert.ok(page.includes('boardTitle(meta).replace(/\\s*\\[DB\\]\\s*$/i, "") + " [DB]"'), "the page script strips one [DB] too");
 });
 ok("watch: a second call before the first poll prints the unpassed status write again", () => {
   const b = pollStarted(), first = writesOf(cmd(b, "push", "meta/status").lines).flat();

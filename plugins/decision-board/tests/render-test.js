@@ -500,7 +500,10 @@ aok("wake: Send posts exactly WAKE_TEXT on a new thread, saves the thread to met
   x.W.wakeDoc = x.W.coerce("wake", mw[0][1]);
   assert.equal(await x.W.wakeAgent(x.W.wakeAnchor()), "sent");
   assert.deepEqual(JSON.parse(JSON.stringify(x.comments.sent[1])), { threadId: "th-1", text: WAKE });
-  assert.equal(x.writes.filter(([p]) => p === "meta/wake").length, 1, "the same thread is not written again");
+  const mw2 = x.writes.filter(([p]) => p === "meta/wake");
+  assert.equal(mw2.length, 2, "every wake records its time");
+  assert.deepEqual([mw2[1][1].thread, mw2[1][1].mode, mw2[1][1].updated, typeof mw2[1][1].last], ["th-1", "both", mw[0][1].updated, "string"], "the same thread keeps its creation time; mode and last are recorded");
+  assert.equal(mw[0][1].mode, "both");
   const y = wakeBox({ comments: stubComments({ thread: "th-2", reject: (t) => (t.threadId ? { code: "not_found" } : null) }) });
   answered(y);
   y.W.wakeDoc = y.W.coerce("wake", { thread: "gone", updated: "" });

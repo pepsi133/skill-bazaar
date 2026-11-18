@@ -27,7 +27,7 @@ const USAGE = `Usage: node ${SELF} <command> ... [--state <file>]
   page                                      write .board/board.html from the asset, titled "<config title> [DB]"; refuses a missing or generic title
   check [--url <link>]                      merge the config layers, check them and the state; print the meta/config write when it changed; --url stores the artifact link for watch
   sync <file> [--source <s>] [<file> [--source <s>]]... [--allow-close]   add and change cards; a --source closes that source's cards its file no longer holds
-  close <id>...                             close cards
+  close <id>... [--result <text>]           close cards; --result stores one text on each of them
   read --dump <dir> [--all] --dumped        the batches that wait (dump: batches with status "sent"); --dumped: the dump calls succeeded; --all also prints handled ones
   waiting (--dump <dir> | --count <watch file> --watcher <id>)   the ids of the batches that wait, or "none"; --count: the watcher's step, with the poll count and the dump folder of the watch file
   ack <batch id> [--close <id>...] [--result <id> <text>]... --dump <dir>   mark a batch handled, apply its controls, close cards, store result lines
@@ -84,7 +84,7 @@ const SWITCHES = ["archive", "delete", "allow-close", "all", "dumped", "idle", "
 export const FLAGS = {
   check: ["state", "url"],
   sync: ["state", "source", "allow-close"],
-  close: ["state"],
+  close: ["state", "result"],
   read: ["state", "dump", "all", "dumped"],
   waiting: ["dump", "count", "watcher"],
   ack: ["state", "dump", "close", "result"],
@@ -890,9 +890,13 @@ function cmdClose(a, log) {
   if (!ids.length) fail("close: name the card ids");
   plainCardIds(ids, "close");
   r.needCards(ids, "close");
+  // --result <text>: one text for every named card, stored as ack --result stores it (a closed card keeps showing it).
+  const res = has(a, "result") ? cleanText(words(a, "result"), S.max.result) : null;
+  if (res === "") fail("close --result: empty text");
   const k = r.closeCards(ids, t);
-  log(`close: ${k} cards closed`);
-  if (k) r.putCards();
+  if (res) for (const id of ids) { const c = r.card(id); c.result = res; c.result_at = t; c.updated = t; }
+  log(`close: ${k} cards closed` + (res ? `, result ${q(res)} stored on ${ids.length}` : ""));
+  if (k || res) r.putCards();
   r.ackNotes(log);
   r.finish(log);
 }
@@ -1541,7 +1545,7 @@ function cmdPush(a, log) {
 const TITLE_SUFFIX = " [DB]";
 function cmdPage(a, log) {
   const r = new Run(a, { create: true }); r.needConfig();
-  const t = String(r.config && isPlain(r.config) && typeof r.config.title === "string" ? r.config.title : "").replace(/\s+/g, " ").replace(/\s*\[DB\]\s*$/, "").trim();
+  const t = String(r.config && isPlain(r.config) && typeof r.config.title === "string" ? r.config.title : "").replace(/\s+/g, " ").replace(/\s*\[DB\]\s*$/i, "").trim();
   if (!t || /^decision board$/i.test(t)) fail(`page: set a title of this board in ${rel(r.configFile)} (not empty, not "Decision Board"), then run page again`);
   const full = t + TITLE_SUFFIX, esc = full.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const src = fs.readFileSync(path.join(HERE, "..", "assets", "board.html"), "utf8");
@@ -1862,10 +1866,13 @@ function cmdWatch(a, log) {
     writeWatch(wf, Object.assign({ dump, seconds: w.poll_seconds, limit: w.poll_limit, poll: 0, started: t, until, watcher: id }, a.state ? { state: r.file } : {}), "watch");
     // Only the window changes: now, next, waiting and updated stay as status stored them, so the page still sees how
     // old the task is. Before any status, updated is the empty stamp: the page reads it as no status yet.
-    const s = storedStatus(r); s.watch = { started: t, until }; putStatus(r, s);
+    const prev = r.st.pending["meta/status"], s = storedStatus(r); s.watch = { started: t, until }; putStatus(r, s);
     // stopped: waiting --count marked that no watcher of the window polls any more; plain watch says why it starts one.
     const why = cur && cur.stopped && !has(a, "restart") ? "the watcher of this window stopped; " : "";
     log(`wake ${w.mode}: ${why}start one watcher, every ${w.poll_seconds} s, at most ${w.poll_limit} polls, until ${until}. Pass the array to P3 first, then start P6 with the lines between "--- brief" and "--- end" below it as its prompt.`);
+    // A restart before any poll: the status write of the first watch may never have been passed, so its pin
+    // (version 1 after a create) may name a document the board does not hold.
+    if (cur && cur.poll === 0 && isPlain(prev)) log(`note: meta/status: the write of the earlier watch may not have been passed, and the board may not hold the document. If this array is refused, run its "if refused" line`);
     r.finish(log);
     log("--- brief"); log(briefText(r.st.url, dump, wf, id)); log("--- end");
     if (w.comment) log(COMMENTS_LINE);

@@ -370,7 +370,7 @@ button.undo { flex: none; min-height: 44px; min-width: 88px; padding: 6px 16px; 
     bkeep: { assign: "S", dismiss: "S", done: "S" },
     status: { now: "s", next: "l", waiting: "s", updated: "d", watch: "o:watch" },
     watch: { started: "d", until: "d" },
-    wake: { thread: "s", updated: "d" },
+    wake: { thread: "s", updated: "d", mode: "s", last: "d" },
     note: { id: "s", text: "t", item: "s", created: "d", sent: "b", batch: "s" },
     guide: { id: "s", kind: "s", title: "s", body: "g", sections: "a:section", status: "s", created: "d", updated: "d", item: "s" },
     section: { id: "s", title: "s", body: "g", updated: "d" },
@@ -1768,7 +1768,7 @@ button.undo { flex: none; min-height: 44px; min-width: 88px; padding: 6px 16px; 
     $("wake").hidden = !(wakeOutcome === "gesture" || wakeOutcome === "consent_required" || wakeOutcome === "rate_limited" || wakeOutcome === "not_ready" || wakeOutcome === "not_ready_sent");
     $("wakestate").textContent = wakeOutcome ? wakeNotice(cfg.wake, wakeOutcome) : "";
     $("ttl").textContent = boardTitle(meta);
-    document.title = boardTitle(meta).replace(/\s*\[DB\]\s*$/, "") + " [DB]";
+    document.title = boardTitle(meta).replace(/\s*\[DB\]\s*$/i, "") + " [DB]";
     $("newnote").placeholder = "A message to " + cfg.agent + " that is not tied to an item. It goes out with the next batch.";
     renderNotes();
     renderSync();
@@ -2179,8 +2179,9 @@ button.undo { flex: none; min-height: 44px; min-width: 88px; padding: 6px 16px; 
     return comments.canSendToClaude().then(function (v) {
       if (v !== "available") return v;
       var go = function (target) { return comments.sendToClaude(target).then(function (r) {
-          if (wakeDoc && wakeDoc.thread === r.threadId) return "sent";
-          return db.doc("meta/wake").set({ thread: r.threadId, updated: nowStamp() }).then(function () { return "sent"; }, function () { return "sent_unsaved"; });
+          // meta/wake keeps the thread, when it was made (updated), the wake mode and the time of the last wake sent (last): a missed wake can be read from it.
+          var t = nowStamp(), same = wakeDoc && wakeDoc.thread === r.threadId;
+          return db.doc("meta/wake").set({ thread: r.threadId, updated: same && wakeDoc.updated ? wakeDoc.updated : t, mode: cfg.wake.mode, last: t }).then(function () { return "sent"; }, function () { return "sent_unsaved"; });
         }); };
       var fresh = function () { return anchorP.then(function (an) { if (!an) throw { code: "unavailable" }; return go({ anchor: an, text: WAKE_TEXT }); }); };
       return (wakeDoc && wakeDoc.thread ? go({ threadId: wakeDoc.thread, text: WAKE_TEXT }).catch(function (e) { if (e && e.code === "not_found") return fresh(); throw e; }) : fresh());
