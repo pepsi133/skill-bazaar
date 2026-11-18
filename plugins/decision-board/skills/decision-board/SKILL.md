@@ -37,8 +37,8 @@ execution notes*. Read a reference only when a step names it.
 1. If you write a card file yourself, read `references/cards.md` first (once per session); a file from
    `refresh.mjs map` needs no read. Write the cards as a JSON list, one file per source, for example
    `.board/mail.json`.
-2. Run `node S sync .board/mail.json --source mail [.board/gh.json --source gh ...]`. `--source` only for a file that
-   mirrors a source (it closes that source's cards the file lacks); a hand-written file needs none.
+2. Run `node S sync .board/mail.json --source mail [.board/gh.json --source gh ...]`. Give `--source` only for a file that
+   mirrors a source, because it closes the cards of that source that the file no longer holds.
    Its line names the cards it closes (open cards missing from their source's file) and reopens. If it
    prints problems or a refusal, do what it says and rerun.
 3. Pass the array to `P3`, then run `node S watch` and do what it prints.

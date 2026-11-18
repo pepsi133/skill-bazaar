@@ -2201,7 +2201,6 @@ ok("watch: before the first poll a second call prints the same brief again and w
   assert.equal(r.code, 0, r.text);
   assert.ok(r.lines[0].includes("has not polled yet"), r.lines[0]);
   assert.ok(r.lines.some((l) => l.endsWith(`--watcher ${first.watcher}`)), r.text);
-  assert.equal(r.lines.at(-1), "no writes");
   assert.deepEqual(watchJson(b), first);
   assert.equal(fs.readFileSync(b.state, "utf8"), saved);
 });
@@ -2989,5 +2988,28 @@ ok("read: a batch whose lines are all skipped says there is nothing to act on", 
 ok("wait.sh: the default cap keeps one call under the harness background limit", () => {
   assert.match(fs.readFileSync(path.join(SKILL, "assets", "wait.sh"), "utf8"), /BOARD_WAIT_CAP:-150/);
   assert.ok(fs.readFileSync(path.join(SKILL, "references", "watch.md"), "utf8").includes("Bash timeout of 170000 ms"));
+});
+ok("page: titles are inserted literally, a trailing [DB] is not doubled, and a fresh folder needs no state", () => {
+  const b = fresh(false), out = path.join(b.board, "board.html"), page = fs.readFileSync(path.join(SKILL, "assets", "board.html"), "utf8");
+  const title = (t) => { cfgOf(b, (c) => { c.title = t; }); return cmd(b, "page"); };
+  let r = title("Mine $& and $' [DB]");
+  assert.equal(r.code, 0, r.text);
+  assert.equal(fs.existsSync(b.state), false, "page makes no state");
+  const html = fs.readFileSync(out, "utf8");
+  assert.ok(html.startsWith("<title>Mine $&amp; and $' [DB]</title>\n"), html.slice(0, 80));
+  assert.equal(html.slice(html.indexOf("\n")), page.slice(page.indexOf("\n")));
+  r = title("Q \"x\" <b> & </script> [DB]  ");
+  assert.equal(r.code, 0, r.text);
+  assert.ok(fs.readFileSync(out, "utf8").startsWith("<title>Q \"x\" &lt;b&gt; &amp; &lt;/script&gt; [DB]</title>\n"));
+  assert.equal(fs.readFileSync(out, "utf8").split("</script>").length, page.split("</script>").length, "no script tag is added");
+  for (const t of ["Decision Board [DB]", "  [DB] ", "   "]) assert.equal(title(t).code, 1, t);
+  assert.ok(page.includes('boardTitle(meta).replace(/\\s*\\[DB\\]\\s*$/, "") + " [DB]"'), "the page script strips one [DB] too");
+});
+ok("watch: a second call before the first poll prints the unpassed status write again", () => {
+  const b = pollStarted(), first = writesOf(cmd(b, "push", "meta/status").lines).flat();
+  const r = cmd(b, "watch");
+  assert.deepEqual(writesOf(r.lines).flat(), first);
+  assert.ok(r.lines.indexOf("--- brief") > r.lines.findIndex((l) => l.startsWith("batch 1 of 1")));
+  assert.ok(r.lines[0].includes("only if this session has not started a watcher"));
 });
 fs.rmSync(tmp, { recursive: true, force: true });

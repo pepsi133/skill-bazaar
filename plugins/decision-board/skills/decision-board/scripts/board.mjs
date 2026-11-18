@@ -1540,15 +1540,15 @@ function cmdPush(a, log) {
 // ---- page: the page to publish, titled with the board's own title.
 const TITLE_SUFFIX = " [DB]";
 function cmdPage(a, log) {
-  const r = new Run(a); r.needConfig();
-  const t = String(r.config && isPlain(r.config) && typeof r.config.title === "string" ? r.config.title : "").replace(/\s+/g, " ").trim();
+  const r = new Run(a, { create: true }); r.needConfig();
+  const t = String(r.config && isPlain(r.config) && typeof r.config.title === "string" ? r.config.title : "").replace(/\s+/g, " ").replace(/\s*\[DB\]\s*$/, "").trim();
   if (!t || /^decision board$/i.test(t)) fail(`page: set a title of this board in ${rel(r.configFile)} (not empty, not "Decision Board"), then run page again`);
   const full = t + TITLE_SUFFIX, esc = full.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const src = fs.readFileSync(path.join(HERE, "..", "assets", "board.html"), "utf8");
   if (!/^<title>[^<]*<\/title>/.test(src)) fail("page: assets/board.html has no title on its first line");
   const out = path.join(r.dir, "board.html");
   fs.mkdirSync(r.dir, { recursive: true });
-  fs.writeFileSync(out, src.replace(/^<title>[^<]*<\/title>/, "<title>" + esc + "</title>"));
+  fs.writeFileSync(out, src.replace(/^<title>[^<]*<\/title>/, () => "<title>" + esc + "</title>"));
   log(`page: ${shownPath(rel(out))} titled ${q(full)}. Publish it with P1 and title ${q(full)}`);
 }
 
@@ -1839,9 +1839,13 @@ function cmdWatch(a, log) {
     if (w.comment) log(COMMENTS_LINE);
   } else if (cur && cur.poll === 0 && cur.watcher && r.st.url && !cur.reported && !cur.stopped && P.stampMs(cur.until) > nowMs() && !has(a, "restart")) {
     // The window is recorded but no watcher has polled yet: the brief may have been lost. It is printed again; nothing is written.
-    log(`wake ${w.mode}: a watcher was set up until ${cur.until} and has not polled yet. If P6 was not started with this brief, start it now; else start none. Only when the operator asks to watch again: node ${SELF} watch --restart${stateArg(a)}`);
+    log(`wake ${w.mode}: a watcher was set up until ${cur.until} and has not polled yet. Pass the array to P3 only if you have not passed it; start P6 with the brief below only if this session has not started a watcher. Only when the operator asks to watch again: node ${SELF} watch --restart${stateArg(a)}`);
+    const pw = r.st.pending["meta/status"];
+    if (isPlain(pw)) r.rePut(pw, "meta/status");
+    r.finish(log);
     log("--- brief"); log(briefText(r.st.url, cur.dump, wf, cur.watcher)); log("--- end");
     if (w.comment) log(COMMENTS_LINE);
+    return;
   } else if (cur && cur.poll < cur.limit && !cur.reported && !cur.stopped && P.stampMs(cur.until) > nowMs() && !has(a, "restart")) {
     log(`wake ${w.mode}: a watcher runs until ${cur.until}; start none. Only when the operator asks to watch again: node ${SELF} watch --restart${stateArg(a)}`);
     if (w.comment) log(COMMENTS_LINE);
