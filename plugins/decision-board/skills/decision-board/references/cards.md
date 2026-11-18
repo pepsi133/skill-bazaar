@@ -3,7 +3,7 @@
 ## Fields
 
 A card file is a JSON list of cards. The script fills `rev`, `created` and
-`updated` (and `ack --result` fills `result` and `result_at`, for any card, also one of an earlier batch),
+`updated` (and `ack --result` fills `result` and `result_at`, for any card, also one of an earlier batch; `close <id>... --result "<text>"` fills them too, for a card that closes with no batch waiting),
 and refuses an unknown field.
 
 | Field | Value |

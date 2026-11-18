@@ -19,8 +19,8 @@ execution notes*. Read a reference only when a step names it.
 - A **dump** is `rm -rf .board/dump`, then the calls the step names (`P2` for a named collection); an empty
   collection leaves no folder. A dump **with versions** also appends each reply's document lines to
   `.board/dump/versions.txt`, exactly as the reply prints them (each line starts with `- "`). Only the steps
-  that say "with versions" need it.
-- **Refused write** or **lost reply**: under each array the script prints an `if refused:` line and an
+  that say "with versions" need it, and `adopt`.
+- **Refused write**, **lost reply** or an array you did not pass (the next write would pin wrongly): under each array the script prints an `if refused:` line and an
   `if the reply is lost:` line. Do what the line says and pass the array it prints. A "with versions" dump in it is the one defined above. If it prints
   `no writes`, there is nothing to pass.
 - **Times**: every time the script prints carries the offset of the config `tz`. Never compare times
@@ -57,7 +57,8 @@ you, run "Read and handle the answers" at once, whatever it says and whenever it
 
 When your task changes, run `node S status --now "<task>" --next "<a>" "<b>"` and pass the array; when you
 stop for the operator, `node S status --idle --waiting "<what>"`. Plain words, at most 60 characters, never
-starting with `--`.
+starting with `--`. Before a step that waits for a confirmation in the terminal, run
+`node S status --waiting "confirm in terminal: <step>"`.
 
 ## Read and handle the answers
 

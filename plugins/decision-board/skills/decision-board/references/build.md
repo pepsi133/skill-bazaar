@@ -24,6 +24,6 @@ Database text reaches the page only through `textContent`, `fmtText` or `sanitiz
 which the script reads.
 
 1. In a new session, read the artifact first: `Artifact` with `action: "read"` and `url: URL`.
-2. Run every test in `../../tests/`; all must pass.
+2. From the plugin root (`../..` from the skill folder) run `for t in tests/*-test.*; do node "$t" || break; done`; all must pass.
 3. Run `node S page`, then republish with `P1` and `url: URL`, without `icon`. `P1` passes the `capabilities` from
    `references/data-model.md`, which an upgrade from an older page needs.

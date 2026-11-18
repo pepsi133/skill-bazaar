@@ -108,4 +108,17 @@ The tests need only Node 18 or later, no packages. Each exits with 1 when a chec
 - `tests/refresh-test.mjs` tests the `board-refresh` skill and its output against `sync`.
 
 No test renders the page in a browser, and no test covers the real database or a real phone.
-Check the first use on a phone by eye.
+
+### Check by hand, once
+
+On a new board, with a phone and the terminal session side by side:
+
+1. Open the page on the phone. The title ends in `[DB]` and the cards show.
+2. Answer a card, add a note, press Send. Within a minute the session reads the batch (`wake.mode` `comment` or
+   `both`: a comment wakes it; `poll`: the watcher reports).
+3. Ask the agent to run `status --waiting "confirm in terminal: test"`. The strip on the phone shows
+   "Waiting for: confirm in terminal: test".
+4. Ask the agent to close a card with `close <id> --result "done"` with no batch waiting. The card shows
+   "Result: done".
+5. Turn the phone off for a minute, send again, turn it on. The batch still arrives and nothing is sent twice.
+6. In the database, `meta/wake` holds `mode` and `last`, the time of the last wake the page sent.
