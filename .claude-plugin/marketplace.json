@@ -10,17 +10,17 @@
     {
       "name": "mikrotik-routeros",
       "source": "./skills/mikrotik-routeros",
-      "description": "Design, configure, audit, and troubleshoot MikroTik RouterOS networks \u2014 CAPsMAN/wifi, VLANs, firewall and multi-layer NAT, routing, DHCP, QoS, VPNs, and .rsc scripting."
+      "description": "Design, configure, audit, and troubleshoot MikroTik RouterOS networks \u2014 CAPsMAN/wifi, VLANs, firewall and multi-layer NAT, bridging with hardware offload, routing, DHCP, QoS, VPNs, and .rsc scripting on RouterOS 7.20+."
     },
     {
       "name": "agent-delegation",
       "source": "./skills/agent-delegation",
-      "description": "Protocol for handing work to a subagent that cannot ask the human mid-run: delegate by default with two main-session carve-outs (secret values, human confirmations), a decision-completeness gate, stop-clause wording, an ask-and-continue variant for harnesses with a parent relay, and artifact verification instead of exit codes."
+      "description": "Protocol for handing work to a subagent that cannot ask the human mid-run: delegate by default with two main-session carve-outs (secret values, human confirmations), a decision-completeness gate, a pause clause so a subagent that hits an open decision keeps its context and is resumed with the answer, a toolset check before evidence is named, and artifact verification instead of exit codes."
     },
     {
       "name": "caveman",
       "source": "./plugins/caveman",
-      "description": "Vendored, pinned copy of JuliusBrussee/caveman (MIT): ultra-compressed caveman-style replies that cut ~75% of output tokens while keeping technical substance exact."
+      "description": "Ultra-compressed communication mode. Cuts ~75% of tokens while keeping full technical accuracy by speaking like a caveman."
     },
     {
       "name": "limit-guard",
@@ -30,12 +30,12 @@
     {
       "name": "bobby-statusline",
       "source": "./plugins/bobby-statusline",
-      "description": "One status line row for caveman, ste, and limit-guard: badges, vim mode, context, usage windows or session cost, prompt cache, model, agent, and PR. One python3 process, no chaining."
+      "description": "One status line row for caveman, ste, and limit-guard: badges, vim mode, context, usage windows or cost, prompt cache with TTL and expiry, model, agent, and PR. One python3 process, no chaining."
     },
     {
       "name": "ste",
       "source": "./plugins/ste",
-      "description": "Simple Technical English (ASD-STE100) bridged to caveman: caveman's compressed style stays the default, and STE takes over on exactly the turns caveman itself says to drop compression. Toggle with /ste:ste on|off|status."
+      "description": "Simple Technical English (ASD-STE100) for Claude Code, bridged to caveman: caveman's compressed style stays the default, and STE takes over on exactly the turns caveman itself says to drop compression. Toggle with /ste:ste on|off|status; the setting persists across sessions."
     },
     {
       "name": "herd-forge",
@@ -45,32 +45,32 @@
     {
       "name": "herd-delegation",
       "source": "./skills/herd-delegation",
-      "description": "Delegate one unit of work to an agent in its own Herdr tab and drive that pane as a real terminal, for interactive prompts, live output and decisions the parent answers mid-run."
+      "description": "Delegate one unit of work to an agent in its own Herdr tab and drive that pane as a real terminal: when a pane beats a background subagent, the tab-per-agent rule, the brief with an ask-in-the-pane clause instead of a stop clause, a report file asked for up front, the review pane, the context threshold on reuse, and what a pane changes for the two things that stay with the parent (secret values, human consent). Builds on agent-delegation and on the reference that herdr --skill prints."
     },
     {
       "name": "herd-rigor",
       "source": "./skills/herd-rigor",
-      "description": "Optional evidence and review discipline for work where a wrong answer costs more than a slow one: measured-or-argued labels, three numbers and a control on every absence claim, the freeze and review gate, checker independence, and a rule budget."
+      "description": "Optional evidence and review discipline for work where a wrong answer costs more than a slow one: measured-or-argued labels, three numbers and a control on every absence claim, predictions recorded before the run, the freeze and review gate with four verdicts, checker independence, and a rule budget that stops the method from eating the work."
     },
     {
       "name": "static-analysis-controls",
       "source": "./skills/static-analysis-controls",
-      "description": "Controls for counting, searching and claiming absence across a corpus of files or binaries, so a sweep that did not run never reads as a clean zero."
+      "description": "Controls for counting, searching and claiming absence across a corpus of files or binaries: denominators that symlinks inflate, a grep that is a shell function, positive and discrimination controls, indirect references that defeat a direct search, the backward window for a register load, and addresses that shift between versions."
     },
     {
       "name": "ontrak-adu218",
       "source": "./skills/ontrak-adu218",
-      "description": "Drive an Ontrak ADU218 relay and opto-input box through the adu CLI: a channel is resolved from the operator's own wiring map or refused, the guard narrows the bench to one session's channels, and every write is read back."
+      "description": "Drive an Ontrak ADU218 relay and opto-input box safely through the adu CLI: a channel is resolved from the operator's wiring map or refused, the guard narrows the bench to the channels one session needs, every write is read back, and the exit codes name the next step."
     },
     {
       "name": "korad-ka3305p",
       "source": "./skills/korad-ka3305p",
-      "description": "Drive a Korad KA3305P bench power supply through the korad CLI: guard, read-back on every write, unattended limits."
+      "description": "Drive a Korad KA3305P bench power supply safely through the korad CLI from the iot-lab repository: guard first, current limit before voltage, read-back on every write, unattended limits, and exit codes that name the next step."
     },
     {
       "name": "decision-board",
       "source": "./plugins/decision-board",
-      "description": "Build and run a decision board, a private claude.ai artifact with a database, where an agent posts questions and pending actions as cards and its operator answers from a phone instead of a terminal."
+      "description": "Build and run a decision board, a private claude.ai artifact with a database, where an agent posts questions, actions and reference pages and the operator answers from a phone or a browser. One unchanged page, set up by a config document in the database."
     }
   ]
 }
