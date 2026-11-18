@@ -9,6 +9,11 @@ One unchanged page serves many uses. A config, kept in `.board/config.json` and 
 around it, merged by `check` and written to the database, sets the title, the tabs, the groups and
 their order, the priorities and the tags. Cards due today show in a strip at the top.
 
+## One operator, one board
+
+A board serves one operator and the agent sessions of that operator. The `.board/` folder is local, and git
+ignores it. Sharing a board, its configuration, its rules or its people list across a team is not supported.
+
 ## Start a board
 
 1. Install the skill: `claude plugin install decision-board@skill-bazaar`.
@@ -24,7 +29,7 @@ their order, the priorities and the tags. Cards due today show in a strip at the
 The agent never reads or types card JSON in the conversation. Its cards live in a local state file,
 `.board/state.json` (`.board` is a hidden folder; `ls -a` shows it). `skills/decision-board/scripts/board.mjs sync`
 applies a card file to it and prints one write: the whole card list as one document, `cards/main`,
-pinned to the version that the state keeps. Answers come back as batches. A watcher queries only the batches whose status is
+pinned to the version that the state keeps. The agent passes each printed array to the database and then confirms it (`confirm`, or `--confirmed` on the next write command); a write command refuses while an array is unconfirmed. Answers come back as batches. A watcher queries only the batches whose status is
 `sent`, and `read` prints one short line per answer. Every time is written with the offset of the
 config `tz`. The script has no network access. The operator's standing judgments live in
 `.board/rules.md`; every new rule reaches it through a card the operator answers, and `check` posts the
@@ -46,9 +51,9 @@ answer. A dot marks a card the agent changed since you last marked it seen.
 
 | Mode | How | Cost while idle | Cost per Send |
 |---|---|---|---|
-| `comment` | Send posts a short comment to Claude, which wakes the session that watches the board; if the page cannot post it, a Wake the agent button shows | none | one full read in the owning session |
+| `comment` (default) | Send posts a short comment to Claude, which wakes the session that watches the board; if the page cannot post it, a Wake the agent button shows | none | one full read in the owning session |
 | `poll` (300 s, 24 polls) | a background watcher on a cheap model | 3 watcher tool calls per poll, 36 an hour, for at most 2 hours | the watcher's report, then one full read |
-| `both` (default; 900 s, 32 polls) | a comment, and a slow poll that catches a missed one | 4 watcher tool calls per poll (the 900 s wait is two calls), 16 an hour, for at most 8 hours | one full read; a poll that sees the same batch adds a read that finds nothing |
+| `both` (900 s, 32 polls) | a comment, and a slow poll that catches a missed one | 4 watcher tool calls per poll (the 900 s wait is two calls), 16 an hour, for at most 8 hours | one full read; a poll that sees the same batch adds a read that finds nothing |
 | `off` | you tell the agent to read the board | none | one full read |
 
 Each watcher tool call is a model turn, and the watcher's context grows over its run. The figures count calls,
@@ -65,11 +70,11 @@ The agent needs only `skills/` while it runs a board:
 - `skills/decision-board/assets/board.html`: the page. `SCHEMA` in it defines the fields for the
   page and the script.
 - `skills/decision-board/scripts/board.mjs`: `check`, `sync`, `close`, `read`, `waiting`, `ack`,
-  `status`, `watch`, `guide`, `purge`, `adopt`, `push`.
+  `status`, `watch`, `guide`, `purge`, `adopt`, `push`, `confirm`.
 - `skills/decision-board/assets/wait.sh`: the pause of a watcher between two polls.
 - `skills/decision-board/assets/config.example.json`: an example config with example checks.
 - `skills/decision-board/references/`: cards, guides, the data model and access rules, the watch
-  brief, building a board and changing the page, and the clean up.
+  brief, writes and their recovery, building a board and changing the page, and the clean up.
 - `docs/how-it-works.html`: how the parts fit together.
 - `tests/`: node tests of the page logic and the script, on fixtures.
 
