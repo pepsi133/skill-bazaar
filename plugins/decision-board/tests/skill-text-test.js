@@ -118,9 +118,8 @@ ok("the core text is tool-agnostic", () => {
 ok("SKILL.md runs node S watch after a post and after a read; no watcher is started by hand", () => {
   const md = SKILL_MD();
   // After a post and after a read (the read step words it "Then, with or without an ack, run ...").
-  assert.ok(section(md, "## Post, change or close cards").includes("then run `node S watch` and do what it prints"));
-  assert.ok(section(md, "## Read and handle the answers").includes("run `node S watch` and do what it prints"));
-  assert.ok(md.split("run `node S watch` and do what it prints").length - 1 >= 2);
+  assert.ok(section(md, "## Post, change or close cards").includes("then run `node S watch --confirmed` and do what it prints"));
+  assert.ok(section(md, "## Read and handle the answers").includes("run `node S watch` (`--confirmed` after an array) and do what it prints"));
   assert.ok(md.includes("with or without an ack"));
   for (const s of ["start a watcher", "Start a new watcher", "poll limit 30", "wait.sh 120"]) assert.ok(!md.includes(s), s);
   for (const s of ["`P5`, comments:", "`P6`, the watcher:", "write no reply"]) assert.ok(md.includes(s), s);
@@ -134,10 +133,23 @@ ok("the watch brief is filled by the script", () => {
   for (const t of [md, w]) for (const s of ["wait.sh 120", "<wait script> 120"]) assert.ok(!t.includes(s), s);
   for (const t of [md, w]) assert.ok(!/poll limit <?N>?/.test(t) && !/poll limit \d/.test(t));
 });
+ok("build.md: the P1 text and the republish rules sit in its Platform execution notes; no text suggests force", () => {
+  const b = read(REF, "build.md"), notes = b.slice(b.indexOf("## Platform execution notes"));
+  assert.ok(b.indexOf("## Platform execution notes") > b.indexOf("## Change the page"), "last section");
+  for (const s of ["`P1`, publish:", "refused until this session has read the live version in full", "every line of the saved file", "withholds the live version while a\n  wake-comment notification is pending", "until the operator types a message in the terminal", "Never pass `force`"]) assert.ok(notes.includes(s), s);
+  assert.ok(!b.slice(0, b.indexOf("## Platform execution notes")).includes("Artifact"), "no tool name above the notes");
+  assert.ok(!read(SKILL, "SKILL.md").includes("force"), "SKILL.md never mentions force");
+});
+ok("writes.md holds the three ways out; SKILL.md names it, --confirmed and confirm", () => {
+  const w = read(REF, "writes.md"), md = SKILL_MD();
+  for (const s of ["node S confirm", "--confirmed", "`if refused:`", "`if the reply is lost:`", "node S push <key>", "Never confirm an array you did not"]) assert.ok(w.includes(s), s);
+  for (const s of ["references/writes.md", "`--confirmed`", "`node S confirm`", "`Not confirmed`"]) assert.ok(md.includes(s), s);
+  assert.ok(md.includes("do what the line says") === false, "the recovery detail moved to writes.md");
+});
 ok("README has a Wake modes table", () => {
   const r = read(ROOT, "README.md");
   assert.ok(r.includes("## Wake modes") && r.includes("Cost while idle"));
-  for (const s of ["\n| `comment` | ", "\n| `poll` ", "\n| `both` ", "\n| `off` | "]) assert.ok(r.includes(s), s);
+  for (const s of ["\n| `comment` (default) | ", "\n| `poll` ", "\n| `both` ", "\n| `off` | "]) assert.ok(r.includes(s), s);
 });
 ok("SKILL.md holds the status rule line", () => {
   const md = SKILL_MD(), step3 = section(md, "## Read and handle the answers");

@@ -31,7 +31,11 @@ function fresh(withState = true, db) {
 }
 function sh(...argv) { const lines = []; const code = run(argv, (l) => lines.push(...String(l).split("\n"))); return { code, lines, text: lines.join("\n") }; }
 // A command with the state of b.
-const cmd = (b, ...argv) => sh(...argv, "--state", b.state);
+// Every write command carries --confirmed here: a test passes its arrays by apply or by hand, and the refusal
+// tests of "unconfirmed" use strict, which does not.
+const CONFIRMS = new Set(["check", "sync", "close", "ack", "status", "watch", "guide", "purge"]);
+const strict = (b, ...argv) => sh(...argv, "--state", b.state);
+const cmd = (b, ...argv) => strict(b, ...argv, ...(CONFIRMS.has(argv[0]) ? ["--confirmed"] : []));
 // A dump as an agent makes it: the data-only files, and the reply lines saved to versions.txt.
 function dumpNow(b) { const lines = dump(b.db, b.dump); fs.mkdirSync(b.dump, { recursive: true }); fs.writeFileSync(path.join(b.dump, "versions.txt"), lines.join("\n") + "\n"); return b.dump; }
 const dumped = (b, ...argv) => cmd(b, ...argv, "--dump", dumpNow(b));
@@ -39,7 +43,8 @@ const dumped = (b, ...argv) => cmd(b, ...argv, "--dump", dumpNow(b));
 const ok2 = (b, ...argv) => cmd(b, ...argv, "--dump", dumpNow(b), "--dumped");
 // waiting takes no state.
 const wait = (b) => sh("waiting", "--dump", dumpNow(b));
-function apply(b, r) { const ws = writesOf(r.lines); ws.forEach((w) => applyBatch(b.db, w)); return ws.flat(); }
+// The agent passes each array and then confirms it.
+function apply(b, r) { const ws = writesOf(r.lines); ws.forEach((w) => applyBatch(b.db, w)); if (ws.length) strict(b, "confirm"); return ws.flat(); }
 const doc = (b, c, id) => { const d = readDb(b.db).get(c); return d && d.get(id); };
 const state = (b) => JSON.parse(fs.readFileSync(b.state, "utf8"));
 const setState = (b, f) => { const st = state(b); f(st); fs.writeFileSync(b.state, JSON.stringify(st)); };
@@ -83,6 +88,7 @@ ok("sync: a card file changes the state; one pinned write of cards/main with ref
   const disk = card(b, "disk-size"), cam = card(b, "cam-firmware");
   assert.deepEqual([disk.rev, disk.created, disk.updated], [3, "2026-01-01T10:00:00+00:00", "2026-02-01T12:00:00+00:00"]);
   assert.deepEqual([cam.rev, cam.status, cam.kind, cam.priority, cam.options, cam.source], [1, "open", "action", "soon", undefined, "infra"]);
+  strict(b, "confirm");
   const before = fs.readFileSync(b.state, "utf8"), again = cmd(b, "sync", path.join(FIX, "cards.json"));
   assert.deepEqual(again.lines, ["sync: 0 new, 0 changed (rev up), 0 changed (same rev), 3 unchanged, 0 closed", "no writes"]);
   assert.equal(fs.readFileSync(b.state, "utf8"), before, "unchanged state is not rewritten");
@@ -1254,15 +1260,17 @@ ok("the watch brief makes one database call per poll", () => {
 });
 ok("SKILL.md stays short", () => {
   const n = fs.readFileSync(SKILL_MD, "utf8").length;
-  assert.ok(n <= 8000, `SKILL.md is ${n} characters; the limit is 8000: move text a daily run does not need to a reference`);
+  assert.ok(n <= 7600, `SKILL.md is ${n} characters; the limit is 7600: move text a daily run does not need to a reference`);
 });
 ok("artifact-capabilities is named once, in P1", () => {
   const skill = fs.readFileSync(SKILL_MD, "utf8");
   assert.equal((skill.match(/artifact-capabilities/g) || []).length, 1);
   const p1 = skill.slice(skill.indexOf("- `P1`, publish:"), skill.indexOf("- `P2`,"));
   assert.ok(p1.includes("artifact-capabilities") && p1.includes("never load it"), "inside the P1 bullet");
+  const build = fs.readFileSync(path.join(SKILL, "references", "build.md"), "utf8");
+  assert.equal((build.match(/artifact-capabilities/g) || []).length, 1, "the P1 text itself is in build.md, Platform execution notes");
   const files = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(path.join(d, e.name)) : [path.join(d, e.name)]));
-  for (const f of files(SKILL).filter((x) => x !== SKILL_MD).concat(path.join(here, "..", "README.md"), path.join(here, "..", "skills", "board-refresh", "SKILL.md")))
+  for (const f of files(SKILL).filter((x) => x !== SKILL_MD && x !== path.join(SKILL, "references", "build.md")).concat(path.join(here, "..", "README.md"), path.join(here, "..", "skills", "board-refresh", "SKILL.md")))
     assert.ok(!fs.readFileSync(f, "utf8").includes("artifact-capabilities"), f);
 });
 ok("the moved sections are read at a named step", () => {
@@ -1792,6 +1800,7 @@ ok("ack: a batch whose ack is pending in the state is already handled; its contr
   const dir = dumpNow(b);
   assert.match(cmd(b, "ack", "b-pa", "--dump", dir).lines[0], /^ack b-pa: handled, 1 cards closed\. /);
   assert.match(cmd(b, "ack", "b-pb", "--dump", dir).lines[0], /^ack b-pb: handled, 0 cards closed, 1 reopened\. /);
+  cmd(b, "confirm");
   const before = fs.readFileSync(b.state, "utf8"), again = cmd(b, "ack", "b-pa", "--dump", dir);
   assert.deepEqual(again.lines, [`ack b-pa: its write is printed but not confirmed. Run: node ${SELF} push batches/b-pa --state ${JSON.stringify(b.state)}`, "no writes"]);
   assert.equal(fs.readFileSync(b.state, "utf8"), before, "the third ack changes nothing");
@@ -1841,6 +1850,7 @@ ok("a lost ack: read and ack name push for the pending write; push completes it,
   assert.ok(r.lines.includes("  " + HINT), r.text);
   assert.ok(!r.lines.some((l) => l.includes(" ack b-lost --dump")), "no ack line for the pending batch");
   assert.ok(r.lines.includes('  tracker-7  control dismiss "on"  (ack applies it)'), "its lines are listed as before");
+  cmd(b, "confirm");
   const before = fs.readFileSync(b.state, "utf8"), again = dumped(b, "ack", "b-lost");
   assert.deepEqual(again.lines, [HINT, "no writes"]);
   assert.equal(fs.readFileSync(b.state, "utf8"), before, "no state byte changes");
@@ -2249,12 +2259,116 @@ ok("watch: at the poll limit it ends the window once and starts none; only watch
     });
   }
 });
-ok("watch --restart before any poll warns that the first status write may not have been passed; a plain first watch does not", () => {
-  const b = wakeBoard({ mode: "poll" }), note = (r) => r.lines.filter((l) => l.startsWith("note: meta/status"));
-  assert.deepEqual(note(atNow("2026-02-01T12:00:00Z", () => cmd(b, "watch"))), []);
-  const r = atNow("2026-02-01T12:10:00Z", () => cmd(b, "watch", "--restart"));
-  assert.equal(note(r).length, 1, r.text);
-  assert.ok(r.text.includes('"if_version":1'), "the restart pins to the stored next version, which the note questions");
+ok("watch --restart after a watch whose array was not confirmed refuses and names the three ways out; --confirmed starts the new window", () => {
+  const b = wakeBoard({ mode: "poll" });
+  strict(b, "confirm");
+  const first = atNow("2026-02-01T12:00:00Z", () => strict(b, "watch")), id = watchJson(b).watcher;
+  assert.equal(first.code, 0, first.text);
+  assert.deepEqual(state(b).unconfirmed, ["meta/status"]);
+  const saved = fs.readFileSync(b.wf, "utf8"), r = atNow("2026-02-01T12:10:00Z", () => strict(b, "watch", "--restart"));
+  assert.equal(r.code, 1, r.text);
+  assert.equal(r.lines[0], "watch: nothing written. Not confirmed: meta/status.");
+  assert.ok(r.lines[1].includes(`node ${SELF} confirm`) && r.lines[1].includes("--confirmed"), r.text);
+  assert.ok(r.lines.some((l) => l.startsWith("if refused: rm -rf") && l.includes("adopt meta/status ")), r.text);
+  assert.ok(r.lines.some((l) => l.startsWith("if the reply is lost: ") && l.includes("push meta/status")), r.text);
+  assert.equal(fs.readFileSync(b.wf, "utf8"), saved, "the watch file stays");
+  const ok1 = atNow("2026-02-01T12:10:00Z", () => strict(b, "watch", "--restart", "--confirmed"));
+  assert.equal(ok1.code, 0, ok1.text);
+  assert.ok(watchJson(b).watcher !== id && watchJson(b).poll === 0);
+});
+function sentCards(b) {   // a sync whose array is applied to the database and not confirmed
+  const r = strict(b, "sync", file([yn("a"), yn("b")]));
+  assert.equal(r.code, 0, r.text);
+  writesOf(r.lines).forEach((w) => applyBatch(b.db, w));
+  return r;
+}
+ok("unconfirmed: a write command refuses while an array is not confirmed, names the three ways out, and writes nothing", () => {
+  const b = fresh();
+  strict(b, "confirm");
+  sentCards(b);
+  assert.deepEqual(state(b).unconfirmed, ["cards"]);
+  const before = fs.readFileSync(b.state, "utf8");
+  for (const argv of [["close", "a"], ["sync", file([yn("c")])], ["status", "--now", "x"]]) {
+    const r = strict(b, ...argv);
+    assert.equal(r.code, 1, r.text);
+    assert.equal(r.lines[0], `${argv[0]}: nothing written. Not confirmed: cards.`);
+    assert.equal(r.lines[1], `If every array passed: node ${SELF} confirm --state ${JSON.stringify(b.state)}, or add --confirmed to this command.`);
+    assert.ok(r.lines[2].startsWith("if refused: rm -rf ") && r.lines[2].includes("then P2 cards with versions, then node ") && r.lines[2].includes("adopt cards "), r.text);
+    assert.equal(r.lines[3], `if the reply is lost: node ${SELF} push cards --state ${JSON.stringify(b.state)}`);
+    assert.equal(fs.readFileSync(b.state, "utf8"), before, "nothing written: " + argv[0]);
+  }
+  assert.equal(strict(b, "page").code, 0, "commands that print no write run");
+  assert.equal(ok2(b, "read").code, 0);
+});
+ok("confirm clears every unconfirmed array; a second one has nothing to do; it takes no argument", () => {
+  const b = fresh();
+  sentCards(b);
+  assert.equal(strict(b, "confirm", "cards").code, 1);
+  const r = strict(b, "confirm");
+  assert.equal(r.lines[0], "confirm: cards confirmed");
+  assert.equal(state(b).unconfirmed, undefined);
+  assert.equal(strict(b, "confirm").lines[0], "confirm: nothing waits for a confirmation");
+  assert.equal(strict(b, "close", "a").code, 0);
+});
+ok("--confirmed confirms the earlier array and runs the command in one call; its own array is unconfirmed", () => {
+  const b = fresh();
+  sentCards(b);
+  const r = strict(b, "close", "a", "--confirmed");
+  assert.equal(r.code, 0, r.text);
+  assert.deepEqual(state(b).unconfirmed, ["cards"]);
+  assert.equal(strict(b, "close", "b").code, 1, "the close array is not confirmed yet");
+});
+ok("adopt clears the key when the board holds the write, and keeps it unconfirmed when the write goes again; push prints it again and keeps it pending", () => {
+  const b = fresh();
+  sentCards(b);
+  const held = ok2(b, "adopt", "cards");
+  assert.ok(held.lines.some((l) => l.includes("the board holds this state's cards")), held.text);
+  assert.equal(state(b).unconfirmed, undefined);
+  assert.equal(strict(b, "close", "a", "--confirmed").code, 0);
+  const pend = state(b).pending.cards, pushed = strict(b, "push", "cards");
+  assert.deepEqual(writesOf(pushed.lines).flat(), [pend], "the same array again");
+  assert.deepEqual(state(b).pending.cards, pend);
+  assert.deepEqual(state(b).unconfirmed, ["cards"]);
+  const lost = fresh();
+  const sent = strict(lost, "sync", file([yn("a")]));          // the array was never passed: the board lacks it
+  assert.equal(sent.code, 0, sent.text);
+  const again = ok2(lost, "adopt", "cards");
+  assert.ok(again.lines.some((l) => l.startsWith("cards: write again")), again.text);
+  assert.deepEqual(state(lost).unconfirmed, ["cards"]);
+});
+ok("a read that shows the batch handled drops the key of its ack from the unconfirmed ones", () => {
+  const b = fresh();
+  putDoc(b, "batches", BB, batch(BB, "2026-01-03T00:00:00+00:00", { "disk-size": { answer: "Yes", note: "", rev: 3 } }));
+  const a1 = dumped(b, "ack", BB);
+  assert.equal(a1.code, 0, a1.text);
+  assert.ok(state(b).unconfirmed.includes(`batches/${BB}`), JSON.stringify(state(b)));
+  apply(b, a1);
+  const after = ok2(b, "read");
+  assert.equal(after.code, 0, after.text);
+  assert.equal(state(b).unconfirmed, undefined, "the board shows the batch handled");
+});
+ok("close --result twice is refused; a result text cannot start with --", () => {
+  const b = fresh(), before = fs.readFileSync(b.state, "utf8");
+  sync(b, [yn("a")]);
+  const was = fs.readFileSync(b.state, "utf8");
+  assert.deepEqual(cmd(b, "close", "a", "--result", "x", "--result", "y").lines, ["close: give --result once; the text starts after it and cannot start with --"]);
+  assert.equal(fs.readFileSync(b.state, "utf8"), was);
+  assert.ok(before !== was);
+});
+ok("sync without --source keeps the source and source_key of a stored card; a source the file states wins", () => {
+  const b = fresh();
+  apply(b, sync(b, [yn("a"), yn("b")], "--source", "mail"));
+  setState(b, (st) => { st.cards.find((c) => c.id === "a").source_key = "k1"; });
+  const same = sync(b, [yn("a"), yn("b")]);
+  assert.equal(same.lines[0], "sync: 0 new, 0 changed (rev up), 0 changed (same rev), 2 unchanged, 0 closed", same.text);
+  assert.deepEqual([card(b, "a").source, card(b, "a").source_key, card(b, "b").source], ["mail", "k1", "mail"]);
+  const changed = sync(b, [yn("a", { title: "new question?" }), yn("b")]);
+  assert.equal(changed.code, 0, changed.text);
+  assert.deepEqual([card(b, "a").source, card(b, "a").source_key, card(b, "a").rev], ["mail", "k1", 2]);
+  assert.equal(sync(b, [yn("a", { source: "gh" }), yn("b")]).code, 0);
+  assert.deepEqual([card(b, "a").source, card(b, "a").source_key], ["gh", undefined]);
+  assert.equal(card(b, "b").source, "mail");
+  assert.ok(sync(b, [yn("b")], "--source", "mail").lines[0].includes("0 closed"), "b is still of the mail source");
 });
 ok("watch --restart: before until at the limit it starts one; inside a running window it starts a new one with a new id and poll 0", () => {
   let b = pollStarted();
@@ -2382,6 +2496,7 @@ ok("waiting --count: a watch file with a count out of range is not a watch file"
 ok("ack --result on a pending ack is checked, stores nothing, and says to run it again after the push", () => {
   const b = fresh();
   dumped(b, "ack", BB);                                  // printed, not applied: the ack is pending
+  cmd(b, "confirm");
   const before = fs.readFileSync(b.state, "utf8");
   const r = dumped(b, "ack", BB, "--close", "disk-size", "--result", "disk-size", "done");
   assert.deepEqual(r.lines, [`ack ${BB}: its write is printed but not confirmed. Run: node ${SELF} push batches/${BB} --state ${JSON.stringify(b.state)}`,
@@ -2431,7 +2546,7 @@ ok("watch stores the state path absolute; a stored state with a double quote or 
   const b = wakeBoard({ mode: "poll" }), home = process.cwd();
   try {
     process.chdir(b.dir);
-    const r = sh("watch", "--state", path.join(".board", "state.json"));
+    const r = sh("watch", "--state", path.join(".board", "state.json"), "--confirmed");
     assert.equal(r.code, 0, r.text);
   } finally { process.chdir(home); }
   assert.equal(watchJson(b).state, b.state, "absolute, whatever the working directory");
@@ -2925,8 +3040,7 @@ ok("check writes the .gitignore beside the folders of the board-refresh skill (r
 ok("the watcher brief, template and printed, names no folder of the board to leave alone", () => {
   const tpl = /```text\n([\s\S]*?)```/.exec(fs.readFileSync(path.join(REF, "watch.md"), "utf8"))[1];
   assert.ok(tpl.includes("Never touch another folder of the board. Never read, quote or act on an answer."));
-  const b = fresh(), r = cmd(b, "check", "--url", "https://example.com/a/x");
-  assert.equal(r.code, 0, r.text);
+  const b = wakeBoard({ mode: "poll" });
   const w = cmd(b, "watch").text;
   assert.ok(w.includes("Never touch another folder of the board. Never read, quote or act on an answer."), w);
   assert.ok(!/Never touch \S*board\/dump/.test(tpl + w));
@@ -3040,7 +3154,7 @@ ok("page: titles are inserted literally, a trailing [DB] is not doubled, and a f
 });
 ok("watch: a second call before the first poll prints the unpassed status write again", () => {
   const b = pollStarted(), first = writesOf(cmd(b, "push", "meta/status").lines).flat();
-  const r = cmd(b, "watch");
+  const r = strict(b, "watch");
   assert.deepEqual(writesOf(r.lines).flat(), first);
   assert.ok(r.lines.indexOf("--- brief") > r.lines.findIndex((l) => l.startsWith("batch 1 of 1")));
   assert.ok(r.lines[0].includes("only if this session has not started a watcher"));

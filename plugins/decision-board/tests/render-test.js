@@ -502,14 +502,23 @@ aok("wake: Send posts exactly WAKE_TEXT on a new thread, saves the thread to met
   assert.deepEqual(JSON.parse(JSON.stringify(x.comments.sent[1])), { threadId: "th-1", text: WAKE });
   const mw2 = x.writes.filter(([p]) => p === "meta/wake");
   assert.equal(mw2.length, 2, "every wake records its time");
-  assert.deepEqual([mw2[1][1].thread, mw2[1][1].mode, mw2[1][1].updated, typeof mw2[1][1].last], ["th-1", "both", mw[0][1].updated, "string"], "the same thread keeps its creation time; mode and last are recorded");
-  assert.equal(mw[0][1].mode, "both");
+  assert.deepEqual([mw2[1][1].thread, mw2[1][1].mode, mw2[1][1].updated, typeof mw2[1][1].last], ["th-1", "comment", mw[0][1].updated, "string"], "the same thread keeps its creation time; mode and last are recorded");
+  assert.equal(mw[0][1].mode, "comment");
   const y = wakeBox({ comments: stubComments({ thread: "th-2", reject: (t) => (t.threadId ? { code: "not_found" } : null) }) });
   answered(y);
   y.W.wakeDoc = y.W.coerce("wake", { thread: "gone", updated: "" });
   assert.equal(await y.W.wakeAgent(y.W.wakeAnchor()), "sent");
   assert.deepEqual(y.comments.sent.map((t) => t.threadId || "anchor"), ["gone", "anchor"]);
   assert.deepEqual(y.writes.filter(([p]) => p === "meta/wake").map(([, d]) => d.thread), ["th-2"]);
+});
+aok("wake: a failed meta/wake write says the thread was not saved on a new thread, and the wake time was not saved on a saved one", async () => {
+  const x = wakeBox({ failSet: (p) => p === "meta/wake" });
+  answered(x);
+  assert.equal(await x.W.wakeAgent(x.W.wakeAnchor()), "sent_unsaved");
+  x.W.wakeDoc = x.W.coerce("wake", { thread: "th-1", updated: "2026-01-01T00:00:00+00:00" });
+  assert.equal(await x.W.wakeAgent(x.W.wakeAnchor()), "sent_time_unsaved");
+  x.W.setWakeOutcome("sent_time_unsaved"); x.W.render();
+  assert.equal(x.els.wakestate.textContent, "Sent, and the agent was woken. The wake time was not saved.");
 });
 aok("wake: a Send that fails at the mark stage still wakes; one that fails at the batch or sends nothing does not", async () => {
   let x = wakeBox({ failSet: (p) => p.startsWith("responses/") });
@@ -531,16 +540,16 @@ aok("wake: a Send that fails at the mark stage still wakes; one that fails at th
 });
 aok("wake: each outcome shows its notice and the Wake button only where a tap can help; a plain notice clears after 30 s", async () => {
   const cases = [
-    [{ can: "no_session" }, {}, "Sent. No agent session takes comments here; the poll every 15 min picks it up.", true],
+    [{ can: "no_session" }, { wake: { mode: "both" } }, "Sent. No agent session takes comments here; the poll every 15 min picks it up.", true],
     [{ reject: () => ({ code: "claude_unavailable" }) }, {}, "Sent. Tap Wake the agent to send the comment.", false],
     [{ reject: () => ({ code: "consent_required" }) }, {}, "Sent. Allow comments from this page, then tap Wake the agent.", false],
     [{ reject: () => ({ code: "rate_limited" }) }, {}, "Sent. Too many wakes just now; tap Wake the agent in a minute.", false],
-    [{ reject: () => ({ code: "forbidden" }) }, {}, "Sent. No agent session takes comments here; the poll every 15 min picks it up.", true],
-    [{ noSend: true }, {}, "Sent. No agent session takes comments here; the poll every 15 min picks it up.", true],
+    [{ reject: () => ({ code: "forbidden" }) }, { wake: { mode: "both" } }, "Sent. No agent session takes comments here; the poll every 15 min picks it up.", true],
+    [{ noSend: true }, { wake: { mode: "both" } }, "Sent. No agent session takes comments here; the poll every 15 min picks it up.", true],
     [{ can: "writers_only" }, { wake: { mode: "comment" } }, "Sent. No agent session takes comments here; tell the agent to read the board.", true],
     [{}, { wake: { mode: "poll" } }, "Sent. The watcher picks it up within 5 min.", true],
     [{}, { wake: { mode: "off" } }, "Sent. Tell the agent to read the board.", true],
-    [null, {}, "Sent. This page cannot post comments: ask the agent to republish it. The poll every 15 min picks it up.", true, true],
+    [null, { wake: { mode: "both" } }, "Sent. This page cannot post comments: ask the agent to republish it. The poll every 15 min picks it up.", true, true],
     [null, {}, "Sent. The wake is not ready yet: tap Wake in a moment.", false, false],
   ];
   for (const [co, conf, text, hidden, off] of cases) {
@@ -551,7 +560,7 @@ aok("wake: each outcome shows its notice and the Wake button only where a tap ca
     assert.deepEqual([x.els.wakestate.textContent, x.els.wake.hidden], [text, hidden], JSON.stringify([co, conf]));
     const t = x.later.filter((l) => l.ms === 30000);
     assert.equal(t.length, hidden ? 1 : 0, "a timer only for a plain notice: " + text);
-    if (conf.wake && conf.wake.mode !== "comment" && co) assert.equal(co && x.comments.sent.length, 0, "no comment in mode " + conf.wake.mode);
+    if (conf.wake && conf.wake.mode !== "comment" && conf.wake.mode !== "both" && co) assert.equal(co && x.comments.sent.length, 0, "no comment in mode " + conf.wake.mode);
     if (hidden) { t[0].f(); x.W.render(); assert.deepEqual([x.W.wakeOutcome, x.els.wakestate.textContent], ["", ""], "cleared after 30 s"); }
   }
   const x = wakeBox();
@@ -594,7 +603,7 @@ aok("wake: a Send before the comments capability resolved says it was sent; 30 s
   bound[0].f();                                         // 30 s after the start, still unresolved
   x.W.render();
   assert.deepEqual([x.W.commentsOff, x.W.wakeOutcome, x.els.wakestate.textContent, x.els.wake.hidden],
-    [true, "no_capability", "Sent. This page cannot post comments: ask the agent to republish it. The poll every 15 min picks it up.", true]);
+    [true, "no_capability", "Sent. This page cannot post comments: ask the agent to republish it, and to read the board.", true]);
   const late = stubComments();
   resolve(late); await settle();                       // resolves at 31 s: adopted
   assert.equal(x.W.comments, late, "a late capability is adopted");

@@ -23,7 +23,19 @@ Read this only to build a board or to change or republish the page. `S`, `P1` to
 Database text reaches the page only through `textContent`, `fmtText` or `sanitizeRef`; the fields are in `SCHEMA`,
 which the script reads.
 
-1. In a new session, read the artifact first: `Artifact` with `action: "read"` and `url: URL`.
+1. In a new session, read the live artifact first, as the Platform execution notes say.
 2. From the plugin root (`../..` from the skill folder) run `for t in tests/*-test.*; do node "$t" || break; done`; all must pass.
 3. Run `node S page`, then republish with `P1` and `url: URL`, without `icon`. `P1` passes the `capabilities` from
    `references/data-model.md`, which an upgrade from an older page needs.
+
+## Platform execution notes
+
+Claude Code with the claude.ai `Artifact` tool.
+
+- `P1`, publish: before the call, load the built-in skill `artifact-capabilities` once in the session; it is the authority
+  on the syntax of the `capabilities` block and its access rules. Then `Artifact` with `file_path` the absolute path of
+  `.board/board.html`, `title` the title `node S page` printed, `icon: "checklist"`, a one-sentence `description`, and
+  `capabilities` from `references/data-model.md`, "Access rules". Keep the artifact private (the default).
+- A republish to an existing `url` is refused until this session has read the live version in full: `Artifact` with
+  `action: "read"` and `url: URL`, then every line of the saved file it names. The tool also withholds the live version while a
+  wake-comment notification is pending, until the operator types a message in the terminal. Never pass `force`.

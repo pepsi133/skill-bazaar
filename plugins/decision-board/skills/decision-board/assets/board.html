@@ -534,7 +534,7 @@ button.undo { flex: none; min-height: 44px; min-width: 88px; padding: 6px 16px; 
     controls: { assign: false, snooze: false, dismiss: false, close: false, done: false, tags: false },
     people: [],
     status: { stale_minutes: 30, guide: false },
-    wake: { mode: "both" }
+    wake: { mode: "comment" }
   };
   // A config list: at most SCHEMA.max.list entries. A list of {id, label}: drop entries without a text id and later duplicates.
   function cfgList(a) { return Array.isArray(a) ? a.slice(0, SCHEMA.max.list) : []; }
@@ -1107,6 +1107,7 @@ button.undo { flex: none; min-height: 44px; min-width: 88px; padding: 6px 16px; 
     if (outcome === "not_ready") return "Not ready yet. Try again in a moment.";
     if (outcome === "not_ready_sent") return "Sent. The wake is not ready yet: tap Wake in a moment.";
     if (outcome === "sent") return "Sent, and the agent was woken by a comment.";
+    if (outcome === "sent_time_unsaved") return "Sent, and the agent was woken. The wake time was not saved.";
     if (outcome === "sent_unsaved") return "Sent, and the agent was woken. The thread was not saved, so the next wake starts a new one.";
     if (outcome === "mark_sent") return "Sent, but some answers were not marked sent. The agent was woken.";
     if (outcome === "gesture") return "Sent. Tap Wake the agent to send the comment.";
@@ -2181,7 +2182,7 @@ button.undo { flex: none; min-height: 44px; min-width: 88px; padding: 6px 16px; 
       var go = function (target) { return comments.sendToClaude(target).then(function (r) {
           // meta/wake keeps the thread, when it was made (updated), the wake mode and the time of the last wake sent (last): a missed wake can be read from it.
           var t = nowStamp(), same = wakeDoc && wakeDoc.thread === r.threadId;
-          return db.doc("meta/wake").set({ thread: r.threadId, updated: same && wakeDoc.updated ? wakeDoc.updated : t, mode: cfg.wake.mode, last: t }).then(function () { return "sent"; }, function () { return "sent_unsaved"; });
+          return db.doc("meta/wake").set({ thread: r.threadId, updated: same && wakeDoc.updated ? wakeDoc.updated : t, mode: cfg.wake.mode, last: t }).then(function () { return "sent"; }, function () { return same ? "sent_time_unsaved" : "sent_unsaved"; });
         }); };
       var fresh = function () { return anchorP.then(function (an) { if (!an) throw { code: "unavailable" }; return go({ anchor: an, text: WAKE_TEXT }); }); };
       return (wakeDoc && wakeDoc.thread ? go({ threadId: wakeDoc.thread, text: WAKE_TEXT }).catch(function (e) { if (e && e.code === "not_found") return fresh(); throw e; }) : fresh());
@@ -2213,7 +2214,7 @@ button.undo { flex: none; min-height: 44px; min-width: 88px; padding: 6px 16px; 
     flushAll().then(function () { var s = sendable(); if (s.r.length + s.n.length + s.c.length) { went = true; return sendGroup(s); } }).then(function () { showMsg(""); if (went) wakeAgent(anchorP).then(sentOutcome); }, function (x) {
       if (x && x.stage === "mark") {
         showMsg("Batch " + x.bid + " went out, but some answers were not marked sent: " + errText(x.e) + ". They can go out again.");
-        wakeAgent(anchorP).then(function (o) { sentOutcome(o === "sent" || o === "sent_unsaved" ? "mark_sent" : o); });
+        wakeAgent(anchorP).then(function (o) { sentOutcome(o === "sent" || o === "sent_unsaved" || o === "sent_time_unsaved" ? "mark_sent" : o); });
       } else if (x && x.stage === "batch") showMsg("Send failed, nothing went out: " + errText(x.e));
       else showMsg("Send failed: " + errText(x));
     }).then(function () { sending = false; schedule(); });

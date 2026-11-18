@@ -5,19 +5,19 @@ const { pageFile, load, ok } = require("./_page.js");
 const P = load();
 const plain = (x) => JSON.parse(JSON.stringify(x));
 
-ok("wakePlan: defaults per mode (poll 300 and 24, both 900 and 32); an unknown mode is both; out-of-range values keep defaults", () => {
+ok("wakePlan: defaults per mode (poll 300 and 24, both 900 and 32); an unknown mode is comment; out-of-range values keep defaults", () => {
   assert.deepEqual(plain(P.wakePlan({ mode: "poll" })), { mode: "poll", comment: false, poll: true, poll_seconds: 300, poll_limit: 24 });
   assert.deepEqual(plain(P.wakePlan({ mode: "both" })), { mode: "both", comment: true, poll: true, poll_seconds: 900, poll_limit: 32 });
   assert.deepEqual(plain(P.wakePlan({ mode: "comment", poll_seconds: 120 })), { mode: "comment", comment: true, poll: false, poll_seconds: 0, poll_limit: 0 });
   assert.deepEqual(plain(P.wakePlan({ mode: "off" })), { mode: "off", comment: false, poll: false, poll_seconds: 0, poll_limit: 0 });
-  assert.equal(P.wakePlan({ mode: "sometimes" }).mode, "both");
-  assert.equal(P.wakePlan(undefined).mode, "both");
-  assert.equal(P.wakePlan([]).mode, "both");
+  assert.equal(P.wakePlan({ mode: "sometimes" }).mode, "comment");
+  assert.equal(P.wakePlan(undefined).mode, "comment");
+  assert.equal(P.wakePlan([]).mode, "comment");
   assert.deepEqual([P.wakePlan({ mode: "poll", poll_seconds: 30, poll_limit: 0 }).poll_seconds, P.wakePlan({ mode: "poll", poll_seconds: 30, poll_limit: 0 }).poll_limit], [300, 24]);
   assert.deepEqual([P.wakePlan({ mode: "both", poll_seconds: 600, poll_limit: 6 }).poll_seconds, P.wakePlan({ mode: "both", poll_seconds: 600, poll_limit: 6 }).poll_limit], [600, 6]);
   assert.equal(P.wakePlan({ mode: "poll", poll_seconds: 90.5 }).poll_seconds, 300);
   P.applyConfig({ tz: "UTC" });
-  assert.equal(P.cfg.wake.mode, "both");
+  assert.equal(P.cfg.wake.mode, "comment");
   P.applyConfig({ tz: "UTC", wake: { mode: "poll", poll_limit: 3 } });
   assert.deepEqual([P.cfg.wake.mode, P.cfg.wake.poll_seconds, P.cfg.wake.poll_limit], ["poll", 300, 3]);
 });
@@ -195,6 +195,7 @@ ok("wakeNotice: each mode and outcome gives its line, no_capability included; WA
   for (const p of [both, com]) {
     assert.equal(P.wakeNotice(p, "sent"), "Sent, and the agent was woken by a comment.");
     assert.equal(P.wakeNotice(p, "sent_unsaved"), "Sent, and the agent was woken. The thread was not saved, so the next wake starts a new one.");
+    assert.equal(P.wakeNotice(p, "sent_time_unsaved"), "Sent, and the agent was woken. The wake time was not saved.");
     assert.equal(P.wakeNotice(p, "mark_sent"), "Sent, but some answers were not marked sent. The agent was woken.");
     assert.equal(P.wakeNotice(p, "gesture"), "Sent. Tap Wake the agent to send the comment.");
     assert.equal(P.wakeNotice(p, "consent_required"), "Sent. Allow comments from this page, then tap Wake the agent.");

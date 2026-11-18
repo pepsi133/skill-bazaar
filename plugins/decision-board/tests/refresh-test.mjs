@@ -189,7 +189,7 @@ ok("the map output passes the core sync (links on link_hosts, first_asked, sourc
   fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(CONFIG));
   assert.equal(sh(board, "check", "--state", state).code, 0);
   const r = map();
-  const sync = (f, src, ...more) => sh(board, "sync", f, "--source", src, "--state", state, ...more);
+  const sync = (f, src, ...more) => sh(board, "sync", f, "--source", src, "--state", state, "--confirmed", ...more);
   const s = sync(r.out, "tracker");
   assert.equal(s.code, 0, s.text);
   assert.equal(s.lines[0], "sync: 4 new, 0 changed (rev up), 0 changed (same rev), 0 unchanged, 0 closed");
@@ -391,7 +391,7 @@ ok("a dismissed card returns only when a new source input arrives", () => {
   assert.equal(sh(board, "check", "--state", state).code, 0);
   const M = Object.assign({}, MAP, { input: "updated_at" });
   // A board command with the state; its writes go to the stand-in database.
-  const cmd = (...argv) => { const r = sh(board, ...argv, "--state", state); assert.equal(r.code, 0, r.text); writesOf(r.lines).forEach((w) => applyBatch(db, w)); return r; };
+  const cmd = (...argv) => { const r = sh(board, ...argv, "--state", state, ...(argv[0] === "check" || argv[0] === "sync" || argv[0] === "ack" ? ["--confirmed"] : [])); assert.equal(r.code, 0, r.text); writesOf(r.lines).forEach((w) => applyBatch(db, w)); return r; };
   const dumped = () => { const lines = dump(db, dd); fs.writeFileSync(path.join(dd, "versions.txt"), lines.join("\n") + "\n"); return dd; };
   const card = () => JSON.parse(fs.readFileSync(state, "utf8")).cards.find((c) => c.id === "tracker-7");
   const rows = (u) => map([row({ iid: 7, updated_at: u })], M).out;

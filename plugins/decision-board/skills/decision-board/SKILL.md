@@ -15,14 +15,13 @@ execution notes*. Read a reference only when a step names it.
 ## Script rules
 
 - `.board/state.json` holds your cards and the version of each document you write; only the script writes it.
-- A write command prints numbered arrays. Pass each array unchanged, in order, to one `P3` call.
+- A write command prints numbered arrays (`no writes`: nothing to pass). Pass each array unchanged, in order, to one
+  `P3` call. Then add `--confirmed` to the next write command (`check`, `sync`, `close`, `ack`, `status`, `watch`,
+  `guide`, `purge`), or run `node S confirm`. Only after `P3` succeeded.
 - A **dump** is `rm -rf .board/dump`, then the calls the step names (`P2` for a named collection); an empty
   collection leaves no folder. A dump **with versions** also appends each reply's document lines to
-  `.board/dump/versions.txt`, exactly as the reply prints them (each line starts with `- "`). Only the steps
-  that say "with versions" need it, and `adopt`.
-- **Refused write**, **lost reply** or an array you did not pass (the next write would pin wrongly): under each array the script prints an `if refused:` line and an
-  `if the reply is lost:` line. Do what the line says and pass the array it prints. A "with versions" dump in it is the one defined above. If it prints
-  `no writes`, there is nothing to pass.
+  `.board/dump/versions.txt`, exactly as the reply prints them (each line starts with `- "`).
+- A refused write, a lost reply, or a refusal that says `Not confirmed`: read `references/writes.md` and follow it.
 - **Times**: every time the script prints carries the offset of the config `tz`. Never compare times
   yourself and never decide from a time; the script makes every compare.
 
@@ -41,7 +40,7 @@ execution notes*. Read a reference only when a step names it.
    mirrors a source, because it closes the cards of that source that the file no longer holds.
    Its line names the cards it closes (open cards missing from their source's file) and reopens. If it
    prints problems or a refusal, do what it says and rerun.
-3. Pass the array to `P3`, then run `node S watch` and do what it prints.
+3. Pass the array to `P3`, then run `node S watch --confirmed` and do what it prints.
 
 A card posted again with the same `id` changes it; a change of the question, options, text or links
 raises `rev` and shows "changed". `node S close <id>...` closes cards. A card closed by `close` or
@@ -69,7 +68,7 @@ starting with `--`. Before a step that waits for a confirmation in the terminal,
    - `[rule]`, `[standing]`: read `references/rules.md` and do what it says for that line.
 3. Run the `ack` line that `read` printed (several: in the order `read` printed them), with `--close <id>`
    for each card that is done and `--result <id> "<what you did>"` for each card you acted on, and pass each
-   array. Then, with or without an ack, run `node S watch` and do what it prints.
+   array. Then, with or without an ack, run `node S watch` (`--confirmed` after an array) and do what it prints.
    To verify an ack, repeat step 1 (it starts with `rm -rf`): the batch is no longer listed.
 
 ## Guides
@@ -103,12 +102,8 @@ Claude Code with the claude.ai `Artifact` and `ArtifactData` tools. Load `Artifa
 `ToolSearch("select:ArtifactData")`. `URL` is the artifact link. If a `P2` result carries a
 `next_cursor`, repeat the call with `"cursor": <next_cursor>` in its `query` until none.
 
-- `P1`, publish: before the call, load the built-in skill `artifact-capabilities` once in the session; it is
-  the authority on the syntax of the `capabilities` block and its access rules. Then `Artifact` with
-  `file_path` the absolute path of `.board/board.html`, `title` the title `node S page` printed, `icon: "checklist"`, a one-sentence `description`,
-  and `capabilities` from `references/data-model.md`, "Access rules". Keep the artifact private (the
-  default). Only `P1` loads that skill: the daily steps (sync, read, ack, watch) use `ArtifactData` alone
-  and never load it.
+- `P1`, publish: see `references/build.md`, Platform execution notes. Only `P1` loads the skill `artifact-capabilities`; the
+  daily steps (sync, read, ack, watch) use `ArtifactData` alone and never load it.
 - `P2`, dump one collection; the reply has one line per document, with its version:
   `{"action": "list", "url": URL, "collection": "<name>", "out_dir": ".board/dump", "query": {"limit": 1000}}`
 - `P3`, write: `{"action": "batch", "url": URL, "writes": <the printed array>}`.

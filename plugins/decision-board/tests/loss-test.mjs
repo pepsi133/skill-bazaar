@@ -30,7 +30,11 @@ function fresh(withState = true) {
   return { db, state, board: path.dirname(state), dump: path.join(d, ".board", "dump") };
 }
 function sh(...argv) { const lines = []; const code = run(argv, (l) => lines.push(...String(l).split("\n"))); return { code, lines, text: lines.join("\n") }; }
-const cmd = (b, ...argv) => sh(...argv, "--state", b.state);
+// Every write command carries --confirmed here: a test passes its arrays by apply or by hand, and the refusal
+// tests of "unconfirmed" use strict, which does not.
+const CONFIRMS = new Set(["check", "sync", "close", "ack", "status", "watch", "guide", "purge"]);
+const strict = (b, ...argv) => sh(...argv, "--state", b.state);
+const cmd = (b, ...argv) => strict(b, ...argv, ...(CONFIRMS.has(argv[0]) ? ["--confirmed"] : []));
 // A dump as an agent makes it: the data-only files, and the reply lines saved to versions.txt.
 function dumpNow(b) { const lines = dump(b.db, b.dump); fs.mkdirSync(b.dump, { recursive: true }); fs.writeFileSync(path.join(b.dump, "versions.txt"), lines.join("\n") + "\n"); return b.dump; }
 const dumped = (b, ...argv) => cmd(b, ...argv, "--dump", dumpNow(b));
