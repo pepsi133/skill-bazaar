@@ -67,8 +67,8 @@ def make_valid_repo(root: Path) -> None:
                 "organization": "example",
                 "description": "Example marketplace.",
                 "plugins": [
-                    {"name": "sample-plugin", "source": "plugins/sample-plugin"},
-                    {"name": "root", "source": "."},
+                    {"name": "sample-plugin", "source": "plugins/sample-plugin", "description": "A sample plugin."},
+                    {"name": "root", "source": ".", "description": "The repo itself."},
                 ],
             }
         ),
@@ -507,10 +507,20 @@ class MarketplaceJsonTests(unittest.TestCase):
         self._write_plugin("plugins/real-plugin", "real-plugin")
         write(
             self.root / ".claude-plugin" / "marketplace.json",
-            json.dumps({"plugins": [{"name": "real-plugin", "source": "plugins/real-plugin"}]}),
+            json.dumps({"plugins": [{"name": "real-plugin", "source": "plugins/real-plugin", "description": "desc"}]}),
         )
         problems = validate_skills.check_marketplace_json(self.root)
         self.assertEqual([str(p) for p in problems], [])
+
+    def test_entry_description_must_equal_the_manifest_description(self):
+        self._write_plugin("plugins/real-plugin", "real-plugin")
+        for entry in ({"description": "desc."}, {"description": "Desc"}, {}):
+            write(
+                self.root / ".claude-plugin" / "marketplace.json",
+                json.dumps({"plugins": [dict({"name": "real-plugin", "source": "plugins/real-plugin"}, **entry)]}),
+            )
+            problems = validate_skills.check_marketplace_json(self.root)
+            self.assertTrue(any("description differs" in p.message for p in problems), entry)
 
     def test_source_without_a_plugin_manifest_is_reported(self):
         (self.root / "plugins" / "manifestless").mkdir(parents=True)
@@ -563,7 +573,7 @@ class MarketplaceJsonTests(unittest.TestCase):
         write(
             self.root / ".claude-plugin" / "marketplace.json",
             json.dumps(
-                {"plugins": [{"name": "packaged-skill", "source": "./skills/packaged-skill"}]}
+                {"plugins": [{"name": "packaged-skill", "source": "./skills/packaged-skill", "description": "desc"}]}
             ),
         )
         self.assertEqual([str(p) for p in validate_skills.check_marketplace_json(self.root)], [])

@@ -134,7 +134,7 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
 - Before opening a PR, run the structural validator locally:
   `python3 scripts/validate-skills.py`. It checks `SKILL.md` frontmatter (`name` present, kebab-case,
   matching its directory; `description` present and within the 1024-character cap), plugin
-  manifests, `.claude-plugin/marketplace.json`, roadmap frontmatter (which `roadmap/README.md`
+  manifests, `.claude-plugin/marketplace.json` (each entry's `description` must equal its plugin manifest's), roadmap frontmatter (which `roadmap/README.md`
   defines, not this file), and the rule that every file under `commands/` and `agents/` is
   Markdown with frontmatter — the loader silently skips
   anything else. It prints `path: message` for every problem it finds — the same check CI runs on

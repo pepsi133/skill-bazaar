@@ -455,13 +455,13 @@ def check_plugins(repo_root: Path) -> list[Problem]:
     return problems
 
 
-def _manifest_name(manifest_path: Path) -> str | None:
+def _manifest_field(manifest_path: Path, field: str) -> str | None:
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if isinstance(data, dict) and isinstance(data.get("name"), str):
-        return data["name"]
+    if isinstance(data, dict) and isinstance(data.get(field), str):
+        return data[field]
     return None
 
 
@@ -554,13 +554,23 @@ def check_marketplace_json(repo_root: Path) -> list[Problem]:
                 )
             )
             continue
-        manifest_name = _manifest_name(manifest_path)
+        manifest_name = _manifest_field(manifest_path, "name")
         if name is not None and manifest_name is not None and manifest_name != name:
             problems.append(
                 Problem(
                     rel,
                     f"plugins[{idx}].name '{name}' does not match "
                     f"'{manifest_name}' in {manifest_path.relative_to(resolved_root)}",
+                )
+            )
+        # The manifest is the source of the description; the entry repeats it exactly.
+        manifest_desc = _manifest_field(manifest_path, "description")
+        if manifest_desc is not None and entry.get("description") != manifest_desc:
+            problems.append(
+                Problem(
+                    rel,
+                    f"plugins[{idx}].description differs from 'description' in "
+                    f"{manifest_path.relative_to(resolved_root)}; the manifest is the source",
                 )
             )
 
