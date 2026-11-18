@@ -94,6 +94,14 @@ it there instead of carrying its own copy to go stale.
 The `herdr` CLI, and a session running inside a Herdr-managed pane (`HERDR_ENV=1`). The skill
 checks this first and stops if it fails.
 
+The [`agent-delegation`](../agent-delegation/) skill, installed next to this one. This skill
+cites it for the delegation protocol and carries no copy, and no manifest field loads it for
+you:
+
+```bash
+claude plugin install agent-delegation@skill-bazaar
+```
+
 ## Install
 
 ```bash
