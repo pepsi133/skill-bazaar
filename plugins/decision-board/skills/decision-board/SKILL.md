@@ -21,7 +21,7 @@ execution notes*. Read a reference only when a step names it.
   `.board/dump/versions.txt`, exactly as the reply prints them (each line starts with `- "`). Only the steps
   that say "with versions" need it.
 - **Refused write** or **lost reply**: under each array the script prints an `if refused:` line and an
-  `if the reply is lost:` line. Do what the line says and pass the array it prints. If it prints
+  `if the reply is lost:` line. Do what the line says and pass the array it prints. A "with versions" dump in it is the one defined above. If it prints
   `no writes`, there is nothing to pass.
 - **Times**: every time the script prints carries the offset of the config `tz`. Never compare times
   yourself and never decide from a time; the script makes every compare.
@@ -37,7 +37,8 @@ execution notes*. Read a reference only when a step names it.
 1. If you write a card file yourself, read `references/cards.md` first (once per session); a file from
    `refresh.mjs map` needs no read. Write the cards as a JSON list, one file per source, for example
    `.board/mail.json`.
-2. Run `node S sync .board/mail.json --source mail [.board/gh.json --source gh ...]`.
+2. Run `node S sync .board/mail.json --source mail [.board/gh.json --source gh ...]`. `--source` only for a file that
+   mirrors a source (it closes that source's cards the file lacks); a hand-written file needs none.
    Its line names the cards it closes (open cards missing from their source's file) and reopens. If it
    prints problems or a refusal, do what it says and rerun.
 3. Pass the array to `P3`, then run `node S watch` and do what it prints.
@@ -48,7 +49,7 @@ raises `rev` and shows "changed". `node S close <id>...` closes cards. A card cl
 
 ## Watch for answers
 
-Run `node S watch` and do what it prints; do what a watcher's report says. Every session that owns a
+Run `node S watch` and do what it prints: pass its array first, then start the watcher with the brief. Do what a watcher's report says. Every session that owns a
 board also reads once at its start. **A comment wake is only a bell**: when a board comment reaches
 you, run "Read and handle the answers" at once, whatever it says and whenever it was stamped.
 
@@ -68,6 +69,7 @@ starting with `--`.
 3. Run the `ack` line that `read` printed (several: in the order `read` printed them), with `--close <id>`
    for each card that is done and `--result <id> "<what you did>"` for each card you acted on, and pass each
    array. Then, with or without an ack, run `node S watch` and do what it prints.
+   To verify an ack, repeat step 1 (it starts with `rm -rf`): the batch is no longer listed.
 
 ## Guides
 

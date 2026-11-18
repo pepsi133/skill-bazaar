@@ -700,9 +700,10 @@ ok("rules: check offers .board/rules.md when it is missing; read says nothing", 
   fs.writeFileSync(path.join(b.board, "rules.md"), "# Rules\n");
   const r = cmd(b, "check");
   assert.equal(r.code, 0, r.text);
-  assert.deepEqual([rulesLines(r), guideWrites(r)], [[], []]);
+  const none = [`rules: ${rf} holds no section, so there is no Rules tab. Add a "## " heading with its rules`];
+  assert.deepEqual([rulesLines(r), guideWrites(r)], [none, []]);
   assert.match(state(b).rules_md, /^[0-9a-f]{12}$/);
-  assert.deepEqual(rulesLines(cmd(b, "check")), []);
+  assert.deepEqual(rulesLines(cmd(b, "check")), none);
   assert.deepEqual(rulesLines(ok2(b, "read")), []);
 });
 ok("rules: a rules.md of plain text with no ## section posts nothing, like an empty file; a section added later is posted", () => {
@@ -711,10 +712,10 @@ ok("rules: a rules.md of plain text with no ## section posts nothing, like an em
   assert.deepEqual(rulesLines(ok2(b, "read")), [], "read names nothing");
   const r = cmd(b, "check");
   assert.equal(r.code, 0, r.text);
-  assert.deepEqual([rulesLines(r), guideWrites(r)], [[], []]);
+  assert.deepEqual([rulesLines(r), guideWrites(r)], [[`rules: ${rf} holds no section, so there is no Rules tab. Add a "## " heading with its rules`], []]);
   assert.match(state(b).rules_md, /^[0-9a-f]{12}$/, "the hash is stored");
   fs.writeFileSync(file, "Only plain text.\n");
-  assert.deepEqual([rulesLines(cmd(b, "check")), guideWrites(cmd(b, "check"))], [[], []]);
+  assert.deepEqual(guideWrites(cmd(b, "check")), []);
   fs.appendFileSync(file, "\n## Alerts\n- x\n");
   const r2 = cmd(b, "check");
   assert.ok(r2.lines.includes(`rules: ${rf} changed. Read it; check posts it as the guide rules in the array below`), r2.text);
@@ -796,7 +797,7 @@ ok("rules: read flags rule answers and standing notes", () => {
   apply(b, sync(b, [yn("rule-alerts", { source: "rules", title: "Add the alert rule?" })]));
   putDoc(b, "batches", "b9", batch("b9", "2026-01-09T00:00:00+00:00", { "rule-alerts": { answer: "Add it", note: "", rev: 1 } }));
   const l9 = block(ok2(b, "read"), "b9");
-  assert.ok(l9[0].endsWith("  [stale-rev]  (skip)") && !l9[0].includes("[rule]"), l9[0]);
+  assert.ok(l9[0].endsWith("  [stale-rev]  (skip; tell the operator: add --result rule-alerts \"answer not applied: the card changed since, answer again\" to the ack line)") && !l9[0].includes("[rule]"), l9[0]);
 });
 ok("rules: check refuses an invalid standing list", () => {
   const b = fresh();
@@ -822,7 +823,7 @@ ok("read: the batches that wait, one line per answer with the card id and what t
   const r = ok2(b, "read");
   assert.deepEqual(r.lines, [
     `batch ${BB}  "2026-01-03T00:00:00+00:00"  1 answers  1 notes`,
-    "  disk-size  \"\"  \"Which disk?\"  [stale-rev] [question]  (skip)",
+    "  disk-size  \"\"  \"Which disk?\"  [stale-rev] [question]  (skip; tell the operator: add --result disk-size \"answer not applied: the card changed since, answer again\" to the ack line)",
     "  note n20260103T000000+0000-cccc  item \"disk-size\"  \"Back up first.\\nThen grow it.\"  (act on it)",
     `  when handled: node ${SELF} ack ${BB} --dump ${b.dump} --state ${JSON.stringify(b.state)}`]);
   setState(b, (st) => { st.cards[0].rev = 1; });
@@ -2158,7 +2159,7 @@ const watchJson = (b) => JSON.parse(fs.readFileSync(b.wf, "utf8"));
 const setWatch = (b, x) => fs.writeFileSync(b.wf, JSON.stringify(Object.assign(watchJson(b), x)) + "\n");
 // The watcher's step as the brief names it: the watch file and an id (default: the one in the file).
 const poll = (b, id = watchJson(b).watcher) => sh("waiting", "--count", b.wf, "--watcher", id);
-const startLine = (mode, s, n, until) => `wake ${mode}: start one watcher, every ${s} s, at most ${n} polls, until ${until}. Pass the array below to P3, then start P6 with the lines between "--- brief" and "--- end" as its prompt.`;
+const startLine = (mode, s, n, until) => `wake ${mode}: start one watcher, every ${s} s, at most ${n} polls, until ${until}. Pass the array to P3 first, then start P6 with the lines between "--- brief" and "--- end" below it as its prompt.`;
 const limitLine = (mode, b) => `wake ${mode}: the watcher window ended at its poll limit; start none. Start a new one only when the operator asks you to watch again: node ${SELF} watch --restart --state ${JSON.stringify(b.state)}.` +
   (mode === "both" ? " A comment on the board still wakes you." : " Read the board when the operator asks.");
 const runsLine = (mode, b, until) => `wake ${mode}: a watcher runs until ${until}; start none. Only when the operator asks to watch again: node ${SELF} watch --restart --state ${JSON.stringify(b.state)}`;
@@ -2170,9 +2171,8 @@ ok("watch: poll starts one watcher, writes the watch file and the status window,
   const b = wakeBoard({ mode: "poll" }), r = cmd(b, "watch");
   assert.equal(r.code, 0, r.text);
   assert.equal(r.lines[0], startLine("poll", 300, 24, T14));
-  assert.equal(r.lines[1], "--- brief");
-  const e = r.lines.indexOf("--- end"), brief = r.lines.slice(2, e).join("\n");
-  assert.ok(e > 2);
+  const bi = r.lines.indexOf("--- brief"), e = r.lines.indexOf("--- end"), brief = r.lines.slice(bi + 1, e).join("\n");
+  assert.ok(bi > 1 && e > bi && r.lines.indexOf("no writes") < 0, "the array comes before the brief");
   assert.ok(brief.includes('ToolSearch("select:ArtifactData")'));
   assert.ok(brief.includes(`"url":"${URL1}"`) && brief.includes(`"out_dir":${JSON.stringify(b.wd)}`) && brief.includes('"where":[["status","==","sent"]]'), brief);
   const id = watchJson(b).watcher;
@@ -2195,8 +2195,19 @@ ok("watch: both uses 900 s and 32 polls by default, the config values when set, 
   r = cmd(wakeBoard({ mode: "both", poll_seconds: 600, poll_limit: 6 }), "watch");
   assert.equal(r.lines[0], startLine("both", 600, 6, "2026-02-01T13:00:00+00:00"));
 });
+ok("watch: before the first poll a second call prints the same brief again and writes nothing", () => {
+  const b = pollStarted(), first = watchJson(b), saved = fs.readFileSync(b.state, "utf8");
+  const r = cmd(b, "watch");
+  assert.equal(r.code, 0, r.text);
+  assert.ok(r.lines[0].includes("has not polled yet"), r.lines[0]);
+  assert.ok(r.lines.some((l) => l.endsWith(`--watcher ${first.watcher}`)), r.text);
+  assert.equal(r.lines.at(-1), "no writes");
+  assert.deepEqual(watchJson(b), first);
+  assert.equal(fs.readFileSync(b.state, "utf8"), saved);
+});
 ok("watch: a running watcher is not started again", () => {
   const b = pollStarted();
+  setWatch(b, { poll: 1 });
   assert.deepEqual(cmd(b, "watch").lines, [runsLine("poll", b, T14), "no writes"]);
 });
 ok("watch: after a batch report or a dead watcher a new one starts", () => {
@@ -2233,7 +2244,7 @@ ok("watch: at the poll limit it ends the window once and starts none; only watch
       const rs = cmd(b, "watch", "--restart");
       const until = mode === "poll" ? "2026-02-01T16:05:00+00:00" : "2026-02-01T22:05:00+00:00";
       assert.equal(rs.lines[0], startLine(mode, mode === "poll" ? 300 : 900, mode === "poll" ? 24 : 32, until));
-      assert.equal(rs.lines[1], "--- brief");
+      assert.equal(rs.lines.includes("--- brief"), true);
       assert.deepEqual(statusOut(rs).watch, { started: "2026-02-01T14:05:00+00:00", until });
       assert.deepEqual([watchJson(b).poll, "ended" in watchJson(b)], [0, false]);
     });
@@ -2473,7 +2484,7 @@ ok("waiting --count: a call without --watcher on a file with an id is out of dat
   }
   assert.deepEqual(fs.readdirSync(b.board).filter((f) => f.endsWith(".tmp")), []);
   const r = atNow("2026-02-01T12:20:00Z", () => cmd(b, "watch"));
-  assert.equal(r.lines[0], "wake poll: the watcher of this window stopped; start one watcher, every 300 s, at most 24 polls, until 2026-02-01T14:20:00+00:00. Pass the array below to P3, then start P6 with the lines between \"--- brief\" and \"--- end\" as its prompt.");
+  assert.equal(r.lines[0], "wake poll: the watcher of this window stopped; start one watcher, every 300 s, at most 24 polls, until 2026-02-01T14:20:00+00:00. Pass the array to P3 first, then start P6 with the lines between \"--- brief\" and \"--- end\" below it as its prompt.");
   apply(b, r);
   const id = watchJson(b).watcher;
   assert.ok(id !== old && !("stopped" in watchJson(b)) && watchJson(b).poll === 0, JSON.stringify(watchJson(b)));
@@ -2956,5 +2967,27 @@ ok("page: the published page is titled <board title> [DB]; no title or the gener
   const html = fs.readFileSync(out, "utf8");
   assert.ok(html.startsWith("<title>Lab &lt;net&gt; &amp; co [DB]</title>\n"));
   assert.equal(html.slice(html.indexOf("\n")), fs.readFileSync(path.join(SKILL, "assets", "board.html"), "utf8").slice(fs.readFileSync(path.join(SKILL, "assets", "board.html"), "utf8").indexOf("\n")));
+});
+ok("--help and -h print the usage and exit 0", () => {
+  for (const argv of [["--help"], ["-h"], ["sync", "--help"], ["watch", "-h"]]) { const r = sh(...argv); assert.equal(r.code, 0, argv.join(" ")); assert.ok(r.text.startsWith("Usage: node ")); }
+  assert.equal(sh().code, 2);
+});
+ok("sync: the no-link note needs a board that has link_hosts", () => {
+  const b = fresh();
+  cfgOf(b, (c) => { c.link_hosts = []; });
+  const r = sync(b, [Object.assign({}, T7, { links: undefined })], "--source", "tracker");
+  assert.equal(r.code, 0, r.text);
+  assert.deepEqual(r.lines.filter((l) => l.startsWith("note: no link")), []);
+});
+ok("read: a batch whose lines are all skipped says there is nothing to act on", () => {
+  const b = fresh();
+  putDoc(b, "batches", BB, batch(BB, "2026-01-03T00:00:00+00:00", { "disk-size": { answer: "Yes", note: "", rev: 1 } }));
+  const r = ok2(b, "read");
+  assert.ok(r.lines.some((l) => l.includes("[stale-rev]")), r.text);
+  assert.ok(r.lines.some((l) => l.startsWith("  nothing to act on here. when handled: node ")), r.text);
+});
+ok("wait.sh: the default cap keeps one call under the harness background limit", () => {
+  assert.match(fs.readFileSync(path.join(SKILL, "assets", "wait.sh"), "utf8"), /BOARD_WAIT_CAP:-150/);
+  assert.ok(fs.readFileSync(path.join(SKILL, "references", "watch.md"), "utf8").includes("Bash timeout of 170000 ms"));
 });
 fs.rmSync(tmp, { recursive: true, force: true });

@@ -876,7 +876,7 @@ function cmdSync(a, log) {
   if (size > MAX_DOC) fail(`sync: the cards document would be ${size} characters, over ${MAX_DOC}. Nothing changed. Close and purge old cards first`);
   log(`sync: ${n.new} new, ${n.rev} changed (rev up), ${n.changed} changed (same rev), ${n.same} unchanged, ${closed.length} closed${closed.length ? " (" + closed.join(", ") + ")" : ""}` +
     (reopened.length ? `, ${reopened.length} reopened (${reopened.join(", ")})` : "") + (dropped ? `, ${dropped} results dropped (rev up)` : ""));
-  if (noLink.length) log(`note: no link: ${noLink.length} cards`);
+  if (noLink.length && P.cfg.link_hosts.length) log(`note: no link: ${noLink.length} cards`);
   warn.slice(0, 3).forEach((l) => log(l));
   if (warn.length > 3) log(`warning: and ${warn.length - 3} more drafts that start with a label`);
   if (n.new + n.rev + n.changed + closed.length) { r.st.refreshed = t; r.putCards(); }
@@ -1029,8 +1029,9 @@ function cmdWaiting(a, log) {
 }
 // read: what the agent does with one answer or note line of a sent batch, printed in brackets at its end.
 // flags: the line's flags, a list. The script decides, the agent follows.
-function lineHint(flags, a) {
+function lineHint(flags, a, id) {
   const dir = shq(one(a, "dump")), st = stateArg(a);
+  if (flags.includes("[stale-rev]") && id) return `(skip; tell the operator: add --result ${id} "answer not applied: the card changed since, answer again" to the ack line)`;
   if (flags.includes("[stale-rev]") || flags.includes("[missing]")) return "(skip)";
   if (flags.includes("[other-rev]")) return `(skip; after the ack: rm -rf ${dir}, then P2 cards with versions, then node ${SELF} adopt cards --dump ${dir} --dumped${st})`;
   if (flags.includes("[question]")) return "(answer the note in the card text and post the card again)";
@@ -1056,6 +1057,8 @@ function cmdRead(a, log) {
   }
   for (const b of list) {
     const sent = b.status === "sent";
+    let lines = 0, live = 0;
+    const hint = (h) => { lines++; if (!h.startsWith("(skip")) live++; return h; };
     log(`batch ${qid(b.id)}  ${q(shown(b.created))}  ${b.itemIds.length} answers  ${b.noteIds.length} notes${nCtl(b) ? "  controls on " + nCtl(b) + " cards" : ""}${b.status === "handled" ? `  handled ${q(shown(b.handled_at))}` : ""}`);
     for (const key of b.itemIds) {
       const x = b.answers[key], flags = [], it = x && r.card(key);
@@ -1067,19 +1070,19 @@ function cmdRead(a, log) {
         if (x.note && !x.answer && P.optionsOf(c).length) flags.push("[question]");
       }
       if (!flags.length && it && lower(it.source) === "rules") flags.push("[rule]"); else if (!flags.length && x && stand.test(x.note || "")) flags.push("[standing]");
-      log(`  ${qid(key)}  ${q(x ? x.answer : "")}  ${q(x ? x.note : "")}${flags.length ? "  " + flags.join(" ") : ""}${sent ? "  " + lineHint(flags, a) : ""}`);
+      log(`  ${qid(key)}  ${q(x ? x.answer : "")}  ${q(x ? x.note : "")}${flags.length ? "  " + flags.join(" ") : ""}${sent ? "  " + hint(lineHint(flags, a, plainId(key) ? qid(key) : "")) : ""}`);
     }
     for (const e of controlsOf(b)) {
       const fl = ctlFlags(r, e).concat(sup.has(b.id + "\n" + e.id + "\n" + e.key) ? ["[superseded]"] : []);
-      log(`  ${qid(e.id)}  control ${e.key} ${ctlText(e)}${fl.length ? "  " + fl.join(" ") : ""}${b.status === "sent" ? "  " + ctlHint(r.card(e.id), e, fl) : ""}`);
+      log(`  ${qid(e.id)}  control ${e.key} ${ctlText(e)}${fl.length ? "  " + fl.join(" ") : ""}${b.status === "sent" ? "  " + hint(ctlHint(r.card(e.id), e, fl)) : ""}`);
     }
     for (const id of b.noteIds) {
       const nb = b.notes[id] || { text: "", item: "" }, nflags = [];
       if (stand.test(nb.text)) nflags.push("[standing]");
-      log(`  note ${qid(id)}${nb.item ? "  item " + q(nb.item) : ""}  ${q(nb.text)}${nflags.length ? "  " + nflags.join(" ") : ""}${sent ? "  " + lineHint(nflags, a) : ""}`);
+      log(`  note ${qid(id)}${nb.item ? "  item " + q(nb.item) : ""}  ${q(nb.text)}${nflags.length ? "  " + nflags.join(" ") : ""}${sent ? "  " + hint(lineHint(nflags, a)) : ""}`);
     }
     if (sent && r.st.pending["batches/" + b.id]) log("  " + pushHint(b.id, r));
-    else if (sent) log(`  when handled: node ${SELF} ack ${qid(b.id)} --dump ${shq(one(a, "dump"))}${stateArg(a)}`);
+    else if (sent) log(`  ${lines && !live ? "nothing to act on here. " : ""}when handled: node ${SELF} ack ${qid(b.id)} --dump ${shq(one(a, "dump"))}${stateArg(a)}`);
   }
   r.finish(() => {});
 }
@@ -1299,6 +1302,7 @@ function rulesState(r) {
 // The one rules line of check or read, or "". a: the parsed arguments, for the --state of the printed command.
 function rulesLine(rs, cmd, a) {
   if (cmd === "check" && !rs.exists) return `rules: no ${rel(rs.file)}. Read references/rules.md, "Start the rules", and follow it`;
+  if (cmd === "check" && rs.exists && !rs.sections && !rs.posted) return `rules: ${rel(rs.file)} holds no section, so there is no Rules tab. Add a "## " heading with its rules`;
   if (!rs.write) return "";
   if (cmd === "check" && !rs.sections) return `rules: ${rel(rs.file)} holds no section: the guide rules is removed in the array below`;
   if (cmd === "check") return `rules: ${rel(rs.file)} changed. Read it; check posts it as the guide rules in the array below`;
@@ -1833,6 +1837,11 @@ function cmdWatch(a, log) {
     }
     log(`wake ${w.mode}: the watcher window ended at its poll limit; start none. Start a new one only when the operator asks you to watch again: node ${SELF} watch --restart${stateArg(a)}.` + (w.comment ? " A comment on the board still wakes you." : " Read the board when the operator asks."));
     if (w.comment) log(COMMENTS_LINE);
+  } else if (cur && cur.poll === 0 && cur.watcher && r.st.url && !cur.reported && !cur.stopped && P.stampMs(cur.until) > nowMs() && !has(a, "restart")) {
+    // The window is recorded but no watcher has polled yet: the brief may have been lost. It is printed again; nothing is written.
+    log(`wake ${w.mode}: a watcher was set up until ${cur.until} and has not polled yet. If P6 was not started with this brief, start it now; else start none. Only when the operator asks to watch again: node ${SELF} watch --restart${stateArg(a)}`);
+    log("--- brief"); log(briefText(r.st.url, cur.dump, wf, cur.watcher)); log("--- end");
+    if (w.comment) log(COMMENTS_LINE);
   } else if (cur && cur.poll < cur.limit && !cur.reported && !cur.stopped && P.stampMs(cur.until) > nowMs() && !has(a, "restart")) {
     log(`wake ${w.mode}: a watcher runs until ${cur.until}; start none. Only when the operator asks to watch again: node ${SELF} watch --restart${stateArg(a)}`);
     if (w.comment) log(COMMENTS_LINE);
@@ -1852,9 +1861,11 @@ function cmdWatch(a, log) {
     const s = storedStatus(r); s.watch = { started: t, until }; putStatus(r, s);
     // stopped: waiting --count marked that no watcher of the window polls any more; plain watch says why it starts one.
     const why = cur && cur.stopped && !has(a, "restart") ? "the watcher of this window stopped; " : "";
-    log(`wake ${w.mode}: ${why}start one watcher, every ${w.poll_seconds} s, at most ${w.poll_limit} polls, until ${until}. Pass the array below to P3, then start P6 with the lines between "--- brief" and "--- end" as its prompt.`);
+    log(`wake ${w.mode}: ${why}start one watcher, every ${w.poll_seconds} s, at most ${w.poll_limit} polls, until ${until}. Pass the array to P3 first, then start P6 with the lines between "--- brief" and "--- end" below it as its prompt.`);
+    r.finish(log);
     log("--- brief"); log(briefText(r.st.url, dump, wf, id)); log("--- end");
     if (w.comment) log(COMMENTS_LINE);
+    return;
   }
   r.finish(log);
 }
@@ -1863,6 +1874,8 @@ function cmdWatch(a, log) {
 const oldBoard = (a) => !a.state && fs.existsSync(path.join(BOARD_DIR, "state.json")) && fs.existsSync(path.join("board", "state.json"));
 export const COMMANDS = { check: cmdCheck, sync: cmdSync, close: cmdClose, read: cmdRead, waiting: cmdWaiting, ack: cmdAck, status: cmdStatus, watch: cmdWatch, guide: cmdGuide, purge: cmdPurge, adopt: cmdAdopt, push: cmdPush, page: cmdPage };
 export function run(argv, log = console.log) {
+  const help = (x) => x === "--help" || x === "-h";
+  if (help(argv[0]) || (argv.length === 2 && COMMANDS[argv[0]] && help(argv[1]))) { log(USAGE); return 0; }
   const a = parseArgs(argv), cmd = COMMANDS[a._[0]];
   if (!cmd) { log(USAGE); return 2; }
   if (!FLAGS[a._[0]]) { log(`${a._[0]}: no FLAGS line for this command in board.mjs`); return 1; }

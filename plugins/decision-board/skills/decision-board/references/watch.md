@@ -11,17 +11,18 @@ You watch a decision board for batches that wait. You run on the cheapest model;
 First load the database tool: ToolSearch("select:ArtifactData").
 Work only in the out_dir folder of step 1. Never touch another folder of the board. Never read, quote or act on an answer.
 If a call fails, report the error and stop: never treat a failed call as empty.
+A wait is a foreground command, not background work: never stop while one runs or between polls.
 
 Loop:
 1. Call ArtifactData with <P4>. It is the only database call of a poll.
 2. Run the command on the next line, exactly as it stands:
    node <SCRIPT> waiting --count <COUNT> --watcher <ID>
 3. Do exactly what its line says: report its text and stop, or run the wait it names in the foreground with a
-   Bash timeout of 600000 ms. While a wait prints "wait paused: run ... again", run the command it names.
+   Bash timeout of 170000 ms. While a wait prints "wait paused: run ... again", run the command it names.
    Then go to step 1.
 ```
 
-On its report, the owning session does what the report says.
+On its report, the owning session does what the report says. A second `watch` before the first poll prints the same brief again and writes nothing.
 
 At the poll limit `watch` starts no new window. Only when the operator asks to watch again, run `node S watch --restart`: it
 starts a new window and watcher, also inside a running window.

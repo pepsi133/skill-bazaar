@@ -20,7 +20,7 @@ and refuses an unknown field.
 | `source` | A short word for where the card came from; it chooses the tab. `sync --source <s>` sets it on every card of the file |
 | `blocks` | What waits for the card, for example `the nightly backup`. The card then shows in "Blocked on you" |
 | `status` | `open` (default) or `closed` |
-| `links` | Optional. Up to 10 `{"label", "url"}`; `sync` prints one `note: no link: <n> cards` line for the open cards without one that it adds or changes; cards with `source` `rules` are not counted. A url must parse, use `https:`, carry no user name or password, and have a host of the config `link_hosts` or a subdomain of one. Give the link of the item when it has one |
+| `links` | Optional. Up to 10 `{"label", "url"}`; with config `link_hosts` set, `sync` prints one `note: no link: <n> cards` line for the open cards without one that it adds or changes; cards with `source` `rules` are not counted. A url must parse, use `https:`, carry no user name or password, and have a host of the config `link_hosts` or a subdomain of one. Give the link of the item when it has one |
 | `tags` | Tag ids from the config `tags`, each once, matched exactly |
 | `first_asked` | `{"date": "YYYY-MM-DD", "who": "<id>"}`: when the question was first put to the operator, and by whom. Required on every open card whose kind is not `info`. A real date in the config `tz`, no later than tomorrow. `who` is optional: at most 40 of the id characters. A card posted again keeps the stored value |
 | `due` | Optional. `YYYY-MM-DD`, a day in the config `tz`, for a real deadline (a form, a review, a renewal). Only a date the source states; never infer one. From that day the card also shows in "Due today" until it is closed. Post it again without `due` to remove it |
