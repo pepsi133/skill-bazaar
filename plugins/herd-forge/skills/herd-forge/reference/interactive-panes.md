@@ -1,7 +1,6 @@
 # Driving an interactive program from a pane
 
-`SKILL.md` section 3 says why a pane and not a pipe. This file is the driving loop and the
-traps.
+`herd-delegation` says why a pane and not a pipe. This file is the driving loop and the traps.
 
 Reach for a pane for a language REPL, an `ssh` or `sudo` password prompt, `docker attach`,
 a TUI installer, `git rebase -i`, or a database shell. It covers a test runner that

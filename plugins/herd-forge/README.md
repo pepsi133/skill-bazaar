@@ -53,6 +53,11 @@ here.
   supports. The list goes to stderr, so a stdout-only capture comes back empty, and
   `herdr agent --help` does not print it at all.
 - **`git`**, because the forge makes one repository per agent directory.
+- **The `herd-delegation` and `agent-delegation` skills**, installed next to this plugin.
+  The skill cites them for the single-pane layer and for the delegation protocol, and
+  carries no copy. No manifest field loads them for you, so install both:
+  `claude plugin install herd-delegation@skill-bazaar` and
+  `claude plugin install agent-delegation@skill-bazaar`.
 
 `herdr --skill` prints the Herdr command reference and is the authority on syntax. The
 skill points at it rather than copying it.
