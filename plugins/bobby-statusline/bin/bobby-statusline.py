@@ -95,10 +95,13 @@ def read_json(path: str) -> dict | None:
     return val if isinstance(val, dict) else None
 
 
-# C0, DEL, C1, and the bidi overrides. C1 matters because 0x9b is a second
-# CSI introducer in some terminals, and the bidi marks can visually reorder a
-# row so that a low percentage reads as a high one.
-CONTROL = re.compile(r"[\x00-\x1f\x7f\u0080-\u009f\u202a-\u202e\u2066-\u2069]")
+# C0, DEL, C1, the direction marks, overrides and isolates, and the two line
+# separators. C1 matters because 0x9b is a second CSI introducer in some
+# terminals, a direction mark can visually reorder a row so that a low
+# percentage reads as a high one, and a line separator can break the row.
+CONTROL = re.compile(
+    r"[\x00-\x1f\x7f\u0080-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]"
+)
 
 
 def clean(text, cap: int = 64) -> str:
@@ -332,10 +335,35 @@ def limit_guard_state(mod) -> dict:
 def _num(val, fallback=0.0) -> float:
     try:
         num = float(val)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: a 400-digit integer
         return fallback
     # NaN and infinity are not numbers a row can show.
     return num if num - num == 0 else fallback
+
+
+def _real(val):
+    """A number of the payload as a float, or None when it is not a finite number."""
+    if isinstance(val, bool) or not isinstance(val, (int, float, str)):
+        return None
+    try:
+        num = float(val)
+    except (ValueError, OverflowError):
+        return None
+    return num if num - num == 0 else None
+
+
+def _clock(ts: float, now: float) -> str:
+    """fmt_short, or '' for a time that is no date a row can show.
+
+    That is a time the platform cannot convert, and one more than 400 days
+    away: a weekday and an hour say nothing about the year 30 billion.
+    """
+    if abs(ts - now) > 400 * 86400:
+        return ""
+    try:
+        return fmt_short(ts, now)
+    except (ValueError, OverflowError, OSError):
+        return ""
 
 
 def _obj(data: dict, key: str) -> dict:
@@ -349,13 +377,7 @@ def _cost(val):
 
     A numeric string counts: the payload is JSON from another program.
     """
-    if isinstance(val, bool) or not isinstance(val, (int, float, str)):
-        return None
-    try:
-        num = float(val)
-    except ValueError:
-        return None
-    return num if num - num == 0 else None
+    return _real(val)
 
 
 # --------------------------------------------------------------------------
@@ -573,26 +595,33 @@ def cache_segment(cache: dict, now: float, g: dict) -> tuple:
 # keeps a byte offset and the running totals for each transcript in a sidecar
 # file and reads only what was appended.
 
-LEDGER_BUDGET_MS = 15.0  # reading time per render. The next render continues.
-LEDGER_SCHEMA = 2
+# Time for looking at and reading transcripts in one render. The interpreter
+# start and the rest of the render leave about this much of the 50 ms.
+LEDGER_BUDGET_MS = 5.0
+LEDGER_SCHEMA = 3
 LEDGER_IDS = 16  # message ids remembered per transcript
 LEDGER_IDLE_S = 600  # a transcript this quiet keeps only its newest id
-LEDGER_ID_FILES = 32  # transcripts that keep the whole id map, newest first
+LEDGER_ID_FILES = 32  # transcripts looked at on every render, newest first
 LEDGER_PRUNE_S = 30 * 86400
 LEDGER_MAX_FILES = 2000
 LEDGER_MAX_DIRS = 512
 LEDGER_MAX_DEPTH = 3  # subagents/workflows/<id>/agent-*.jsonl
+LEDGER_SETTLE_NS = 2 * 10**9  # a directory changed this recently is listed again
 LEDGER_CHUNK = 1 << 20
 LEDGER_MAX_LINE = 4 << 20  # a longer line is skipped, never held in memory
 LEDGER_HEAD = 256  # bytes of a transcript that identify it
 LEDGER_MAX_SIDECAR = 8 << 20
 LEDGER_MAX_MODELS = 32
+REQUEST_MAX = 10**9  # tokens in one field of one request. More is not a request.
 TOKEN_MAX = 10**15  # one stored number
 TOKENS_SANE = 10**12  # a session total above this is not shown
 USD_SANE = 100000.0
 
 SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 SIDECAR_RE = re.compile(r"(?:[A-Za-z0-9_-]{1,64}\.json|\.[A-Za-z0-9_-]{1,64}\.[0-9]+\.tmp)")
+# The cheap test for a line that can be an API response. Claude Code writes
+# no space around the colon; another writer may.
+ASSISTANT_RE = re.compile(rb'"type"\s*:\s*"assistant"')
 
 # A usage tuple: input, output, cache read, cache write 5m, cache write 1h,
 # web search requests.
@@ -705,8 +734,8 @@ def _where(entry) -> tuple:
     """(offset, inode, mtime) of an entry: all that an unchanged transcript needs.
 
     A session can have a thousand subagent transcripts, and nearly all of them
-    are finished. Their entries get this check on every render, and the full
-    one only when they are read or added up again.
+    are finished. Their entries get this check when they are looked at, and
+    the full one only when they are read.
     """
     if type(entry) is not dict:
         raise ValueError("entry")
@@ -714,6 +743,20 @@ def _where(entry) -> tuple:
     if type(off) is not int or type(ino) is not int or type(mt) is not int or off < 0:
         raise ValueError("entry")
     return off, ino, mt
+
+
+def _key_path(session: str, key: str) -> str:
+    """The transcript a sidecar key names. ValueError for a key that is no such name.
+
+    A key comes from a file that anyone with access to the configuration
+    directory can write, so it must not be able to name a file elsewhere.
+    """
+    parts = key.split("/")
+    if not 1 <= len(parts) <= LEDGER_MAX_DEPTH or any(p in ("", ".", "..") for p in parts):
+        raise ValueError("key")
+    if "\x00" in key or not (parts[-1].startswith("agent-") and parts[-1].endswith(".jsonl")):
+        raise ValueError("key")
+    return os.path.join(session, "subagents", *parts)
 
 
 def ledger_count(entry: dict, line: bytes, threshold) -> None:
@@ -728,7 +771,7 @@ def ledger_count(entry: dict, line: bytes, threshold) -> None:
     """
     if b'"usage"' not in line:
         return
-    if b'"type":"assistant"' not in line and b'"type": "assistant"' not in line:
+    if b'"type":"assistant"' not in line and not ASSISTANT_RE.search(line):
         return
     try:
         obj = json.loads(line)
@@ -742,6 +785,10 @@ def ledger_count(entry: dict, line: bytes, threshold) -> None:
         return
 
     tup = usage_tuple(usage)
+    if max(tup) > REQUEST_MAX:
+        # No request has a billion tokens. One broken line must not turn the
+        # total of the whole session into "$?", so it is left out, id and all.
+        return
     ids = entry["ids"]
     mid = msg.get("id")
     mid = clean(mid, 128) if isinstance(mid, str) and mid else None
@@ -759,7 +806,12 @@ def ledger_count(entry: dict, line: bytes, threshold) -> None:
         return
 
     model = msg.get("model")
-    model = clean(model, 96) if isinstance(model, str) and model else "?"
+    model = clean(model, 512) if isinstance(model, str) and model else "?"
+    if len(model) > 96:
+        # A long id is a provider form, such as an inference profile ARN. Its
+        # model is found first; the cut comes after.
+        name, fast = model_name(model)
+        model = (name + (FAST_TAIL if fast else ""))[:96]
     totals = entry["t"]
     if model not in totals and len(totals) >= LEDGER_MAX_MODELS:
         model = "?"
@@ -772,7 +824,7 @@ def ledger_count(entry: dict, line: bytes, threshold) -> None:
         bucket[i] = min(TOKEN_MAX, bucket[i] + n)
 
 
-def ledger_scan(path: str, entry: dict, info, deadline: float, threshold) -> bool:
+def ledger_scan(path: str, entry: dict, deadline: float, threshold) -> bool:
     """Read what was appended to one transcript. False when the time ran out.
 
     The offset moves only past complete lines, so a line that Claude Code is
@@ -782,9 +834,16 @@ def ledger_scan(path: str, entry: dict, info, deadline: float, threshold) -> boo
     into it the scan is, and a later render goes on from there.
     """
     with os.fdopen(open_regular(path), "rb") as fh:
+        info = os.fstat(fh.fileno())
         head = fh.read(LEDGER_HEAD)
-        if entry["hn"] and binascii.crc32(head[: entry["hn"]]) != entry["hc"]:
-            # Other content under the same name. The totals belong to the old one.
+        if (
+            info.st_size < entry["off"]
+            or (entry["ino"] and entry["ino"] != info.st_ino)
+            or (entry["hn"] and binascii.crc32(head[: entry["hn"]]) != entry["hc"])
+        ):
+            # Truncated, replaced, or other content under the same name. The
+            # totals belong to bytes that are gone.
+            entry.clear()
             entry.update(_new_entry())
         entry["ino"], entry["mt"] = info.st_ino, info.st_mtime_ns
         entry["hn"], entry["hc"] = len(head), binascii.crc32(head)
@@ -828,38 +887,78 @@ def ledger_scan(path: str, entry: dict, info, deadline: float, threshold) -> boo
             entry["off"] += whole
 
 
-def ledger_files(transcript: str) -> list:
-    """(key, path) of every subagent transcript of a session, symlinks refused."""
+def ledger_files(transcript: str, wall_ns: int) -> tuple:
+    """(keys, cut, dirs): the subagent transcripts of a session.
+
+    `keys` are paths below the `subagents` directory, sorted. `cut` is True
+    when a limit left transcripts out: more than LEDGER_MAX_FILES files, more
+    than LEDGER_MAX_DIRS directories, or a directory below LEDGER_MAX_DEPTH.
+    `dirs` maps each directory that was listed to its modification time, which
+    changes when a file is added to it or removed from it, so the next render
+    can tell that the list still holds. A symlink is never followed:
+    `follow_symlinks=False` makes one neither a directory nor a file here.
+    """
     session = transcript[: -len(".jsonl")]
+    stack, found, dirs, cut = [(os.path.join(session, "subagents"), "", 1)], [], {}, False
     if os.path.islink(session):
-        return []
-    stack, found, scanned = [(os.path.join(session, "subagents"), "", 1)], [], 0
-    while stack and scanned < LEDGER_MAX_DIRS and len(found) < LEDGER_MAX_FILES:
+        return [], False, {"": 0}
+    while stack:
+        if len(dirs) >= LEDGER_MAX_DIRS:
+            cut = True
+            break
         path, rel, depth = stack.pop()
-        scanned += 1
         try:
-            if os.path.islink(path):
+            info = os.lstat(path)
+            if not stat.S_ISDIR(info.st_mode):  # a symlink is not one to lstat
+                dirs[rel] = 0
                 continue
+            # A change in the same clock tick as this listing would be missed,
+            # so a directory that changed just now is listed again next time.
+            changed = info.st_mtime_ns
+            dirs[rel] = changed if wall_ns - changed > LEDGER_SETTLE_NS else 0
             with os.scandir(path) as it:
                 for item in it:
                     name = item.name
-                    if item.is_symlink():
-                        continue
                     if item.is_dir(follow_symlinks=False):
                         if depth < LEDGER_MAX_DEPTH:
                             stack.append((item.path, rel + name + "/", depth + 1))
+                        else:
+                            cut = True
                     elif (
                         name.startswith("agent-")
                         and name.endswith(".jsonl")
                         and item.is_file(follow_symlinks=False)
                     ):
-                        found.append((rel + name, item.path))
-                        if len(found) >= LEDGER_MAX_FILES:
-                            break
+                        found.append(rel + name)
         except OSError:
+            dirs[rel] = 0
             continue
     found.sort()
-    return found
+    if len(found) > LEDGER_MAX_FILES:
+        found, cut = found[:LEDGER_MAX_FILES], True
+    return found, cut, dirs
+
+
+def ledger_listed(transcript: str, dirs) -> bool:
+    """True when no directory changed since the subagent transcripts were listed."""
+    if type(dirs) is not dict or not dirs or len(dirs) > LEDGER_MAX_DIRS:
+        return False
+    session = transcript[: -len(".jsonl")]
+    if os.path.islink(session):
+        return False
+    for rel, changed in dirs.items():
+        if type(changed) is not int or changed <= 0 or type(rel) is not str:
+            return False
+        parts = [p for p in rel.split("/") if p]
+        if len(parts) >= LEDGER_MAX_DEPTH or any(p in (".", "..") for p in parts):
+            return False
+        try:
+            info = os.lstat(os.path.join(session, "subagents", *parts))
+        except OSError:
+            return False
+        if not stat.S_ISDIR(info.st_mode) or info.st_mtime_ns != changed:
+            return False
+    return True
 
 
 def ledger_dir() -> str:
@@ -879,6 +978,12 @@ def ledger_dir_ok() -> bool:
     return True
 
 
+def _key_list(raw, top: int) -> list:
+    if type(raw) is not list or len(raw) > top or not all(type(key) is str for key in raw):
+        raise ValueError("keys")
+    return raw
+
+
 def ledger_load(path: str, transcript: str, tiers: list) -> dict | None:
     """The sidecar of a session. None means start from zero.
 
@@ -889,19 +994,20 @@ def ledger_load(path: str, transcript: str, tiers: list) -> dict | None:
             raw = json.loads(fh.read(LEDGER_MAX_SIDECAR))
         if not isinstance(raw, dict) or raw.get("v") != LEDGER_SCHEMA:
             return None
+        # A sidecar is for one transcript. The session id alone is not enough:
+        # the same id with another path is another file.
         if raw.get("path") != transcript or type(raw.get("sub")) is not dict:
             return None
         # The thresholds decided which bucket a request went to.
-        if raw.get("tiers") != tiers or type(raw.get("cur")) is not str:
+        if raw.get("tiers") != tiers or type(raw.get("cut")) is not bool:
             return None
-        live = raw.get("live")
-        if type(live) is not list or len(live) > 2 * LEDGER_ID_FILES or len(raw["sub"]) > LEDGER_MAX_FILES:
+        if len(raw["sub"]) > LEDGER_MAX_FILES:
             return None
-        if not all(type(key) is str for key in live):
-            return None
+        _key_list(raw.get("live"), 2 * LEDGER_ID_FILES)
+        _key_list(raw.get("todo"), LEDGER_MAX_FILES + 1)
         _checked_entry(raw.get("main"))
         _checked_totals(raw.get("sum"), 4 * LEDGER_MAX_MODELS)
-        return {key: raw[key] for key in ("cur", "live", "main", "sub", "sum")}
+        return {key: raw.get(key) for key in ("cut", "dirs", "todo", "live", "main", "sub", "sum")}
     except (OSError, ValueError, RecursionError):
         return None
 
@@ -921,24 +1027,15 @@ def ledger_save(session_id: str, transcript: str, tiers: list, state: dict) -> N
     if not fresh and not stat.S_ISREG(os.lstat(dest).st_mode):
         raise OSError("not a regular file: %s" % dest)
 
-    body = json.dumps(
-        {
-            "v": LEDGER_SCHEMA,
-            "path": transcript,
-            "tiers": tiers,
-            "cur": state["cur"],
-            "live": state["live"],
-            "main": state["main"],
-            "sub": state["sub"],
-            "sum": state["sum"],
-        },
-        separators=(",", ":"),
-    ).encode("utf-8")
+    body = dict(state, v=LEDGER_SCHEMA, path=transcript, tiers=tiers)
+    body = json.dumps(body, separators=(",", ":")).encode("utf-8")
     tmp = os.path.join(ledger_dir(), ".%s.%d.tmp" % (session_id, os.getpid()))
     try:
         os.unlink(tmp)
     except OSError:
         pass
+    # O_EXCL and O_NOFOLLOW: a name that appears between the unlink and this
+    # open, a symlink included, makes the open fail. It is never written through.
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(tmp, flags, 0o600)
     try:
@@ -972,12 +1069,12 @@ def ledger_prune(wall: float) -> None:
         pass
 
 
-def _merge_totals(into: dict, totals: dict) -> None:
+def _merge_totals(into: dict, totals: dict, sign: int = 1) -> None:
     for model, buckets in totals.items():
         for name, tup in buckets.items():
             bucket = into.setdefault(model, {}).setdefault(name, list(ZERO))
             for i, n in enumerate(tup):
-                bucket[i] += n
+                bucket[i] = max(0, bucket[i] + sign * n)
 
 
 def ledger_totals(data: dict, table: dict | None = None) -> dict | None:
@@ -985,8 +1082,9 @@ def ledger_totals(data: dict, table: dict | None = None) -> dict | None:
 
     `main` and `sub` map a model id to its buckets, {'n': tuple, 'f': tuple, ...}.
     `table` is the price table, which holds the long-prompt thresholds. None
-    means there is nothing to estimate from: no transcript, no usable session
-    id, or a failure. This function never raises.
+    means there is no number to show: no transcript, no usable session id, a
+    failure, or a scan that is not complete and cannot keep its progress. This
+    function never raises.
     """
     if table is None:
         table = price_table()
@@ -1001,6 +1099,11 @@ def ledger_totals(data: dict, table: dict | None = None) -> dict | None:
         return None
 
 
+def _walk_start(count: int) -> int:
+    """Where the look at the transcripts that are not in work starts in this render."""
+    return time.time_ns() // 1000 % count
+
+
 def _ledger_totals(data: dict, table: dict, fresh: bool) -> dict | None:
     session_id = data.get("session_id")
     transcript = data.get("transcript_path")
@@ -1008,6 +1111,8 @@ def _ledger_totals(data: dict, table: dict, fresh: bool) -> dict | None:
         return None
     if not isinstance(transcript, str) or not transcript.endswith(".jsonl"):
         return None
+    # Relative to what? The status line does not know the directory that
+    # Claude Code meant, so a relative path names no transcript.
     if not os.path.isabs(transcript) or "\x00" in transcript:
         return None
     try:
@@ -1018,44 +1123,70 @@ def _ledger_totals(data: dict, table: dict, fresh: bool) -> dict | None:
     if not ledger_dir_ok():
         return None
 
+    session = transcript[: -len(".jsonl")]
     tiers = price_tiers(table)
     sidecar = os.path.join(ledger_dir(), session_id + ".json")
     state = None if fresh else ledger_load(sidecar, transcript, tiers)
+    dirty = False
     if state is None:
-        state = {"cur": "", "live": [], "main": _new_entry(), "sub": {}, "sum": {}}
+        state = {"cut": False, "dirs": None, "todo": [""], "live": [],
+                 "main": _new_entry(), "sub": {}, "sum": {}}
+    sub, todo = state["sub"], state["todo"]
 
-    # First every file is looked at, which is one lstat each and has no time
-    # limit: without it "nothing changed" cannot be told from "not looked at".
-    dirty, resum, mtimes, pending = False, False, {}, []
-    for key, path in [("", transcript)] + ledger_files(transcript):
+    def entry_of(key):
+        return sub.get(key) if key else state["main"]
+
+    def path_of(key):
+        return _key_path(session, key) if key else transcript
+
+    # 1. Which transcripts exist. A directory's modification time changes when
+    # a file is added or removed, so the list is made again only then.
+    if not ledger_listed(transcript, state["dirs"]):
+        found, cut, dirs = ledger_files(transcript, time.time_ns())
+        names = set(found)
+        # A list that is the same as before changes nothing, so it writes
+        # nothing: a session with no subagents is listed on every render.
+        if (cut, dirs) != (state["cut"], state["dirs"]) or names != set(sub):
+            dirty = True
+        state["cut"], state["dirs"] = cut, dirs
+        for key in [key for key in sub if key not in names]:
+            # Gone, or beyond a limit now. Its tokens leave the sum with it, so
+            # that the sidecar never holds more entries than it may load.
+            gone = sub.pop(key)
+            _merge_totals(state["sum"], _checked_totals(gone.get("t") if type(gone) is dict else None), -1)
+        for key in found:
+            if key not in sub:
+                sub[key] = _new_entry()
+                todo.append(key)
+        todo[:] = [key for key in dict.fromkeys(todo) if key == "" or key in sub]
+        state["live"] = [key for key in state["live"] if key in sub]
+    waiting = set(todo)
+
+    # 2. Which of them changed. The main transcript and the ones written last
+    # are looked at on every render. That is one lstat each.
+    mtimes = {}
+
+    def changed(key) -> bool:
+        entry = entry_of(key)
+        if entry is None:
+            return False
         try:
-            info = os.lstat(path)
+            info = os.lstat(path_of(key))
         except OSError:
-            continue
+            return False
         if not stat.S_ISREG(info.st_mode):
-            continue
+            return False
         mtimes[key] = info.st_mtime
-        entry = state["sub"].get(key) if key else state["main"]
-        known = entry is not None
-        if not known:
-            entry, off, mt = _new_entry(), 0, 0
-        else:
-            off, ino, mt = _where(entry)
-            if info.st_size < off or (ino and ino != info.st_ino):
-                # Truncated or replaced. The totals belong to bytes that are gone.
-                entry.clear()
-                entry.update(_new_entry())
-                off, mt, dirty, resum = 0, 0, True, resum or bool(key)
-        if info.st_size != off or (mt and mt != info.st_mtime_ns):
-            # More bytes, or the same number of bytes written at another time.
-            # The second case costs one open, which compares the first bytes.
-            pending.append((key, path, entry, info, known))
+        off, ino, mt = _where(entry)
+        # More or fewer bytes, another file, or the same bytes at another time.
+        return info.st_size != off or (ino and ino != info.st_ino) or (mt and mt != info.st_mtime_ns)
 
-    # Then the reading, inside the time limit. It starts after the file the
-    # last render read, so a file that never stops growing cannot starve the
-    # others.
-    start = next((i for i, item in enumerate(pending) if item[0] >= state["cur"]), 0)
-    pending = pending[start:] + pending[:start]
+    hot = [""] + state["live"]
+    for key in reversed(hot):
+        if key not in waiting and changed(key):
+            todo.insert(0, key)
+            waiting.add(key)
+
     cache = {}
 
     def threshold(model):
@@ -1064,50 +1195,85 @@ def _ledger_totals(data: dict, table: dict, fresh: bool) -> dict | None:
             cache[model] = hit[0][5][0] if hit and hit[0][5] else None
         return cache[model]
 
-    partial, read, cursor, touched = False, 0, "", set()
-    deadline = time.perf_counter() + LEDGER_BUDGET_MS / 1000.0
-    for i, (key, path, entry, info, known) in enumerate(pending):
-        if i and time.perf_counter() >= deadline:
-            partial, cursor = True, key
-            break
-        if known:
-            _checked_entry(entry)
-        before = entry["off"]
+    read, touched = 0, set()
+
+    def scan(key) -> bool:
+        """Read one transcript. True when it is read to its end, or cannot be read."""
+        nonlocal read
+        entry = entry_of(key)
+        if entry is None:
+            return True
+        _checked_entry(entry)
+        before, was = entry["off"], json.loads(json.dumps(entry["t"])) if key else None
         try:
-            done = ledger_scan(path, entry, info, deadline, threshold)
+            done = ledger_scan(path_of(key), entry, deadline, threshold)
         except OSError:
-            continue
+            return True
         read += max(0, entry["off"] - before)
-        dirty = True
         touched.add(key)
+        mtimes[key] = entry["mt"] / 1e9
         if key:
-            state["sub"][key] = entry
-            resum = True
-        if not done:
-            partial = True
-            cursor = pending[i + 1][0] if i + 1 < len(pending) else ""
+            _merge_totals(state["sum"], was, -1)
+            _merge_totals(state["sum"], entry["t"], 1)
+        return done
+
+    # 3. The reading, inside the time limit. Each transcript in turn: one that
+    # is not finished goes to the end of the line, so a transcript that never
+    # stops growing cannot keep the others waiting. The first one always moves,
+    # whatever the clock says.
+    deadline = time.perf_counter() + LEDGER_BUDGET_MS / 1000.0
+    moved = False
+    for _ in range(len(todo)):
+        if moved and time.perf_counter() >= deadline:
+            break
+        key = todo.pop(0)
+        waiting.discard(key)
+        moved = dirty = True
+        if not scan(key):
+            todo.append(key)
+            waiting.add(key)
             break
 
-    if resum:
-        # The sum of the subagent transcripts is kept, so a render that found
-        # none of them changed does not add up a thousand entries.
-        state["sum"] = {}
-        for entry in state["sub"].values():
-            _merge_totals(state["sum"], _checked_totals(entry.get("t") if type(entry) is dict else None))
+    # 4. With time left, the other transcripts are looked at. One that
+    # changed is seen a few renders late when there are more of them than the
+    # time allows. The round starts at another place on every render, so no
+    # part of the list waits for ever, and the place is not kept: to keep it
+    # would write the whole sidecar on every render.
+    if not todo and len(sub) > len(hot) - 1:
+        keys = list(sub)
+        first = _walk_start(len(keys))
+        seen = set(hot)
+        for step in range(len(keys)):
+            # The clock is not asked before the first 16, so every render
+            # gets somewhere.
+            if step and step % 16 == 0 and time.perf_counter() >= deadline:
+                break
+            key = keys[(first + step) % len(keys)]
+            if key in seen or not changed(key):
+                continue
+            dirty = True
+            if time.perf_counter() >= deadline or not scan(key):
+                todo.append(key)
+                break
+
+    partial = bool(todo) or state["cut"]
     if dirty:
-        state["cur"] = cursor
         # The whole id map is for the transcripts that are being written now.
         # Every other one keeps its newest id, which is the one that the next
         # line of a resumed transcript can still belong to. `live` names the
-        # entries that still have a whole map, so only those are visited.
+        # subagent transcripts that have a whole map, and they are the ones
+        # looked at on every render. The main transcript always is.
         wall = time.time()
+
+        def idle(key) -> bool:
+            return key not in mtimes or wall - mtimes[key] > LEDGER_IDLE_S
+
         named = touched.union(state["live"])
-        live = sorted(
-            (key for key in named if key in mtimes and wall - mtimes[key] <= LEDGER_IDLE_S),
-            key=mtimes.get, reverse=True,
-        )[:LEDGER_ID_FILES]
-        for key in named.difference(live):
-            entry = state["sub"].get(key) if key else state["main"]
+        named.discard("")
+        live = sorted((key for key in named if not idle(key)), key=mtimes.get, reverse=True)
+        live = live[:LEDGER_ID_FILES]
+        for key in named.difference(live).union([""] if idle("") else []):
+            entry = entry_of(key)
             if entry is not None and len(_checked_entry(entry)["ids"]) > 1:
                 newest = next(reversed(entry["ids"]))
                 entry["ids"] = {newest: entry["ids"][newest]}
@@ -1115,9 +1281,12 @@ def _ledger_totals(data: dict, table: dict, fresh: bool) -> dict | None:
         try:
             ledger_save(session_id, transcript, tiers, state)
         except OSError:
-            # The totals of this render are still right. Without a sidecar the
-            # next render starts from zero again.
-            pass
+            # Without a sidecar the next render starts from zero. A total that
+            # was read to the end in this render is right and is shown. One
+            # that was not would be another number on every render, lower as
+            # often as higher, so it is not shown.
+            if todo:
+                return None
 
     return {"main": state["main"]["t"], "sub": state["sum"], "partial": partial, "read": read}
 
@@ -1159,7 +1328,12 @@ FAST_FACTOR = 2.0  # on the token prices
 PRICE_MAX = 100000.0  # USD per million tokens. Above this a row is a mistake.
 THRESHOLD_MAX = 10**9
 
-MODEL_TAIL = re.compile(r"(?:\[1m\]|-v[0-9]+(?::[0-9]+)?|-[0-9]{8})$")
+# What may follow a model id. A date is a real one, 2020 to 2099. A version is
+# the `-v1:0` of a Bedrock id, and only there.
+DATE_TAIL = re.compile(r"-(20[2-9][0-9])(0[1-9]|1[0-2])([0-3][0-9])$")
+MONTH_DAYS = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+BEDROCK_TAIL = re.compile(r"-v[0-9]+:[0-9]+$")
+LONG_TAIL = "[1m]"
 FAST_TAIL = "-fast"
 
 
@@ -1171,7 +1345,10 @@ def _price_num(val, top: float = PRICE_MAX):
     """A price as a float, or None. NaN and infinity fail the comparison."""
     if isinstance(val, bool) or not isinstance(val, (int, float)):
         return None
-    return float(val) if 0 <= val <= top else None
+    try:
+        return float(val) if 0 <= val <= top else None
+    except OverflowError:
+        return None
 
 
 def _price_keys(raw: dict):
@@ -1218,25 +1395,41 @@ def price_row(val):
     return tuple(p * factor for p in vals) + (tier,)
 
 
+def _undated(name: str) -> str:
+    """`name` without a date at its end, when those eight digits are a real day."""
+    found = DATE_TAIL.search(name)
+    if not found:
+        return name
+    year, month, day = (int(part) for part in found.groups())
+    # From 2020 to 2099 every fourth year is a leap year.
+    last = 29 if month == 2 and year % 4 == 0 else MONTH_DAYS[month - 1]
+    return name[: found.start()] if 1 <= day <= last else name
+
+
 def model_name(model: str) -> tuple:
     """('claude-opus-5-5', fast) from any written form of a model id.
 
-    Lower case, no provider prefix, no `@` suffix, no `[1m]`, version or date
-    suffix. `fast` is True for a deployment name that ends in `-fast`.
+    Lower case, no provider prefix, no `@` suffix, and at most one each of
+    `[1m]`, a Bedrock version, a date and `-fast`. Anything else stays in the
+    name, so an id like `claude-opus-5-5-12345678` or `...-fast-fast` matches
+    no row. `fast` is True for a deployment name that ends in `-fast`.
     """
     name = model.strip().lower()
     cut = name.find("anthropic.")
     if cut >= 0:
         name = name[cut + len("anthropic."):]
     name = name.split("@", 1)[0]
-    fast = False
-    while True:
-        short = MODEL_TAIL.sub("", name)
-        if short.endswith(FAST_TAIL):
-            short, fast = short[: -len(FAST_TAIL)], True
-        if short == name:
-            return name, fast
-        name = short
+    if name.endswith(LONG_TAIL):
+        name = name[: -len(LONG_TAIL)]
+    if cut >= 0:
+        name = BEDROCK_TAIL.sub("", name)
+    plain = _undated(name)
+    fast = plain.endswith(FAST_TAIL)
+    if fast:
+        plain = plain[: -len(FAST_TAIL)]
+        if plain + FAST_TAIL == name:  # no date came off yet: `...-20260101-fast`
+            plain = _undated(plain)
+    return plain, fast
 
 
 def normalise_model(model: str) -> str:
@@ -1413,7 +1606,8 @@ def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
     if state.get("paused"):
         tag = "PAUSED(manual)" if state.get("manual") else "PAUSED"
         until = _num(state.get("until"))
-        text = tag if not until else "%s %s%s" % (tag, g["reset"], fmt_short(until, now))
+        stamp = _clock(until, now) if until else ""
+        text = "%s %s%s" % (tag, g["reset"], stamp) if stamp else tag
         add("paused", text, C_RED)
 
     vim = _obj(data, "vim").get("mode")
@@ -1428,7 +1622,9 @@ def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
     add_parts("flags", [p for pair in badges for p in ((" ", None), pair)][1:])
 
     ctx = _obj(data, "context_window")
-    pct = ctx.get("used_percentage")
+    # None for a value that is absent and for one that is no number: a green
+    # "0%" for a percentage that could not be read would be a false all-clear.
+    pct = _real(ctx.get("used_percentage"))
     size = _num(ctx.get("context_window_size"), 0)
     used_tokens = _num(ctx.get("total_input_tokens"), 0) + _num(ctx.get("total_output_tokens"), 0)
     if pct is None:
@@ -1437,15 +1633,15 @@ def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
         # total_input_tokens includes cache reads and writes, so the sum can
         # exceed the window. The percentage is the authoritative number; a
         # token count larger than the window would read as a fault.
-        add("ctx", "ctx %d%%" % _num(pct), usage_color(_num(pct)))
+        add("ctx", "ctx %d%%" % pct, usage_color(pct))
     elif size:
         add(
             "ctx",
-            "ctx %s/%s (%d%%)" % (fmt_tokens(used_tokens), fmt_tokens(size), _num(pct)),
-            usage_color(_num(pct)),
+            "ctx %s/%s (%d%%)" % (fmt_tokens(used_tokens), fmt_tokens(size), pct),
+            usage_color(pct),
         )
     else:
-        add("ctx", "ctx %d%%" % _num(pct), usage_color(_num(pct)))
+        add("ctx", "ctx %d%%" % pct, usage_color(pct))
 
     limits = _obj(data, "rate_limits")
     show_plan, show_cost = billing_view(cfg["billing"], limits)
@@ -1455,16 +1651,18 @@ def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
             if not win:
                 add(key, "%s ?%%" % label, C_GREY)
                 continue
-            wpct = _num(win.get("used_percentage"))
+            wpct = _real(win.get("used_percentage"))
             resets = _num(win.get("resets_at"))
-            if resets and now >= resets:
-                # The window already reset, so the percentage is stale. Claude
+            if wpct is None or (resets and now >= resets):
+                # No percentage that can be read, or the window already reset,
+                # so the percentage is stale. Claude
                 # Code drops such a window from the payload; this covers the gap
                 # between the reset and the next render. limit-guard's own badge
                 # skips it for the same reason.
                 add(key, "%s ?%%" % label, C_GREY)
                 continue
-            stamp = "%s%s" % (g["reset"], fmt_short(resets, now)) if resets else ""
+            stamp = _clock(resets, now) if resets else ""
+            stamp = g["reset"] + stamp if stamp else ""
             add(key, "%s %d%% %s" % (label, wpct, stamp) if stamp else "%s %d%%" % (label, wpct),
                 usage_color(wpct))
     if show_cost and on.get("cost"):
@@ -1613,7 +1811,7 @@ def render(stdin_text: str, now: float | None = None) -> str:
         data = json.loads(stdin_text) if stdin_text.strip() else {}
         if not isinstance(data, dict):
             data = {}
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: nesting thousands deep
         data = {}
 
     cfg = load_config()
@@ -1625,7 +1823,12 @@ def render(stdin_text: str, now: float | None = None) -> str:
         limit_guard_capture(mod, stdin_text)
     state = limit_guard_state(mod)
 
-    segments = build_segments(data, cfg, state, now)
+    try:
+        segments = build_segments(data, cfg, state, now)
+    except Exception:
+        # A payload this function has no answer for. The row of a session with
+        # no data yet says more than an empty line does.
+        segments = build_segments({}, cfg, state, now)
     order = cfg["priority"]
     segments.sort(key=lambda s: order.index(s.key) if s.key in order else len(order))
 
@@ -1860,35 +2063,58 @@ def _measure(root: str, paths: list) -> int:
     # Only the selftest forks. A render never does.
     import subprocess
 
-    payload = read_text(os.path.join(root, "tests", "fixtures", "full.json")) or "{}"
-    outer = []
-    for _ in range(30):
+    def timed(payload: str, env: dict | None = None) -> tuple:
         start = time.perf_counter()
-        subprocess.run(
+        done = subprocess.run(
             [sys.executable, os.path.abspath(__file__)],
-            input=payload, capture_output=True, text=True,
+            input=payload, capture_output=True, text=True, env=env,
         )
-        outer.append((time.perf_counter() - start) * 1000)
-    outer.sort()
-    p95 = _percentile(outer, 0.95)
+        return (time.perf_counter() - start) * 1000, done.stdout
+
+    payload = read_text(os.path.join(root, "tests", "fixtures", "full.json")) or "{}"
+    outer = sorted(timed(payload)[0] for _ in range(30))
+    worst = _percentile(outer, 0.95)
     sys.stdout.write(
         "end to end      runs=%d  median=%.1fms  p95=%.1fms  max=%.1fms\n"
-        % (len(outer), outer[len(outer) // 2], p95, outer[-1])
+        % (len(outer), outer[len(outer) // 2], worst, outer[-1])
     )
-    _measure_estimate()
-    if p95 > BUDGET_MS:
-        sys.stderr.write("FAIL: p95 %.1fms exceeds the %.0fms budget\n" % (p95, BUDGET_MS))
+    for label, runs in _measure_estimate(timed):
+        runs.sort()
+        if not runs:
+            sys.stderr.write("FAIL: no %s render was measured\n" % label)
+            return 1
+        p95 = _percentile(runs, 0.95)
+        note = ""
+        if label == SCAN_LABEL:
+            # A render that still reads happens a few times in a session, while
+            # the estimate catches up. It is shown and it is not part of the
+            # verdict: the verdict is for the render of every keystroke.
+            note = "  catch-up only, over budget" if p95 > BUDGET_MS else "  catch-up only"
+        else:
+            worst = max(worst, p95)
+        sys.stdout.write(
+            "%-15s runs=%d  median=%.1fms  p95=%.1fms  max=%.1fms%s\n"
+            % (label, len(runs), runs[len(runs) // 2], p95, runs[-1], note)
+        )
+    if worst > BUDGET_MS:
+        sys.stderr.write("FAIL: p95 %.1fms exceeds the %.0fms budget\n" % (worst, BUDGET_MS))
         return 1
     sys.stdout.write("OK: p95 within the %.0fms budget\n" % BUDGET_MS)
     return 0
 
 
-def _measure_estimate() -> None:
-    """Time the estimate on a synthetic session: the first render, then the rest.
+SCAN_LABEL = "estimate scan"
 
-    The fixtures have no transcript, so they never reach the ledger. This
-    builds one main and three subagent transcripts in a throwaway directory
-    and points CLAUDE_CONFIG_DIR at it, so the sidecar lands there too.
+
+def _measure_estimate(timed) -> list:
+    """Time the estimate end to end on a synthetic session.
+
+    The fixtures have no transcript, so they never reach the ledger, and the
+    estimate is the slower path. This builds one main and three subagent
+    transcripts, 16 MB in all, in a throwaway directory and points
+    CLAUDE_CONFIG_DIR at it, so the sidecar lands there too. A render that
+    still reads ("+" in the row) and a render that finds nothing new are
+    measured apart. The second one counts for the budget.
     """
     import tempfile
 
@@ -1903,9 +2129,8 @@ def _measure_estimate() -> None:
         },
         separators=(",", ":"),
     )
-    filler = json.dumps({"type": "user", "message": {"content": "x" * 2000}})
-    keys = ("CLAUDE_CONFIG_DIR", "BOBBY_STATUSLINE_COST_SOURCE", "BOBBY_STATUSLINE_BILLING")
-    saved = {key: os.environ.get(key) for key in keys}
+    filler = json.dumps({"type": "user", "message": {"content": "x" * 20000}})
+    scanning, steady, row = [], [], ""
     with tempfile.TemporaryDirectory(prefix="bobby-statusline-selftest-") as tmp:
         session = "selftest-session"
         project = os.path.join(tmp, "projects", "sample")
@@ -1917,30 +2142,26 @@ def _measure_estimate() -> None:
             with open(name, "w", encoding="utf-8") as fh:
                 for i in range(200):
                     fh.write(filler + "\n" + line % (n * 1000 + i) + "\n")
-        os.environ.update(
+        env = dict(
+            os.environ,
             CLAUDE_CONFIG_DIR=tmp,
             BOBBY_STATUSLINE_COST_SOURCE="estimate",
             BOBBY_STATUSLINE_BILLING="cost",
+            NO_COLOR="1",
         )
         payload = json.dumps({"session_id": session, "transcript_path": transcript})
-        try:
-            runs = []
-            for _ in range(21):
-                start = time.perf_counter()
-                row = render(payload)
-                runs.append((time.perf_counter() - start) * 1000)
-        finally:
-            for key, val in saved.items():
-                if val is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = val
-    steady = sorted(runs[1:])
-    sys.stdout.write(
-        "estimate        files=%d  first=%.2fms  then median=%.2fms  p95=%.2fms  %s\n"
-        % (len(names), runs[0], steady[len(steady) // 2], _percentile(steady, 0.95),
-           "ok" if "~$14.40 (sub $10.80)" in row else "WRONG ROW: %s" % clean(row, 120))
-    )
+        for _ in range(400):
+            ms, row = timed(payload, env)
+            if "+" not in row:
+                break
+            scanning.append(ms)
+        for _ in range(20):
+            ms, row = timed(payload, env)
+            steady.append(ms)
+    if "~$14.40 (sub $10.80)" not in row:
+        sys.stderr.write("FAIL: the estimate row is wrong: %s\n" % clean(row, 120))
+        return [("estimate", [])]
+    return [(SCAN_LABEL, scanning), ("estimate idle", steady)]
 
 
 # --------------------------------------------------------------------------

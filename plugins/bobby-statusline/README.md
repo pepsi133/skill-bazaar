@@ -12,21 +12,30 @@ INSERT | [CAVEMAN:FULL] [STE] | ctx 132k/1M (13%) | 5h 26% >03:20 | 7d 14% >Wed 
 
 Claude Code gives a session exactly one `statusLine.command`. Three plugins want a piece of
 it, and chaining them means one process per plugin. Measured here, a bare `python3` start
-costs about 11 milliseconds and a start with the standard library imports costs about 18.
-The whole render is allowed about 50. So this plugin replaces the chain rather than
-extending it: one process reads stdin once, imports `limit-guard` in the same interpreter,
-and prints.
+costs about 11 milliseconds, the standard library imports about 10 more, and Python needs
+about 14 to compile this script, because a script that is started by its path has no
+compiled cache. The whole render is allowed about 50. So this plugin replaces the chain
+rather than extending it: one process reads stdin once, imports `limit-guard` in the same
+interpreter, and prints.
 
-Measured end to end under WSL2, 30 runs, including the interpreter start and the
-`limit-guard` capture:
+Measured end to end under WSL2, including the interpreter start and the `limit-guard`
+capture:
 
 ```
-render only     median 0.84ms   p95 1.20ms
-end to end      median 42.1ms   p95 43.4ms   max 45.6ms
+render only     fixtures=8 runs=160  median=0.86ms  p95=1.18ms
+end to end      runs=30  median=44.2ms  p95=45.4ms  max=46.3ms
+estimate scan   runs=7  median=51.7ms  p95=52.7ms  max=53.4ms  catch-up only, over budget
+estimate idle   runs=20  median=44.3ms  p95=45.5ms  max=45.6ms
 ```
 
-Run `bin/bobby-statusline.py --selftest` to reproduce both numbers. It fails when the
-end-to-end p95 exceeds 50 milliseconds.
+Run `bin/bobby-statusline.py --selftest` to reproduce these numbers. It fails when the p95
+of the end-to-end render or of the steady estimate render exceeds 50 milliseconds.
+
+The `estimate scan` line is a render that still reads transcripts. It happens a few times
+in a session, while the estimate catches up. The selftest prints its p95 and marks it, and
+it is not part of the verdict. With the `limit-guard` gate installed, such a render can be
+a few milliseconds above 50. Without the gate the same four lines measure about 8
+milliseconds less.
 
 ## Look at it before you install
 
@@ -117,7 +126,7 @@ is dropped last.
 
 When a value has not arrived yet, the segment shows a question mark rather than a zero:
 `ctx ?%`, `5h ?%`, `$?`. The segment keeps its place, so the row does not reshuffle when the
-first API response lands. A question mark also appears in three cases where the number
+first API response lands. A question mark also appears in four cases where the number
 exists but cannot be trusted:
 
 - A usage window whose `resets_at` has already passed. The percentage belongs to the window
@@ -125,6 +134,8 @@ exists but cannot be trusted:
   gap before the next render.
 - `prompt_cache` present without a `warm` field, which means the cache state is unknown
   rather than cold. A cache expiry time outside the platform's time range shows `cache ?` too.
+- A percentage that is there but is not a number shows `?%`. A reset time that is not a
+  time, or that is more than 400 days away, is not shown.
 - The context segment falls back to `ctx 13%` without the token counts when
   `total_input_tokens` plus `total_output_tokens` exceeds the window size. Input includes
   cache reads and writes, so that sum can run past the window, and `ctx 1.2M/1M (13%)` would
@@ -237,10 +248,12 @@ price table.
 ```
 ~$1.63                  an estimate. No subagent cost, or less than one cent
 ~$1.63 (sub $0.40)      1.63 in total, of which 0.40 is subagents
-~$1.63+ (sub $0.40)     the scan is not finished. The number grows on the next renders
+~$1.63+ (sub $0.40)     a lower bound. The scan is not finished, or the session has more
+                        transcripts than the limits take
 ~$1.63?                 a model with no price is in the session. It counts as 0
-$?                      no transcript, no usable session id, a read failure, or a total
-                        that is outside any sane range
+$?                      no transcript, no usable session id, a read failure, a total that
+                        is outside any sane range, or a progress file that cannot be
+                        written while the scan is not finished
 ```
 
 | `cost_source` | Cost segment |
@@ -255,9 +268,11 @@ part, because the payload does not split it.
 ### What it reads and writes
 
 - The main transcript, from `transcript_path` in the payload.
-- Every `agent-*.jsonl` file in the `subagents` directory next to it, down to three levels,
-  which covers `subagents/workflows/<id>/`. No more than 2000 files. Files past that
-  number are not counted.
+- Every `agent-*.jsonl` file in the `subagents` directory next to it, inside three limits:
+  three directory levels, which covers `subagents/workflows/<id>/`, 512 directories, and
+  2000 files. The files are taken in the order of their names. What is past a limit is not
+  counted. The `+` marker stays on the row for as long as a limit cuts the list, because
+  the number is then a lower bound.
 - Only lines whose top-level type is `assistant`. One API response is several lines with one
   message id, so an id counts once.
 
@@ -265,7 +280,12 @@ A render reads only the bytes that were appended since the last render. The prog
 `${CLAUDE_CONFIG_DIR:-~/.claude}/bobby-statusline/usage/<session id>.json`: for each
 transcript a byte offset, its token totals, its inode, and a checksum of its first 256
 bytes. A transcript that got smaller, or whose inode or first bytes changed, is read again
-from the start.
+from the start. A transcript that is not there any more, or that a limit now cuts off,
+leaves the sum.
+
+When the progress file cannot be written, a later render starts from zero. A total that one
+render read to the end is correct, and it shows. A total that one render did not finish
+would be another number on each render, so the segment shows `$?` then.
 
 The file is written to a temporary name in the same directory and then renamed. It has mode
 0600. The plugin creates the two directories above it with mode 0700 and leaves the mode of
@@ -280,29 +300,45 @@ above these, such as the configuration directory itself, are not checked.
 
 ### Time
 
-Reading has 15 milliseconds for each render. The clock starts after the progress file is
-loaded and every transcript got one `lstat`, and each render reads at least one line, so a
-slow machine still moves forward. A render continues after the transcript that the last
-render read, so one transcript that never stops growing does not hold up the others. While
-the scan is not complete the `+` marker shows.
+Reading has 5 milliseconds for each render. The load and the write of the progress file
+are outside that limit. Each render reads at least one line, so a slow machine still moves
+forward. A render continues after the transcript that the last render read, so one
+transcript that never stops growing does not hold up the others. While the scan is not
+complete the `+` marker shows.
 
-Measured in process under WSL2, without the interpreter start:
+A render does not look at every transcript:
 
-| Session | First time | Later, nothing new | Later, one new line |
-|---|---|---|---|
-| 1 main and 6 subagent transcripts, 12 MB | 4 renders | 0.16 ms | 0.5 ms |
-| 200 subagent transcripts | 5 renders | 1.5 ms | 2.4 ms |
-| 1000 subagent transcripts | 23 renders | 6.5 ms | 9.5 ms |
-| 2000 subagent transcripts | 44 renders | 13 ms | 19 ms |
-| one line of 10 MB to 50 MB in a transcript | 1 render | | |
+- The main transcript and the 32 subagent transcripts that were written last get one
+  `lstat` on every render.
+- The list of files is made again only when a directory under `subagents` changed. So a
+  new subagent transcript is seen on the next render.
+- With time left inside the 5 milliseconds, the other transcripts get their `lstat`, at
+  least 16 of them in each render. The round starts at another place on each render. An
+  append to one of them is seen late when there are more of them than the time allows:
+  on the next render with up to about 1000 transcripts, after about 2 renders with 2000.
 
-The cost with many transcripts is the progress file, which holds an entry for each one, and
-one `lstat` for each. `--selftest` measures the estimate on a small synthetic session and
-prints it on its own line.
+Measured under WSL2. `In process` is the estimate alone. `Whole render` is the process
+from start to end, without and with the `limit-guard` gate:
+
+| Session | First time | Nothing new, in process | One new line, in process | Nothing new, whole render |
+|---|---|---|---|---|
+| 1 main and 6 subagent transcripts, 12 MB | 12 renders | 0.2 ms | 0.4 ms | 37 ms, 44 ms |
+| 200 subagent transcripts | 16 renders | 1.5 ms | 2.2 ms | 38 ms, 46 ms |
+| 1000 subagent transcripts | 76 renders | 7.2 ms | 10 ms | 45 ms, 53 ms |
+| 2000 subagent transcripts | 150 renders | 11 ms | 16 ms | 53 ms, 62 ms |
+
+A render that still reads costs about 5 milliseconds more than the last column. The cost
+with many transcripts is the progress file. It holds an entry for each transcript, and it
+is read on every render and written on every render that found something new: about 6
+milliseconds to read it with 2000 entries. A session with about 1000 subagent transcripts
+or more is therefore above 50 milliseconds for the whole render when the gate is installed.
+
+`--selftest` measures the estimate on a small synthetic session, end to end: a render that
+still reads, and a render that finds nothing new.
 
 A line longer than 4 MB is not held in memory. The scan steps over it, across several
 renders if it must, and the progress file records how far it is. Such a line is a pasted
-image or document in a `user` line. An `assistant` line of that size would not be counted.
+image or document in a `user` line. An `assistant` line of that size is not counted.
 
 The scan runs only when the cost segment is shown and its source is the estimate. With
 `payload`, or with `auto` and a payload number, nothing is read and nothing is written.
@@ -334,12 +370,23 @@ Haiku 5.5 is priced by the length of the prompt. Each request is priced on its o
 input tokens plus its cache reads plus its cache writes are above 100,000, the whole request
 pays the higher row. The estimate does the same for each line of a transcript.
 
-**Which row a model gets.** The model id is made lower-case. A provider prefix that ends in
-`anthropic.`, an `@` suffix, a `[1m]` suffix, a `-v1:0` suffix and an 8-digit date are
-removed. What is left must be equal to the id of a row. There is no prefix match:
-`claude-opus-5-5-20260101` and `us.anthropic.claude-opus-5-5-v1:0` are `claude-opus-5-5`,
-and `claude-opus-5-1` is not `claude-opus-5`. A model with no row counts as $0 and the `?`
-marker appears, so a new model is never priced as an older one without a sign.
+The table has no row for `claude-sonnet-4-5`, `claude-opus-4-5`, `claude-opus-4-1`,
+`claude-3-5-haiku`, or any older model. A session on one of them shows the `?` marker. Add
+the row to `prices`.
+
+**Which row a model gets.** The model id is made lower-case, and these parts are removed:
+
+- a provider prefix that ends in `anthropic.`
+- an `@` suffix and a `[1m]` suffix
+- a `-v1:0` suffix, on an id that had the `anthropic.` prefix only
+- a date: eight digits that are a day of the years 2020 to 2099
+
+One `-fast` at the end selects the fast rate. What is left must be equal to the id of a row.
+There is no prefix match: `claude-opus-5-5-20260101` and `us.anthropic.claude-opus-5-5-v1:0`
+are `claude-opus-5-5`, and `claude-opus-5-1` is not `claude-opus-5`. An id that only looks
+like one of these forms gets no row: `claude-opus-5-5-12345678`, `claude-opus-5-5-v2` and
+`claude-opus-5-5-fast-fast`. A model with no row counts as $0 and the `?` marker appears,
+so a new model is never priced as an older one without a sign.
 
 ### Your own prices
 
@@ -405,15 +452,21 @@ nothing.
 - A price multiplier for US-only inference is not applied.
 - When a transcript does not say how a cache write splits into 5 minute and 1 hour TTL, or
   the split does not add up to the total, the write counts at the 5 minute rate.
-- Claude Code writes one JSON object on each line, with no space after a colon or a comma.
-  That is the form the scan looks for. A transcript that another tool wrote again in
-  another layout is not counted.
+- A transcript holds one JSON object on each line. A transcript that another tool wrote
+  again with one object across several lines is not counted.
+- An `assistant` line longer than 4 MB is not counted. Such a line is not held in memory.
+- A request with more than 1,000,000,000 tokens in one field is not a request. It is
+  ignored, and the rest of the session is counted.
+- An append to a subagent transcript that is not among the 32 written last is seen some
+  renders late. See [Time](#time).
 - A message id counts once in each transcript. Three cases can count a response twice: an
   id that comes back after 16 other ids, the same id in two transcripts, and a line with no
   id. With more than 32 transcripts in work at once, the ones written least recently
   remember only their newest id. None of these was seen in real sessions.
 - A transcript that was written again in place with the same size, the same first 256 bytes
   and the same modification time is taken as unchanged.
+- A transcript that was written again in place, larger than before and with the same first
+  256 bytes, is taken as an append. The scan goes on from the old offset.
 - The transcript of a session that was removed or rotated cannot be counted.
 
 ## No network access
@@ -428,15 +481,23 @@ state.
 What it writes: the progress file of the estimate under
 `${CLAUDE_CONFIG_DIR:-~/.claude}/bobby-statusline/usage/`, and nothing else.
 
-Two tests hold this, and the claim is as wide as they are:
+Two tests guard this:
 
 - A static one. `bin/bobby-statusline.py` may import the modules on a short list, all from
-  the Python standard library and none with network code, and no other. It may not import
-  by a computed name. `subprocess` is on the list for `--selftest` only, and the test
-  checks that a render cannot reach that function.
-- A runtime one. Every fixture is rendered, with and without the estimate, under a Python
-  audit hook. The test fails on any socket event and on any process start. A control run
-  proves that the hook sees both.
+  the Python standard library and none with network code, and no other. The roundabout
+  ways to a module are closed too: a computed import, `sys.modules`, the `__dict__` or
+  `vars()` of a module, a frame, and every `importlib` call except the ones that load the
+  `limit-guard` gate from its file. `subprocess` is on the list for `--selftest` only, and
+  the test makes sure that a render cannot reach that function. The plugin ships no script
+  other than the two in `bin/`.
+- A runtime one. Every fixture is rendered, with and without the estimate, in a process of
+  its own under a Python audit hook. The events of the render are compared with the list
+  of events that a clean render makes. Every other event fails the test: a socket, a
+  process start, an import of a module that is not on the list. A control run proves that
+  the hook reports each of those.
+
+The tests are a regression guard. They catch network or process code that a change adds by
+mistake or by habit. They are not a proof against code that is written to get past them.
 
 Two things are outside that claim. `--selftest` starts copies of this script to time them.
 And when `limit-guard` is installed, the status line runs its gate script in the same
@@ -457,24 +518,36 @@ It is optional and manual. The status line never runs it, never imports it, and 
 know that it exists. The `/bobby-statusline:install` command does not run it either.
 
 - **You give the source.** The script has no built-in address. `--from` takes a local file
-  or an `https` address that you type. `http` and every other scheme are refused, and so is
-  a redirect to an address that is not `https`.
+  or an `https` address that you type. `http` and every other scheme are refused. A
+  redirect is followed only to the same host and port over `https`, and only when the new
+  address has no user name in it. Every other redirect is refused, and the message names
+  both hosts.
 - **A local file needs no network.** On a machine with no outside access, get the price
   list in any way you trust and pass its path.
 - **It asks first, twice.** Before a download it prints the address, the host and what it
   sends, and asks. Before it writes it prints the old and the new price of each model, and
   asks again. Both questions default to No. A local file has no download, so it has one
   question.
-- **It needs a terminal.** With input or output redirected it does nothing and exits with
-  an error. No flag and no environment variable answers the questions.
+- **It needs a terminal.** Standard input, standard output and standard error must all be
+  terminals. With one of them redirected it does nothing and exits with an error. No flag
+  and no environment variable answers the questions. A terminal is not proof of a person,
+  because a program can make one. The check keeps the script out of pipelines. The script
+  is for a manual run.
 - **It sends no data.** The download is one `GET` request with a fixed, generic
   `User-Agent`. No cookie, no credentials, and nothing about the machine, the user or a
-  session. It stops after 15 seconds and at 20 MB. A proxy from the environment is used
-  when one is set.
+  session. The whole download has 30 seconds, and it stops at 20 MB. A proxy from the
+  environment is used when one is set. Text from the server or from a file is printed
+  without control characters.
 - **It writes one key.** The rows that differ go into `prices` in `bobby-statusline.json`.
   Every other key stays. The file is written to a temporary name and renamed, with mode
-  0600. A configuration file that is not valid JSON is left alone. `--dry-run` shows the
-  table and writes nothing.
+  0600. `--dry-run` shows the table and writes nothing. A stored key that names the model
+  of a new row in another way, such as a dated id, is removed in the same write, and the
+  table shows it as `removed` before the question. If that key stayed, it would keep the
+  old price in use.
+- **It leaves a file in a bad state alone.** A configuration file that is not valid JSON,
+  that has no write permission, or whose `prices` value is not an object is not changed.
+  The script says why and writes nothing. A byte order mark at the start of the
+  configuration file or of the price list is accepted.
 
 Two formats are read: the LiteLLM price file (`input_cost_per_token` and its relatives, in
 USD for each token), and the row shape of Claude Code's `modelPricing` setting. Only rows
@@ -554,6 +627,8 @@ Degradation, in order:
 - `limit-guard` imports cleanly: the cache is written, and the windows render as usual.
 - `limit-guard` is absent, or the import raises: nothing is written, and the windows still
   render from stdin. The session loses the gate, not the display.
+- The payload cannot be used, for example because it is nested thousands of levels deep:
+  the row of a session with no data yet is printed.
 - The whole render raises: the script prints an empty line and exits 0. A blank status line
   is a small loss. A traceback in the status bar on every keystroke is not.
 
@@ -569,8 +644,8 @@ badge, and this script swallows the output so it cannot land in the middle of th
 
 Both readers refuse symlinks, cap the read at 64 bytes, and strip every character outside
 `[a-z0-9-]`. Text taken from the session JSON, such as a model or agent name, cannot use that
-whitelist, so it is stripped of C0 and C1 control characters, `DEL`, and the bidi override
-marks. C1 matters because `0x9b` is a second `CSI` introducer in some terminals, and a bidi
+whitelist, so it is stripped of C0 and C1 control characters, `DEL`, the direction marks,
+overrides and isolates, and the line separators U+2028 and U+2029. C1 matters because `0x9b` is a second `CSI` introducer in some terminals, and a bidi
 override can visually reorder a row so that a low percentage reads as a high one. An unrecognized value renders nothing rather than echoing the bytes. A local
 attacker who can plant a file must not be able to have the status line print
 `~/.ssh/id_rsa`, or an ANSI escape sequence, on every keystroke.
@@ -685,7 +760,7 @@ cd plugins/bobby-statusline && python3 -m unittest discover -s tests -p 'test_*.
 python3 bin/bobby-statusline.py --selftest
 ```
 
-234 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
+312 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
 oversize, escape bytes, whitelist), the billing modes, the color thresholds, both layouts,
 the configuration layers, the prompt cache states and colors, the pause state, the
 `limit-guard` bridge including an old gate and a raising gate, the slash command's contract,
@@ -693,18 +768,25 @@ and one regression test per fixed defect (`TestAuditRegressions`, nine tests). E
 fails against the code as it stood before its fix.
 
 For the estimate they cover the ledger (one count for each message id, main and subagent
-totals, incremental reads, the time limit, a 10 MB line, 2000 transcripts, truncated and
-replaced transcripts, named pipes, every symlink case), every row of the price table, the
-row matching, the long-prompt rate, the cost sources for the three account shapes, payload
-fields of the wrong type, the absence of network code (`TestNoEgress`), and the price update
-script without any network (`TestPriceScript`).
+totals, incremental reads, the time limit, a 10 MB line, the three limits on the list of
+transcripts, truncated and replaced transcripts, named pipes, every symlink case, a
+progress file of the wrong shape), every row of the price table, the row matching, the
+long-prompt rate, the cost sources for the three account shapes, payload fields of the
+wrong type or of an absurd size, and the absence of network code (`TestNoEgress`).
+
+For the price update script they cover the questions and the terminal check, the
+configuration file in each bad state, and the text that is printed (`TestPriceScript`, no
+network). `TestPriceDownload` runs the download against a TLS listener on `127.0.0.1`:
+the exact request, the redirect rules, the size limit and both time limits. It makes its
+certificate with the `openssl` command in a temporary directory, and it is skipped where
+that command is absent.
 
 Every test isolates `CLAUDE_CONFIG_DIR` into a temporary directory, including the tests that
 run the script as a subprocess, so a run reads none of the developer's own session state and
 writes nothing into their real `limit-guard` cache. The ledger tests write synthetic
 transcripts into that temporary directory. `--selftest` does the same from a shell:
 it points `LIMIT_GUARD_HOME` at a temporary directory for the run, so the captures it measures
-never touch the real cache or pause state. Its `estimate` line renders a synthetic session
+never touch the real cache or pause state. Its two `estimate` lines render a synthetic session
 in a throwaway configuration directory, because the fixtures have no transcript. The clock is pinned by passing
 `render(payload, now=...)`, so the expectations do not drift with the date and nothing in the
 environment can freeze a real session's countdown.
@@ -720,4 +802,3 @@ to ignore red.
 - Bars in place of percentages.
 - A `subagentStatusLine` variant. That input is a different shape: a `tasks` array with a
   per-row `columns` field.
-- Editing `settings.json` for you.
