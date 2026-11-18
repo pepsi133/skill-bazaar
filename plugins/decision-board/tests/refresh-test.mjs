@@ -3,18 +3,18 @@
 // under the system temp directory (TMPDIR) and are removed at the end.
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { run } from "../skills/board-refresh/scripts/refresh.mjs";
 import { run as board } from "../skills/decision-board/scripts/board.mjs";
 import { applyBatch, dump, writesOf } from "./fakedb.mjs";
+import { makeTmp, removeTmp } from "./_tmp.mjs";
 import { createRequire } from "node:module";
 
 // The page pure part, for its default zone and dayIn (a test never names the default zone).
 const P = createRequire(import.meta.url)("./_page.js").load();
 const REFRESH = new URL("../skills/board-refresh/scripts/refresh.mjs", import.meta.url);
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "refresh-test-"));
+const tmp = makeTmp("refresh-test-");
 let n = 0;
 function ok(name, fn) { fn(); n++; console.log("ok " + n + " " + name); }
 let k = 0;
@@ -411,5 +411,5 @@ ok("a dismissed card returns only when a new source input arrives", () => {
   assert.match(back.lines[0], / 1 changed \(rev up\), .* 1 reopened \(tracker-7\)$/);
   assert.deepEqual([card().status, card().rev], ["open", 2]);
 });
-fs.rmSync(tmp, { recursive: true, force: true });
+removeTmp(tmp);
 console.log(`${n} tests passed`);

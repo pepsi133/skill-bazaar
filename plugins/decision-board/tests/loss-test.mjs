@@ -4,16 +4,16 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { run } from "../skills/decision-board/scripts/board.mjs";
 import { applyBatch, dump, readDb, writesOf } from "./fakedb.mjs";
+import { makeTmp, removeTmp } from "./_tmp.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(here, "fixtures");
 const SELF = path.relative(process.cwd(), path.join(here, "..", "skills", "decision-board", "scripts", "board.mjs"));
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loss-test-"));
+const tmp = makeTmp("loss-test-");
 let n = 0, failed = 0;
 function ok(name, fn) {
   n++;
@@ -595,5 +595,5 @@ ok("a close that closes carries the unconfirmed close and prints no note", () =>
   const body = JSON.parse(fs.readFileSync(writesOf(c.lines).flat()[0].file_path, "utf8")).cards;
   assert.deepEqual(["c8", "c9"].map((id) => body.find((x) => x.id === id).status), ["closed", "closed"]);
 });
-fs.rmSync(tmp, { recursive: true, force: true });
+removeTmp(tmp);
 if (failed) { console.log(failed + " of " + n + " failed"); process.exitCode = 1; }

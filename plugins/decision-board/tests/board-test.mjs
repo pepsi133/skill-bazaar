@@ -1,6 +1,6 @@
 // Tests of skills/decision-board/scripts/board.mjs against the fixture state, config and dump and the stand-in
-// database of fakedb.mjs. Run: node board-test.mjs. Exits 1 on the first failure. Temporary files go under the
-// system temp directory (TMPDIR).
+// database of fakedb.mjs. Run: node board-test.mjs. Exits 1 on the first failure. Temporary files go under $TMPDIR, else
+// .ai_local/tmp/ at the repository root (tests/_tmp.mjs).
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { run, readDump, COMMANDS, FLAGS, CONFIG_KEYS, SCRIPT_KEYS, mergeLayers, pageDefaults, compileChecks, checkHits, checkFields } from "../skills/decision-board/scripts/board.mjs";
 import { applyBatch, dump, readDb, writesOf } from "./fakedb.mjs";
+import { makeTmp, removeTmp } from "./_tmp.mjs";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 
@@ -15,7 +16,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(here, "fixtures");
 const SKILL = path.join(here, "..", "skills", "decision-board");
 const SELF = path.relative(process.cwd(), path.join(SKILL, "scripts", "board.mjs"));
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "board-test-"));
+const tmp = makeTmp("board-test-");
 let n = 0;
 function ok(name, fn) { fn(); n++; console.log("ok " + n + " " + name); }
 // A fresh board: db is the database; .board/ holds the state, config.json (with tz UTC) and the dump.
@@ -3159,4 +3160,4 @@ ok("watch: a second call before the first poll prints the unpassed status write 
   assert.ok(r.lines.indexOf("--- brief") > r.lines.findIndex((l) => l.startsWith("batch 1 of 1")));
   assert.ok(r.lines[0].includes("only if this session has not started a watcher"));
 });
-fs.rmSync(tmp, { recursive: true, force: true });
+removeTmp(tmp);
