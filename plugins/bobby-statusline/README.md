@@ -11,15 +11,15 @@ INSERT | [CAVEMAN:FULL] [STE] | ctx 132k/1M (13%) | 5h 26% >03:20 | 7d 14% >Wed 
 ## Why one script and not a chain
 
 Claude Code gives a session exactly one `statusLine.command`. Three plugins want a piece of
-it, and chaining them means one process per plugin. Measured here, a bare `python3` start
+it, and chaining them means one process per plugin. A bare `python3` start typically
 costs about 11 milliseconds, the standard library imports about 10 more, and Python needs
 about 14 to compile this script, because a script that is started by its path has no
 compiled cache. The whole render is allowed about 50. So this plugin replaces the chain
 rather than extending it: one process reads stdin once, imports `limit-guard` in the same
 interpreter, and prints.
 
-Measured end to end under WSL2, including the interpreter start and the `limit-guard`
-capture:
+Typical figures on a Linux machine, end to end, including the interpreter start and the
+`limit-guard` capture:
 
 ```
 render only     fixtures=8 runs=160  median=0.91ms  p95=1.34ms
@@ -326,7 +326,7 @@ A render does not look at every transcript:
   append to one of them is seen some renders late when there are more of them than the
   time allows.
 
-Measured under WSL2. `In process` is the estimate alone. `Whole render` is the process
+Typical figures on a Linux machine. `In process` is the estimate alone. `Whole render` is the process
 from start to end, without and with the `limit-guard` gate:
 
 | Session | First time | Nothing new, in process | One new line, in process | Nothing new, whole render |
