@@ -39,7 +39,7 @@ import re
 import sys
 import time
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 # --------------------------------------------------------------------------
 # Paths
@@ -402,6 +402,122 @@ def paint(text: str, code: int | None, enabled: bool) -> str:
 
 
 # --------------------------------------------------------------------------
+# Prompt cache
+# --------------------------------------------------------------------------
+
+# Claude Code sends two TTL values, "5m" and "1h". The pattern accepts any
+# "<n>s|m|h" so a third value renders instead of vanishing.
+TTL_RE = re.compile(r"^([0-9]{1,4})([smh])$")
+TTL_UNIT = {"s": 1, "m": 60, "h": 3600}
+
+# The warm segment turns amber when less than this share of the TTL is left:
+# 1 minute of a 5m TTL, 12 minutes of a 1h TTL.
+CACHE_WARN_SHARE = 0.2
+
+# Short labels for prompt_cache.last_miss_cause.causes. An unknown cause name
+# renders as itself, cleaned, rather than disappearing.
+MISS_LABELS = {
+    "system_prompt_changed": "system",
+    "tools_changed": "tools",
+    "defer_loading_changed": "tools",
+    "model_changed": "model",
+    "fast_mode_changed": "fast",
+    "cache_scope_or_ttl_changed": "ttl",
+    "betas_changed": "betas",
+    "effort_changed": "effort",
+    "thinking_mode_changed": "think",
+    "thinking_display_changed": "think",
+    "auto_mode_changed": "auto",
+    "overage_changed": "overage",
+    "extra_body_changed": "body",
+    "messages_rewritten": "history",
+    "ttl_expired_5m": "idle",
+    "ttl_expired_1h": "idle",
+    "likely_server_side": "server",
+    "unknown": "?",
+}
+
+
+def ttl_seconds(ttl: str) -> int | None:
+    m = TTL_RE.match(ttl)
+    return int(m.group(1)) * TTL_UNIT[m.group(2)] if m else None
+
+
+def miss_text(cache: dict) -> str:
+    """'2 miss: tools' from the miss count and the last miss cause."""
+    misses = int(_num(cache.get("misses"), 0))
+    if misses <= 0:
+        return ""
+    cause = cache.get("last_miss_cause")
+    names = cause.get("causes") if isinstance(cause, dict) else None
+    labels = []
+    for name in names if isinstance(names, list) else []:
+        if not isinstance(name, str):
+            continue
+        label = MISS_LABELS.get(name) or re.sub(r"[^a-z0-9_]", "", clean(name, 24).lower())
+        if label and label not in labels:
+            labels.append(label)
+    return "%d miss: %s" % (misses, "/".join(labels[:2])) if labels else "%d miss" % misses
+
+
+def cache_segment(cache: dict, now: float, g: dict) -> tuple:
+    """Text and color for the prompt cache, from Claude Code's prompt_cache object.
+
+    Warm:  'cache 1h warm >17:47 91% 2 miss: tools'   the clock time is the expiry.
+    Cold:  'cache 1h cold since 17:47 ~40k'           ~40k is what the next turn re-caches.
+    A clock time, not a countdown: Claude Code redraws the row at expires_at, but not
+    between, so a countdown would be stale and a clock time is not.
+    """
+    if "warm" not in cache:
+        return "cache ?", C_GREY
+    if cache.get("caching_observed") is False:
+        # The API reported no cache reads or writes at all.
+        return "cache off", C_GREY
+
+    ttl = re.sub(r"[^0-9smh]", "", clean(cache.get("ttl") or "", 8))
+    span = ttl_seconds(ttl)
+    expires = _num(cache.get("expires_at"))
+    # warm is computed when the payload is built. A payload that reaches the
+    # renderer after expires_at describes a cache that is already cold.
+    warm = bool(cache.get("warm")) and not (expires and now >= expires)
+
+    words = ["cache"]
+    if span:
+        words.append(ttl)
+    if warm:
+        words.append("warm")
+        if expires:
+            words.append("%s%s" % (g["reset"], fmt_short(expires, now)))
+    else:
+        words.append("cold")
+        if expires:
+            words.append("since %s" % fmt_short(expires, now))
+        recache = cache.get("recache_tokens_if_cold")
+        # null means the next turn re-caches a compacted prompt of unknown size.
+        if isinstance(recache, (int, float)) and recache > 0:
+            words.append("~%s" % fmt_tokens(recache))
+
+    # The first request only writes, so its hit ratio is always 0. Showing it
+    # would read as a broken cache.
+    ratio = cache.get("hit_ratio")
+    requests = cache.get("requests")
+    if isinstance(ratio, (int, float)) and not (isinstance(requests, (int, float)) and requests < 2):
+        words.append("%d%%" % round(_num(ratio) * 100))
+
+    misses = miss_text(cache)
+    if misses:
+        words.append(misses)
+
+    if not warm:
+        # Amber, never red. A cold cache costs money on the next request; it is
+        # not the emergency that a full usage window is.
+        return " ".join(words), C_WARN
+    if span and expires and expires - now < span * CACHE_WARN_SHARE:
+        return " ".join(words), C_WARN
+    return " ".join(words), C_OK
+
+
+# --------------------------------------------------------------------------
 # Segments
 # --------------------------------------------------------------------------
 
@@ -513,17 +629,13 @@ def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
         add("cost", "$?" if cost is None else "$%.2f" % _num(cost), C_COST)
 
     cache = data.get("prompt_cache")
-    if isinstance(cache, dict) and "warm" not in cache:
-        add("cache", "cache ?", C_GREY)
-    elif isinstance(cache, dict):
-        if cache.get("warm"):
-            ratio = cache.get("hit_ratio")
-            text = "cache warm" if ratio is None else "cache warm %d%%" % (_num(ratio) * 100)
-            add("cache", text, C_OK)
-        else:
-            # Amber, never red. A cold cache costs money on the next request; it
-            # is not the emergency that a full usage window is.
-            add("cache", "cache cold", C_WARN)
+    if isinstance(cache, dict):
+        try:
+            text, color = cache_segment(cache, now, g)
+        except (ValueError, OverflowError, OSError, TypeError):
+            # A timestamp outside the platform's range. Unknown, not a blank row.
+            text, color = "cache ?", C_GREY
+        add("cache", text, color)
     elif on.get("cache"):
         add("cache", "cache ?", C_GREY)
 

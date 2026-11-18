@@ -1,0 +1,2308 @@
+<title>Decision Board</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: sticky summary bar, Due today and Blocked on you, tabs, the cards of the tab in groups (the group of done cards folded), notes box last. */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --fg: #1b2030;
+  --muted: #5d6578;
+  --line: #d9dde6;
+  --accent: #2f56d6;
+  --accent-fg: #ffffff;
+  --now: #b3261e;
+  --now-bg: #fbe9e7;
+  --soon: #8a5a00;
+  --soon-bg: #fcf0d4;
+  --later: #4b5468;
+  --later-bg: #e6e9f0;
+  --good: #1d7a46;
+  --good-bg: #e0f3e8;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151c;
+    --surface: #1a1f2a;
+    --surface-2: #232a38;
+    --fg: #e6e9f2;
+    --muted: #98a1b6;
+    --line: #2f3748;
+    --accent: #7d9bff;
+    --accent-fg: #0f1422;
+    --now: #ff8f85;
+    --now-bg: #3a1e1c;
+    --soon: #f0c05a;
+    --soon-bg: #3a2f14;
+    --later: #aab3c8;
+    --later-bg: #2a3244;
+    --good: #6fd09a;
+    --good-bg: #17322365;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151c;
+  --surface: #1a1f2a;
+  --surface-2: #232a38;
+  --fg: #e6e9f2;
+  --muted: #98a1b6;
+  --line: #2f3748;
+  --accent: #7d9bff;
+  --accent-fg: #0f1422;
+  --now: #ff8f85;
+  --now-bg: #3a1e1c;
+  --soon: #f0c05a;
+  --soon-bg: #3a2f14;
+  --later: #aab3c8;
+  --later-bg: #2a3244;
+  --good: #6fd09a;
+  --good-bg: #17322365;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--font); font-size: 14px; line-height: 1.45; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); background: var(--surface); z-index: 20; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+button, select, textarea, input { font: inherit; color: inherit; }
+.in { max-width: 860px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+header.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 15; background: var(--surface); border-bottom: 1px solid var(--line); }
+header.bar .in { padding-block: 10px; display: grid; gap: 8px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.grow { flex: 1 1 auto; min-width: 0; }
+h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.01em; }
+.counts { display: flex; gap: 14px; font-variant-numeric: tabular-nums; }
+.counts b { font-weight: 600; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.mono { font-family: var(--mono); font-size: 12px; }
+
+button { cursor: pointer; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 6px 10px; min-height: 34px; }
+button:hover:not(:disabled) { background: var(--surface-2); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+button.link { border: 0; background: none; padding: 2px 4px; min-height: 0; color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.blocked, .due { margin: 10px 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 6px; min-width: 0; }
+.blocked h3, .due h3 { margin: 0; font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: center; }
+.blocked .n, .due h3 .n { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; padding: 0 7px; border-radius: 999px; background: var(--now-bg); color: var(--now); }
+.bfold > summary { font-size: 13px; font-weight: 600; cursor: pointer; padding: 4px 0; min-height: 32px; }
+.bfold[open] > summary { margin-bottom: 6px; }
+.due { border-color: var(--now); background: var(--now-bg); }
+.blist { display: grid; gap: 4px; }
+.brow { display: grid; gap: 2px; width: 100%; min-width: 0; text-align: left; padding: 6px 8px; min-height: 44px; border-radius: 6px; }
+.brow .bt { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
+.brow .bt span.tt { min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+.brow .bb { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.blocks { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 10px; }
+.tab { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 12px; min-height: 34px; }
+.tab .n { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
+.tab[aria-selected="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+.tab[aria-selected="true"] .n { color: var(--accent-fg); }
+.tab.g { border-style: dashed; max-width: 100%; }
+.tab.g .tl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+main.in { padding-bottom: 48px; }
+.groups { display: grid; gap: 16px; min-width: 0; }
+.grp { display: grid; gap: 10px; min-width: 0; }
+.grp > h3, .grp > summary { margin: 0; font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: center; }
+.grp > summary { padding: 6px 0; color: var(--fg); }
+.grp .n, .side .n { font-size: 12px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.glist { display: grid; gap: 10px; min-width: 0; }
+.side { display: none; }
+@media (min-width: 1280px) {
+  .board.has-side { display: grid; grid-template-columns: 180px minmax(0, 1fr); column-gap: 20px; align-items: start; margin-left: -200px; }
+  .board.has-side > .side { display: grid; gap: 2px; position: sticky; top: var(--hdr, 120px); }
+  .side .srow { display: flex; justify-content: space-between; gap: 8px; text-align: left; border: 0; background: none; min-height: 32px; }
+  .side .srow .sl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.card.done { opacity: 0.8; }
+.card.flash, .guide.flash { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent); }
+.card .gopen { justify-self: start; }
+.guide { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; margin-bottom: 10px; }
+.guide h2 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.guide .gbody { overflow-wrap: anywhere; max-width: 70ch; min-width: 0; }
+.guide .gbody.ref { max-width: none; contain: paint; position: relative; overflow: hidden; isolation: isolate; }
+.ref .tw { overflow-x: auto; max-width: 100%; }
+.gsec { display: grid; gap: 4px; min-width: 0; }
+.gsec + .gsec { border-top: 1px solid var(--line); padding-top: 8px; }
+.gsec h3 { margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--now); }
+.about { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.ref table { border-collapse: collapse; margin: 0 0 8px; }
+.ref th, .ref td { border: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; }
+.ref svg { max-width: 100%; height: auto; }
+.ref a { color: var(--accent); }
+.changed { font-size: 12.5px; padding: 6px 8px; border-radius: 6px; background: var(--soon-bg); color: var(--soon); overflow-wrap: anywhere; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tag { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 7px; border-radius: 4px; background: var(--surface-2); color: var(--muted); }
+.tag.now { background: var(--now-bg); color: var(--now); }
+.tag.soon { background: var(--soon-bg); color: var(--soon); }
+.tag.later { background: var(--later-bg); color: var(--later); }
+.tag.good { background: var(--good-bg); color: var(--good); }
+.tag.chip { text-transform: none; letter-spacing: 0; font-weight: 500; border-radius: 999px; padding: 1px 9px; }
+.asked { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.links { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; min-width: 0; }
+.links a { color: var(--accent); overflow-wrap: anywhere; }
+.card h2 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; text-wrap: balance; }
+.summary { margin: 0; overflow-wrap: anywhere; max-width: 70ch; min-width: 0; }
+.rich > :first-child { margin-top: 0; }
+.rich > :last-child { margin-bottom: 0; }
+.rich p { margin: 0 0 8px; }
+.rich ul { margin: 0 0 8px; padding-left: 20px; display: grid; gap: 3px; }
+.rich ol { margin: 0 0 8px; padding-left: 26px; display: grid; gap: 3px; }
+.rich .pre { margin: 0 0 8px; display: grid; gap: 2px; min-width: 0; }
+.rich .pre .copy { justify-self: end; font-size: 12px; padding: 2px 10px; min-height: 30px; color: var(--muted); }
+.rich pre { margin: 0; padding: 8px; font-family: var(--mono); font-size: 12.5px; line-height: 1.4; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.draft { display: grid; gap: 4px; min-width: 0; padding: 8px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--bg); }
+.draft .dhead { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; }
+.draft .dlabel { font-size: 12px; font-weight: 600; color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+.draft .dcopy { font-size: 12px; padding: 2px 12px; min-height: 34px; flex: none; }
+.draft pre { margin: 0; font-family: var(--font); font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-width: 70ch; }
+.rich h4 { margin: 10px 0 4px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.rich code { font-family: var(--mono); font-size: 0.92em; background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.rich strong { font-weight: 600; }
+details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+details .evidence { margin: 6px 0 0; padding: 8px; background: var(--surface-2); border-radius: 6px; overflow-wrap: anywhere; font-size: 12.5px; min-width: 0; }
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 4px; }
+.opt { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; min-height: 38px; }
+.opt:has(input:checked) { border-color: var(--accent); background: var(--surface-2); }
+.opt input { margin-top: 3px; accent-color: var(--accent); flex: none; }
+.opt span.t { min-width: 0; overflow-wrap: anywhere; }
+.rec { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--good); background: var(--good-bg); border-radius: 4px; padding: 0 6px; margin-left: 6px; white-space: nowrap; }
+textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; }
+.foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; min-height: 18px; }
+.page-foot { margin-top: 24px; padding: 12px 0; }
+.page-foot span { display: block; }
+.empty { padding: 28px 8px; text-align: center; color: var(--muted); }
+.msg { padding: 8px 10px; border-radius: 6px; background: var(--now-bg); color: var(--now); }
+.notes { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+.notes h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.nlist { display: grid; gap: 4px; }
+.nitem { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start; padding: 6px 8px; background: var(--surface-2); border-radius: 6px; }
+.nitem span { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.chead { display: flex; gap: 8px; align-items: flex-start; }
+.chead h2 { flex: 1; min-width: 0; }
+.gut { flex: none; display: grid; place-items: center; width: 44px; height: 44px; margin: -10px 0 -10px -10px; cursor: pointer; }
+.gut input { width: 22px; height: 22px; margin: 0; accent-color: var(--good); }
+.ctl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.ctl select, .ctl button, .snz button, .snz input { min-height: 40px; }
+.ctl select { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snz, .panel { display: grid; gap: 6px; padding: 8px; background: var(--surface-2); border-radius: 6px; }
+.snz .row { display: flex; flex-wrap: wrap; gap: 6px; }
+.snz input:invalid { border-color: var(--now); }
+.sw { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 4px 0; background: none; border: 0; text-align: left; }
+.sw .k { flex: none; position: relative; width: 44px; height: 26px; border-radius: 13px; background: var(--line); }
+.sw .k::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); }
+.sw[aria-checked="true"] .k { background: var(--good); }
+.sw[aria-checked="true"] .k::after { left: 21px; }
+.sw:disabled { opacity: 0.5; }
+.chip[aria-pressed] { min-height: 36px; cursor: pointer; border: 1px solid var(--line); background: var(--surface); }
+.chip[aria-pressed="true"] { border-color: var(--accent); background: var(--surface-2); font-weight: 600; }
+.banner { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 6px 8px; border-radius: 6px; background: var(--surface-2); font-size: 13px; }
+/* Undo: a full button beside the control that made the change; in the Assign and Snooze row it wraps under it. */
+button.undo { flex: none; min-height: 44px; min-width: 88px; padding: 6px 16px; font-weight: 600; border-color: var(--accent); color: var(--accent); }
+.chead button.undo { margin: -2px 0; }
+.swrow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.swrow > .sw { flex: 1 1 auto; min-width: 0; width: auto; }
+.slimrow { display: none; }
+.card.slim > * { display: none; }
+.card.slim > .slimrow { display: flex; gap: 8px; align-items: center; min-height: 44px; min-width: 0; max-width: 100%; }
+.card.slim { padding: 4px 8px; opacity: 0.85; }
+.slimrow .open { flex: 1; min-width: 0; text-align: left; background: none; border: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.agentnow { margin: 10px 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 6px; min-width: 0; }
+.agentnow summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agentnow > * { min-width: 0; }
+.agentnow.stale { opacity: .6; }
+.agentnow .age { color: var(--muted); font-size: 13px; }
+.result { font-size: 13px; border-left: 3px solid var(--line); padding-left: 8px; }
+@media (prefers-reduced-motion: no-preference) { .card, .guide, .opt { transition: border-color 0.12s, background 0.12s, box-shadow 0.3s, opacity 0.25s; } }
+</style>
+
+<header class="bar">
+  <div class="in">
+    <div class="row">
+      <h1 id="ttl" class="grow">Decision board</h1>
+      <span id="sync" class="small muted" aria-live="polite">Loading</span>
+      <button id="refresh" type="button" title="Reload from the database">Refresh</button>
+    </div>
+    <div class="row">
+      <div class="counts"><span>Open <b id="c-open">0</b></span><span>Unsent <b id="c-unsent">0</b></span></div>
+      <span id="lastbatch" class="small muted grow"></span>
+      <span id="refreshed" class="small muted"></span>
+      <button id="send" class="primary" type="button" disabled>Send (0)</button>
+      <button id="wake" type="button" hidden>Wake the agent</button>
+    </div>
+    <div id="wakestate" class="small muted" aria-live="polite"></div>
+  </div>
+</header>
+
+<div class="in">
+  <section id="agentnow" class="agentnow" hidden aria-label="Agent status"></section>
+  <section id="due" class="due" hidden aria-label="Due today"></section>
+  <section id="blocked" class="blocked" aria-label="Blocked on you"></section>
+  <div id="tabs" class="tabs" role="tablist" aria-label="Board tabs"></div>
+</div>
+
+<main class="in">
+  <div id="msg" class="msg" hidden role="alert"></div>
+  <section id="guide" class="guide" hidden aria-label="Guide"></section>
+  <div id="board" class="board">
+    <nav id="side" class="side" hidden aria-label="Groups"></nav>
+    <div id="groups" class="groups"></div>
+  </div>
+  <details id="notours" class="grp" hidden><summary id="nosum"></summary><div id="nolist" class="glist"></div></details>
+  <div id="empty" class="empty" hidden></div>
+  <section class="notes" aria-label="New note">
+    <h3>New note</h3>
+    <div id="about" class="about" hidden></div>
+    <textarea id="newnote" placeholder="A message that is not tied to an item. It goes out with the next batch."></textarea>
+    <div class="row"><button id="addnote" type="button">Add note</button><span id="notestate" class="small muted"></span></div>
+    <div id="nlist" class="nlist"></div>
+  </section>
+  <section id="archived" class="notes" hidden aria-label="Archived guides"></section>
+  <footer id="foot" class="page-foot"><span id="zone" class="small muted"></span><span id="settings" class="small muted" hidden></span></footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var FKEY = "decision-board-filter-v1", SKEY = "decision-board-seen-v1";
+  var db = null;
+  var cardDocs = new Map(), items = new Map(), resp = new Map(), batches = new Map(), notes = new Map(), guides = new Map();
+  var meta = null;
+  var loaded = { cards: false, items: false, responses: false, batches: false, notes: false, guides: false, config: false };
+  var cards = new Map();      // itemId -> {el, n, ...refs}. n is the card number, the source of every DOM id of the card.
+  var timers = new Map();     // itemId -> debounce timer
+  var lingerUntil = new Map();   // itemId -> {until: ms, state: the cardState before the tap}
+  var LINGER_MS = 4000;          // done, dismiss, Not ours and snooze keep the card in place this long, with Undo
+  // The agent's status (meta/status, coerced) and this viewer's seen map of cards (id -> updated; null: first visit).
+  var agentStatus = null, seenCards = null; var CKEY = "decision-board-cards-seen-v1";
+  var nowKey = null;
+  // The comments capability, the meta/wake document (the thread every wake writes into) and the notice under Send.
+  var comments = null, commentsOff = false, wakeDoc = null, wakeOutcome = "", wakeTimer = 0;
+  // The state a lingering card keeps, or "" (read by cardState in "pure").
+  function lingerOf(id) { var x = lingerUntil.get(id); return x && x.until > clockMs() ? x.state : ""; }
+  var inflight = new Map();   // itemId -> number of writes in flight
+  var chains = new Map();     // itemId -> promise chain
+  var lastDoc = new Map();    // itemId -> the response this page wrote last, until a snapshot confirms it
+  var sending = false, totalInflight = 0, lastSaved = "", cardSeq = 0, noteItem = "";
+  var f = { tab: "all" };
+  var seen = {};              // guide id -> the "updated" of a status guide when this viewer last looked
+
+  function $(id) { return document.getElementById(id); }
+  function h(tag, attrs) {
+    var e = document.createElement(tag), k, v, kids = Array.prototype.slice.call(arguments, 2);
+    attrs = attrs || {};
+    for (k in attrs) {
+      v = attrs[k];
+      if (v == null || v === false) continue;
+      if (k === "class") e.className = v;
+      else if (k === "text") e.textContent = v;
+      else if (k.indexOf("on") === 0) e.addEventListener(k.slice(2), v);
+      else if (v === true) e.setAttribute(k, "");
+      else e.setAttribute(k, v);
+    }
+    kids.forEach(function (c) { if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(String(c))); });
+    return e;
+  }
+  function clockMs() { return Date.now(); }
+  function nowStamp() { return stampIn(clockMs(), cfg.tz, true); }
+  function idStamp() { return compactStamp(nowStamp()); }
+  function savedTime() { return new Date(clockMs()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: cfg.tz }); }
+  function fmt(s) {
+    return fmtTime(s, cfg.tz);
+  }
+  function rid() { return Math.random().toString(36).slice(2, 6); }
+
+  // per-viewer memory: the selected tab and the status guides already seen
+  try { var raw = localStorage.getItem(FKEY); if (raw) { var o = JSON.parse(raw); if (o && typeof o.tab === "string") f.tab = o.tab; } } catch (e) {}
+  try { var rs = JSON.parse(localStorage.getItem(SKEY) || "{}"); if (rs && typeof rs === "object") seen = rs; } catch (e) {}
+  function saveFilter() { try { localStorage.setItem(FKEY, JSON.stringify(f)); } catch (e) {} }
+  function saveSeen() { try { localStorage.setItem(SKEY, JSON.stringify(seen)); } catch (e) {} }
+  try { seenCards = seenFrom(localStorage.getItem(CKEY)); } catch (e) { seenCards = null; }
+  function saveCardsSeen() { try { localStorage.setItem(CKEY, JSON.stringify(seenCards)); } catch (e) {} }
+  // The number of cards that show the agent-changed dot.
+  function dotCount() { var n = 0; items.forEach(function (it) { if (dotOn(it, seenCards)) n++; }); return n; }
+  // Mark all seen: every card as it is now; also the baseline of a first visit.
+  function markAllSeen() { if (loaded.items) { seenCards = seenOf(Array.from(items.values())); saveCardsSeen(); schedule(); } }
+  // One card seen: the operator answered it or changed a control on it.
+  function seenOne(id) { var it = items.get(id); if (seenCards && it) { seenCards[id] = it.updated; saveCardsSeen(); } }
+
+  function showMsg(t) { var m = $("msg"); m.textContent = t || ""; m.hidden = !t; }
+  function errText(e) { return e && (e.code || e.message) ? (e.code || "") + " " + (e.message || "") : String(e); }
+  function isPending(id) { return timers.has(id) || (inflight.get(id) || 0) > 0; }
+
+  // ---- pure: start. No DOM below this line until "pure: end". The node tests and scripts/board.mjs load this part.
+  // ---- schema: the one definition of fields, kinds and limits. scripts/board.mjs reads it from here.
+  // Field types: s short text, t long text, g guide text, l list of texts, L list of texts or absent,
+  // S text or absent, r revision (a whole number, default 1), b true or false, a:<kind> list of
+  // objects, m:<kind> map from an id to an object, o:<kind> one object or absent,
+  // d a time stamp: ISO 8601 with an offset, or empty.
+  var SCHEMA = {
+    max: { list: 50, options: 8, links: 10, s: 300, t: 20000, g: 200000, line: 60, result: 200, statusBytes: 500 },
+    idRe: /^(?!\.\.?$)[A-Za-z0-9_\-.~:@+]{1,100}$/,
+    stampRe: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?[+-]\d{2}:\d{2}$/,
+    // The one cards document: cards/main holds the card list and the time of the last sync.
+    cardsDoc: "main",
+    cards: { cards: "a:item", refreshed: "d" },
+    item: { id: "s", title: "s", summary: "t", evidence: "t", draft: "t", draft_label: "s", options: "L", recommendation: "s", priority: "s",
+      source: "s", rev: "r", kind: "s", blocks: "s", status: "s", created: "d", updated: "d",
+      links: "a:link", tags: "l", first_asked: "o:asked", due: "s", input: "s", source_key: "s", result: "s", result_at: "d" },
+    link: { label: "s", url: "t" },
+    asked: { date: "s", who: "s" },
+    response: { itemId: "s", choice: "s", note: "t", rev: "r", updated: "d", sent: "b", batch: "s", history: "a:hist",
+      controls: "o:ctl", controls_sent: "o:ctl" },
+    hist: { choice: "s", note: "t", rev: "r", updated: "d", batch: "s" },
+    batch: { id: "s", created: "d", itemIds: "l", noteIds: "l", controlIds: "l", controls: "m:bctl", answers: "m:answer", notes: "m:bnote", status: "s", handled_at: "d" },
+    batchStatuses: ["sent", "handled"],
+    answer: { answer: "s", note: "t", rev: "r" },
+    bnote: { text: "t", item: "s" },
+    ctl: { rev: "r", assign: "s", snooze: "s", dismiss: "b", close: "b", done: "b", tags_on: "l", tags_off: "l" },
+    bctl: { rev: "r", assign: "S", snooze: "S", dismiss: "S", close: "S", done: "S", tags_on: "L", tags_off: "L", keep: "o:bkeep" },
+    bkeep: { assign: "S", dismiss: "S", done: "S" },
+    status: { now: "s", next: "l", waiting: "s", updated: "d", watch: "o:watch" },
+    watch: { started: "d", until: "d" },
+    wake: { thread: "s", updated: "d" },
+    note: { id: "s", text: "t", item: "s", created: "d", sent: "b", batch: "s" },
+    guide: { id: "s", kind: "s", title: "s", body: "g", sections: "a:section", status: "s", created: "d", updated: "d", item: "s" },
+    section: { id: "s", title: "s", body: "g", updated: "d" },
+    kinds: [{ id: "decision", label: "Decision" },
+      { id: "action", label: "Action", options: ["Done", "Done in part, see note", "Later", "Other, see note"] },
+      { id: "info", label: "Info", options: ["Acknowledge"] }],
+    guideKinds: ["text", "status", "reference"],
+    statuses: ["open", "closed"],
+    controlNames: ["assign", "snooze", "dismiss", "close", "done", "tags"],
+    assignFixed: ["me", "agent", "other"],
+    revBound: ["snooze", "dismiss", "close", "done"],
+    placeKeys: ["assign", "dismiss", "done"],
+    personRe: /^[a-z0-9][a-z0-9_-]{0,39}$/,
+    wakeModes: ["poll", "comment", "both", "off"],
+    labels: ["Before", "Now", "Suggested", "Why", "Risk", "Your answer"]
+  };
+  function own(o, k) { return o != null && Object.prototype.hasOwnProperty.call(o, k); }
+  function isObj(v) { return !!v && typeof v === "object" && !Array.isArray(v); }
+  function str(v) { return typeof v === "string" ? v.trim() : ""; }
+  function strs(a) { return Array.isArray(a) ? a.filter(function (x) { return typeof x === "string"; }) : []; }
+  // A revision is a whole number from 1. A string of digits counts. "0x10", "1e1", 2.5 and [5] do not.
+  function wholeRev(v) {
+    if (typeof v === "string" && /^[0-9]{1,9}$/.test(v)) v = Number(v);
+    return typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : 1;
+  }
+  // The page reads every database value through coerce: a field of the wrong type becomes the empty value of its type.
+  function coerce(kind, raw) {
+    var spec = SCHEMA[kind], src = isObj(raw) ? raw : {}, out = {};
+    Object.keys(spec).forEach(function (k) {
+      var t = spec[k].split(":"), v = own(src, k) ? src[k] : undefined;
+      if (t[0] === "L") { if (v !== undefined) out[k] = strs(v); }
+      else if (t[0] === "S") { if (typeof v === "string") out[k] = v; }
+      else if (t[0] === "r") out[k] = wholeRev(v);
+      else if (t[0] === "b") out[k] = v === true;
+      else if (t[0] === "l") out[k] = strs(v);
+      else if (t[0] === "a") out[k] = Array.isArray(v) ? v.filter(isObj).map(function (x) { return coerce(t[1], x); }) : [];
+      else if (t[0] === "o") { if (isObj(v)) out[k] = coerce(t[1], v); }
+      else if (t[0] === "m") {
+        var m = Object.create(null);
+        if (isObj(v)) Object.keys(v).forEach(function (x) { if (isObj(v[x])) m[x] = coerce(t[1], v[x]); });
+        out[k] = m;
+      } else out[k] = typeof v === "string" ? v : "";
+    });
+    return out;
+  }
+  // The strict check of the scripts: the problems of one document, as short texts.
+  // qk quotes a field name or map key that came from the database; the default leaves it as it is.
+  function problems(kind, raw, qk) {
+    var spec = SCHEMA[kind], M = SCHEMA.max, out = [];
+    qk = qk || String;
+    if (!isObj(raw)) return ["not an object"];
+    Object.keys(raw).forEach(function (key) {
+      var k = qk(key);
+      if (!own(spec, key)) { out.push(k + ": unknown field"); return; }
+      var t = spec[key].split(":"), c = t[0], v = raw[key];
+      if (c === "d") {
+        if (typeof v !== "string") out.push(k + ": not text");
+        else if (v !== "" && !SCHEMA.stampRe.test(v)) out.push(k + ": not a time with an offset, such as 2026-11-13T13:31:08+01:00");
+      } else if ("stgS".indexOf(c) >= 0) {
+        var lim = M[c === "S" ? "s" : c];
+        if (typeof v !== "string") out.push(k + ": not text"); else if (v.length > lim) out.push(k + ": longer than " + lim);
+      } else if (c === "l" || c === "L") {
+        if (!Array.isArray(v) || v.some(function (x) { return typeof x !== "string" || x.length > M.s; })) out.push(k + ": not a list of short texts");
+      } else if (c === "r") { if (wholeRev(v) !== v) out.push(k + ": not a whole number"); }
+      else if (c === "b") { if (typeof v !== "boolean") out.push(k + ": not true or false"); }
+      else if (c === "a") {
+        if (!Array.isArray(v)) out.push(k + ": not a list");
+        else v.forEach(function (x, i) { problems(t[1], x, qk).forEach(function (p) { out.push(k + "[" + i + "]." + p); }); });
+      } else if (c === "o") {
+        if (!isObj(v)) out.push(k + ": not an object");
+        else problems(t[1], v, qk).forEach(function (p) { out.push(k + "." + p); });
+      } else if (c === "m") {
+        if (!isObj(v)) out.push(k + ": not an object");
+        else Object.keys(v).forEach(function (x) { problems(t[1], v[x], qk).forEach(function (p) { out.push(k + "." + qk(x) + "." + p); }); });
+      }
+    });
+    return out;
+  }
+
+  // ---- time. A stamp is ISO 8601 with the offset of the config tz, never Z: the script writes seconds, the page
+  // milliseconds. Stamps are never compared as strings: every compare goes through stampMs or cmpStamp.
+  var TZ_RE = /^(UTC|[A-Za-z][A-Za-z0-9_+\-]*(\/[A-Za-z0-9_+\-]+){1,2})$/;
+  // A time zone: an IANA name or UTC that the runtime accepts. A fixed offset such as +01:00 is not one.
+  function tzOk(v) {
+    if (typeof v !== "string" || !TZ_RE.test(v)) return false;
+    try { new Intl.DateTimeFormat("en-US", { timeZone: v }); return true; } catch (e) { return false; }
+  }
+  // The canonical name of a zone (europe/warsaw -> Europe/Warsaw), or "" when it is no zone.
+  function normTz(v) {
+    if (!tzOk(v)) return "";
+    try { return new Intl.DateTimeFormat("en-US", { timeZone: v }).resolvedOptions().timeZone; } catch (e) { return ""; }
+  }
+  var ZONE_FMT = Object.create(null);
+  // The wall clock of an instant in a zone, as 2-digit strings (the year 4).
+  function zoneParts(ms, tz) {
+    var fm = ZONE_FMT[tz] || (ZONE_FMT[tz] = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric",
+      month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+    var p = {};
+    fm.formatToParts(new Date(ms)).forEach(function (x) { if (x.type !== "literal") p[x.type] = x.value; });
+    return { year: p.year, month: p.month, day: p.day, hour: p.hour === "24" ? "00" : p.hour, minute: p.minute, second: p.second };
+  }
+  // The stamp of an instant in a zone: YYYY-MM-DDTHH:MM:SS[.mmm]±HH:MM. UTC is +00:00.
+  function stampIn(ms, tz, withMs) {
+    var s = Math.floor(ms / 1000) * 1000, p = zoneParts(s, tz);
+    var wall = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+    var off = Math.round((wall - s) / 60000), a = Math.abs(off);
+    function two(n) { return (n < 10 ? "0" : "") + n; }
+    return p.year + "-" + p.month + "-" + p.day + "T" + p.hour + ":" + p.minute + ":" + p.second +
+      (withMs ? "." + String(ms - s).padStart(3, "0") : "") + (off < 0 ? "-" : "+") + two(Math.floor(a / 60)) + ":" + two(a % 60);
+  }
+  // The stamp inside ids and folder names: 2026-11-13T13:31:08.412+01:00 -> 20261113T133108+0100.
+  function compactStamp(s) { return s.slice(0, 19).replace(/[-:]/g, "") + s.slice(-6).replace(":", ""); }
+  // The instant of a stamp in ms; an unreadable stamp is -Infinity.
+  function stampMs(v) {
+    var t = typeof v === "string" ? Date.parse(v) : NaN;
+    return isNaN(t) ? -Infinity : t;
+  }
+  // -1, 0 or 1 by instant. Two unreadable stamps are equal.
+  function cmpStamp(a, b) { var x = stampMs(a), y = stampMs(b); return x < y ? -1 : x > y ? 1 : 0; }
+  // The calendar day YYYY-MM-DD of an instant in a zone.
+  function dayIn(ms, tz) { return stampIn(ms, tz, false).slice(0, 10); }
+  // The day n calendar days after day (a calendar add, not n times 24 hours).
+  function addDays(day, n) {
+    var p = String(day).split("-"), t = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2] + n));
+    return t.getUTCFullYear() + "-" + String(t.getUTCMonth() + 1).padStart(2, "0") + "-" + String(t.getUTCDate()).padStart(2, "0");
+  }
+  // A stamp again in the zone, or "" when it is unreadable.
+  function localStamp(v, tz) { var ms = stampMs(v); return ms === -Infinity ? "" : stampIn(ms, tz, false); }
+  // A stamp as short text in the zone's wall clock, or "".
+  function fmtTime(v, tz) {
+    var ms = stampMs(v);
+    if (ms === -Infinity) return "";
+    try { return new Date(ms).toLocaleString([], { timeZone: tz, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; }
+  }
+  // The footer line. It names the config zone, never the device zone.
+  function zoneNote(tz) { return "Times in " + tz; }
+
+  // ---- board config. The document meta/config overrides these defaults field by field.
+  // The due buckets a group can match; dueBucket returns one.
+  var DUE_BUCKETS = ["overdue", "today", "this_week", "next_week", "later", "none"];
+  var DEFAULTS = {
+    title: "Decision board",
+    agent: "Claude",
+    tabs: [],
+    priorities: [{ id: "now", label: "Now" }, { id: "soon", label: "Soon" }, { id: "later", label: "Later" }],
+    domains: [],
+    link_hosts: [],
+    tags: [{ id: "alert", label: "Alert" }, { id: "incident", label: "Incident" }],
+    tz: "Europe/Warsaw",
+    settings: "",
+    groups: [
+      { id: "alerts", label: "Alerts and incidents", match: { tags: ["alert", "incident"] } },
+      { id: "blocked", label: "Now: blocked on a human", match: { blocked: true } },
+      { id: "this-week", label: "This week", match: [{ due: ["overdue", "today", "this_week"] }, { priority: ["now"], due: ["none"] }] },
+      { id: "next-week", label: "Next week", match: [{ due: ["next_week"] }, { priority: ["soon"], due: ["none"] }] },
+      { id: "backlog", label: "Backlog", match: {} },
+      { id: "done", label: "Done", match: { state: "done" } }
+    ],
+    sort: ["priority", "due", "created", "id"],
+    week_start: "tuesday 12:00",
+    controls: { assign: false, snooze: false, dismiss: false, close: false, done: false, tags: false },
+    people: [],
+    status: { stale_minutes: 30, guide: false },
+    wake: { mode: "both" }
+  };
+  // A config list: at most SCHEMA.max.list entries. A list of {id, label}: drop entries without a text id and later duplicates.
+  function cfgList(a) { return Array.isArray(a) ? a.slice(0, SCHEMA.max.list) : []; }
+  function idList(a, ok) {
+    var seenIds = Object.create(null), out = [];
+    cfgList(a).forEach(function (x) {
+      var id = isObj(x) && own(x, "id") ? str(x.id) : "";
+      if (!id || seenIds[id] || (ok && !ok(id))) return;
+      seenIds[id] = true;
+      out.push({ id: id, label: own(x, "label") ? str(x.label) : "", src: x });
+    });
+    return out;
+  }
+  function labelRe(list) {
+    return new RegExp("^(" + list.map(function (l) { return l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|") + "):[ \\t]*(.*)$");
+  }
+  var LABEL_RE = labelRe(SCHEMA.labels.map(esc));
+  function intIn(v, lo, hi, def) { return Number.isInteger(v) && v >= lo && v <= hi ? v : def; }
+  function wakePlan(raw) {
+    var w = isObj(raw) ? raw : {}, mode = SCHEMA.wakeModes.indexOf(w.mode) >= 0 ? w.mode : DEFAULTS.wake.mode;
+    var poll = mode === "poll" || mode === "both", d = mode === "poll" ? [300, 24] : [900, 32];
+    return { mode: mode, comment: mode === "comment" || mode === "both", poll: poll,
+      poll_seconds: poll ? intIn(w.poll_seconds, 60, 86400, d[0]) : 0, poll_limit: poll ? intIn(w.poll_limit, 1, 1000, d[1]) : 0 };
+  }
+  function normConfig(raw) {
+    var c = isObj(raw) ? raw : {};
+    function g(k) { return own(c, k) ? c[k] : undefined; }
+    var out = { title: str(g("title")), agent: str(g("agent")) || DEFAULTS.agent };
+    var rawTabs = g("tabs");
+    var tabs = idList(rawTabs, function (id) { return id !== "all" && id.indexOf("guide:") !== 0; }).map(function (t) {
+      // A tab matches by source (trim, lower case) or by tag id (exact).
+      var m = Object.create(null), sm = own(t.src, "match") ? t.src.match : null;
+      if (isObj(sm)) ["source", "tags"].forEach(function (k) {
+        var v = own(sm, k) ? strs(cfgList(sm[k])).map(function (x) { return k === "source" ? x.trim().toLowerCase() : x; }).filter(Boolean) : [];
+        if (v.length) m[k] = v;
+      });
+      return { id: t.id, label: t.label || t.id, match: m, rest: own(t.src, "rest") && t.src.rest === true };
+    });
+    // [] leaves only the All tab. A list whose every entry is invalid keeps the default tabs.
+    out.tabs = Array.isArray(rawTabs) && (tabs.length || !rawTabs.length) ? tabs : DEFAULTS.tabs;
+    out.kinds = SCHEMA.kinds;
+    var p = idList(g("priorities")).map(function (x) { return { id: x.id, label: x.label || x.id }; });
+    out.priorities = p.length ? p : DEFAULTS.priorities;
+    // Hosts that a reference guide can load from, by https: only. A host matches itself and its subdomains,
+    // on any port. A host needs at least two labels, so "invalid" or "com" cannot open a whole top-level domain.
+    out.domains = hostList(g("domains"));
+    // Hosts that the links of a card can point to, by the same rules.
+    out.link_hosts = hostList(g("link_hosts"));
+    var rawTags = g("tags"), tg = idList(rawTags).map(function (x) { return { id: x.id, label: x.label || x.id }; });
+    out.tags = Array.isArray(rawTags) && (tg.length || !rawTags.length) ? tg : DEFAULTS.tags;
+    // The time zone of every stamp and of every time shown. A bad name or a fixed offset keeps the default.
+    out.tz = normTz(g("tz")) || DEFAULTS.tz;
+    // The footer line that check writes: where the settings live.
+    out.settings = str(g("settings")).slice(0, 200);
+    var rawGroups = g("groups"), gs = normGroups(rawGroups);
+    out.groups = Array.isArray(rawGroups) && (gs.length || !rawGroups.length) ? gs : DEFAULT_GROUPS;
+    out.sort = normSort(g("sort"));
+    out.week_start = normWeek(g("week_start")) || DEFAULT_WEEK;
+    out.controls = normControls(g("controls"));
+    out.people = idList(g("people"), personOk).map(function (x) { return { id: x.id, label: x.label || x.id }; });
+    var st = g("status"); out.status = { stale_minutes: intIn(isObj(st) ? st.stale_minutes : undefined, 1, 1440, 30), guide: isObj(st) && st.guide === true };
+    out.wake = wakePlan(g("wake"));
+    return out;
+  }
+  function normControls(v) { var o = {}; SCHEMA.controlNames.forEach(function (k) { o[k] = isObj(v) && own(v, k) && v[k] === true; }); return o; }
+  function personOk(id) { return SCHEMA.personRe.test(id) && SCHEMA.assignFixed.indexOf(id) < 0; }
+  // A host entry has two labels or more. An entry of digits and dots is a full IPv4 address. A
+  // two-label entry of two short labels ("co.uk") looks like a public suffix and is dropped.
+  var IPV4 = /^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
+  function hostList(a) {
+    return strs(cfgList(a)).map(function (x) { return x.trim().toLowerCase(); }).filter(function (x) {
+      var l = x.split(".");
+      if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(x) || x.length > 253) return false;
+      if (/^[\d.]+$/.test(x)) return IPV4.test(x);
+      return !(l.length === 2 && l[0].length <= 2 && l[1].length <= 2);
+    });
+  }
+  // A host matches an entry when it is the entry, or a subdomain of it. An IPv4 entry matches only itself.
+  function hostOk(host, list) {
+    host = String(host).toLowerCase();
+    return list.some(function (d) { return host === d || (!IPV4.test(d) && host.slice(-d.length - 1) === "." + d); });
+  }
+  // ---- groups and sort. A group is {id, label, match: [match objects], fold}; fold is true when every match is for done cards.
+  var GROUP_ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+  var MATCH_KEYS = ["source", "tags", "priority", "kind", "due", "blocked", "state"];
+  var GROUP_STATES = ["active", "done", "any"];
+  var SORT_KEYS = ["priority", "due", "first_asked", "created", "updated", "title", "id"];
+  function normMatch(m) {
+    if (!isObj(m)) return null;
+    var out = Object.create(null), bad = false;
+    Object.keys(m).forEach(function (k) {
+      if (k === "__proto__" || k === "constructor" || k === "prototype") { bad = true; return; }
+      if (k.charAt(0) === "_") return;
+      var v = m[k];
+      if (MATCH_KEYS.indexOf(k) < 0) { bad = true; return; }
+      if (k === "blocked") { if (typeof v === "boolean") out.blocked = v; else bad = true; return; }
+      if (k === "state") { if (GROUP_STATES.indexOf(v) >= 0) out.state = v; else bad = true; return; }
+      var l = Array.isArray(v) ? v.slice(0, SCHEMA.max.list) : [];
+      if (!l.length || l.some(function (x) { return typeof x !== "string" || !x.trim(); })) { bad = true; return; }
+      if (k === "source") l = l.map(function (x) { return x.trim().toLowerCase(); });
+      if (k === "kind" && l.some(function (x) { return !SCHEMA.kinds.some(function (y) { return y.id === x; }); })) { bad = true; return; }
+      if (k === "due" && l.some(function (x) { return DUE_BUCKETS.indexOf(x) < 0; })) { bad = true; return; }
+      out[k] = l;
+    });
+    if (bad) return null;
+    if (!out.state) out.state = "active";
+    return out;
+  }
+  function normGroups(a) {
+    return idList(a, function (id) { return GROUP_ID_RE.test(id); }).map(function (x) {
+      if (!Object.keys(x.src).every(function (k) { return k === "id" || k === "label" || k === "match" || k.charAt(0) === "_"; })) return null;
+      var raw = own(x.src, "match") ? x.src.match : {}, list = Array.isArray(raw) ? cfgList(raw) : [raw], ms = list.map(normMatch);
+      if (!ms.length || ms.some(function (m) { return m === null; })) return null;
+      return { id: x.id, label: x.label || x.id, match: ms, fold: ms.every(function (m) { return m.state === "done"; }) };
+    }).filter(Boolean);
+  }
+  function normSort(a) {
+    var seen = Object.create(null), out = [];
+    strs(cfgList(a)).forEach(function (x) {
+      var k = x.trim(), base = k.charAt(0) === "-" ? k.slice(1) : k;
+      if (SORT_KEYS.indexOf(base) < 0 || seen[base]) return;
+      seen[base] = true; out.push(k);
+    });
+    return out.length ? out : DEFAULTS.sort;
+  }
+  var DEFAULT_GROUPS = normGroups(DEFAULTS.groups);
+  // A week start: a day name and an optional 24-hour time, such as "tuesday 12:00"; case and spaces around ignored.
+  // -> {day: 0 (Sunday) to 6, min: minutes after midnight}, or null when it is not one.
+  var WEEK_DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  function normWeek(v) {
+    var m = typeof v === "string" ? /^\s*([a-z]+)(?:\s+(\d{1,2}):(\d{2}))?\s*$/i.exec(v) : null, d = m ? WEEK_DAYS.indexOf(m[1].toLowerCase()) : -1;
+    if (d < 0 || (m[2] !== undefined && (+m[2] > 23 || +m[3] > 59))) return null;
+    return { day: d, min: m[2] === undefined ? 0 : +m[2] * 60 + +m[3] };
+  }
+  // The parsed DEFAULTS.week_start: the fallback of normConfig.
+  var DEFAULT_WEEK = normWeek(DEFAULTS.week_start);
+  var cfg = normConfig(null);
+  function applyConfig(raw) { cfg = normConfig(raw); }
+  function boardTitle(m) { return cfg.title || (m && str(m.title)) || DEFAULTS.title; }
+
+  // ---- tabs. An item belongs to one tab besides All. First the page looks for a tab whose
+  // match lists the item's source (after trim and lower case), then for a tab whose match lists one
+  // of its tags. Then the item goes to the first tab with rest: true. Otherwise it shows only under All.
+  function bySource(tab, it) { var l = tab.match.source; return !!l && typeof it.source === "string" && l.indexOf(it.source.trim().toLowerCase()) >= 0; }
+  function byTag(tab, it) { var l = tab.match.tags; return !!l && tagsOf(it).some(function (t) { return l.indexOf(t) >= 0; }); }
+  function tabOf(it, tabs) {
+    var i;
+    for (i = 0; i < tabs.length; i++) if (bySource(tabs[i], it)) return tabs[i].id;
+    for (i = 0; i < tabs.length; i++) if (byTag(tabs[i], it)) return tabs[i].id;
+    for (i = 0; i < tabs.length; i++) if (tabs[i].rest) return tabs[i].id;
+    return "";
+  }
+  function shownTabs() { return loaded.config ? cfg.tabs : []; }
+  function inTab(it, tab) { return tab === "all" || tabOf(it, cfg.tabs) === tab; }
+  function tabCounts(list, pred) {
+    var n = { all: 0 };
+    cfg.tabs.forEach(function (t) { n[t.id] = 0; });
+    list.forEach(function (it) { if (!pred(it)) return; n.all++; var t = tabOf(it, cfg.tabs); if (t) n[t]++; });
+    return n;
+  }
+  // Guides: every guide that is not archived is one more tab after the item tabs. Status guides come
+  // first. The tab key of a guide is "guide:" + id.
+  function guideKey(g) { return "guide:" + g.id; }
+  function isGuideTab(tab) { return String(tab).indexOf("guide:") === 0; }
+  function guideKind(g) { return SCHEMA.guideKinds.indexOf(g.kind) >= 0 ? g.kind : "text"; }
+  // The board shows one status guide: the newest active one.
+  function guideList(list, archived) {
+    var newest = null;
+    if (!archived) list.forEach(function (g) { if (guideKind(g) === "status" && g.status !== "archived" && !(newest && cmpStamp(newest.updated, g.updated) >= 0)) newest = g; });
+    return list.filter(function (g) { return (g.status === "archived") === archived && (archived || guideKind(g) !== "status" || newest === g); }).sort(function (a, b) {
+      var sa = guideKind(a) === "status" ? 0 : 1, sb = guideKind(b) === "status" ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      var c = cmpStamp(a.created, b.created);
+      if (c) return c;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+  }
+  // The tab label of a guide.
+  function guideLabel(g) { return g.title || g.id; }
+  function guideOfTab(list, tab) { return guideList(list, false).filter(function (g) { return guideKey(g) === tab; })[0] || null; }
+  function guideForItem(list, itemId) { return guideList(list, false).filter(function (g) { return g.item === itemId; })[0] || null; }
+  // A status guide changed since this viewer looked at it.
+  function guideChanged(g, seenMap) { return guideKind(g) === "status" && !!g.updated && cmpStamp(own(seenMap, g.id) ? seenMap[g.id] : "", g.updated) < 0; }
+  // A guide shows its sections, or its body as one section.
+  function guideSections(g) { return g.sections.length ? g.sections : [{ id: "", title: "", body: g.body, updated: "" }]; }
+
+  // ---- kinds, priorities, the cards document
+  function kindDef(it) { return cfg.kinds.filter(function (k) { return k.id === it.kind; })[0] || cfg.kinds[0]; }
+  function kindOf(it) { return kindDef(it).id; }
+  function isDefaultKind(k) { return k === cfg.kinds[0].id; }
+  function kindLabel(k) { var x = cfg.kinds.filter(function (y) { return y.id === k; })[0]; return x ? x.label : k; }
+  // The options of a card: its own list, or the default options of its kind when it has none.
+  function optionsOf(it) { return Array.isArray(it.options) ? it.options : (kindDef(it).options || []); }
+  function priRank(p) { for (var i = 0; i < cfg.priorities.length; i++) if (cfg.priorities[i].id === p) return i; return 99; }
+  function priClass(p) { return ["now", "soon", "later"][priRank(p)] || ""; }
+  function priLabel(p) { var i = priRank(p); return i < 99 ? cfg.priorities[i].label : (p || "none"); }
+  // "Refreshed <time>" from the time of the last sync. d is the coerced cards document or undefined; show turns a time into text.
+  function refreshedText(d, show) { return d && d.refreshed && show(d.refreshed) ? "Refreshed " + show(d.refreshed) : ""; }
+  // The cards of cards/main by card id, the key that responses, batches, notes and guides use.
+  // A card without a valid id and a repeated id are left out; the first wins.
+  function cardsOf(d) {
+    var out = new Map();
+    (d && Array.isArray(d.cards) ? d.cards : []).forEach(function (c) { if (SCHEMA.idRe.test(c.id) && !out.has(c.id)) out.set(c.id, c); });
+    return out;
+  }
+
+  // ---- links, tags and the first ask of a card
+  // Why a link URL is not valid, or "" when it is: it must parse, use https:, carry no user name or
+  // password, and point at a host of the config list link_hosts or a subdomain of one, on any port.
+  function linkProblem(v) {
+    var u;
+    if (typeof v !== "string") return "not text";
+    try { u = new URL(v); } catch (e) { return "not a URL"; }
+    if (u.protocol !== "https:") return "not an https: URL";
+    if (u.username || u.password) return "has a user name or password";
+    if (!cfg.link_hosts.length) return "no link_hosts in the config: set link_hosts in meta/config";
+    var host = u.hostname.toLowerCase();
+    if (!hostOk(host, cfg.link_hosts)) return "host " + JSON.stringify(host) + " is not on link_hosts";
+    return "";
+  }
+  // The links a card shows: the valid ones, at most SCHEMA.max.links. The text is the label, or the host.
+  function validLinks(it) {
+    var out = [];
+    (Array.isArray(it.links) ? it.links : []).forEach(function (l) {
+      if (!isObj(l) || out.length >= SCHEMA.max.links || linkProblem(l.url)) return;
+      var u = new URL(l.url);
+      out.push({ href: u.href, text: str(l.label) || u.hostname, host: u.hostname });
+    });
+    return out;
+  }
+  // The tags a card shows: the ids that the config knows, once each, with their labels.
+  function tagChips(it) {
+    var out = [], had = Object.create(null);
+    tagsOf(it).forEach(function (id) {
+      var t = cfg.tags.filter(function (x) { return x.id === id; })[0];
+      if (t && !had[id]) { had[id] = true; out.push(t); }
+    });
+    return out;
+  }
+  // A real calendar date written YYYY-MM-DD.
+  function realDate(v) {
+    var m = typeof v === "string" ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(v) : null;
+    if (!m) return false;
+    var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+  }
+  // first_asked is required on an open card whose kind is not info.
+  function needsAsked(it) {
+    return (str(it.status) || "open") === "open" && (str(it.kind) || "decision") !== "info";
+  }
+  // who: empty, or at most 40 characters of the id pattern, so it cannot write a sentence into the age line.
+  function whoOk(v) { return v === "" || (typeof v === "string" && v.length <= 40 && SCHEMA.idRe.test(v)); }
+  // "First asked MM-DD (who), N days": N whole calendar days from the date to the day of nowMs in the config tz.
+  function askedText(fa, nowMs, tz) {
+    if (!isObj(fa) || !realDate(fa.date)) return "";
+    var p = fa.date.split("-"), who = whoOk(fa.who) ? fa.who : "", d = dayIn(nowMs, tz).split("-");
+    var n = Math.round((Date.UTC(+d[0], +d[1] - 1, +d[2]) - Date.UTC(+p[0], +p[1] - 1, +p[2])) / 86400000);
+    n = Math.max(0, n);
+    return "First asked " + p[1] + "-" + p[2] + (who ? " (" + who + ")" : "") + ", " + n + (n === 1 ? " day" : " days");
+  }
+  // A draft: the raw text to paste. Shown when it holds more than spaces; copied exactly as stored.
+  // A label: [draft], (draft), a fence, the word draft alone on the first line, or a label word followed by ":" or a
+  // spaced dash (" - "). "Draft agenda ..." and "Note-taking ..." are text, not labels.
+  var DRAFT_LABEL_RE = /^\s*(?:\[\s*draft\s*\]|\(\s*draft\s*\)|```|draft[ \t]*(?:\r?\n|$)|\**(?:draft|note|notes|nb|preface|approval|caveat|proposed (?:reply|message|text|prompt)|suggested (?:reply|message|text|prompt))\**(?:[ \t]*:|[ \t]+[-–—][ \t]))/i;
+  function draftText(it) { return typeof it.draft === "string" ? it.draft : ""; }
+  function hasDraft(it) { return draftText(it).trim() !== ""; }
+  function draftLabelOf(it) { return str(it.draft_label) || "Draft"; }
+  // The label that a draft starts with, such as "DRAFT" or "Note:", or "" when it starts with the text itself.
+  function draftWarning(t) { var m = typeof t === "string" ? DRAFT_LABEL_RE.exec(t) : null; return m ? m[0].trim() : ""; }
+
+  // ---- due dates. A due date is a day YYYY-MM-DD in the config tz. ms is a time in milliseconds, given by the caller.
+  // The day of ms in the config tz, YYYY-MM-DD.
+  function todayOf(nowMs) { return dayIn(nowMs, cfg.tz); }
+  // Whole calendar days from day a to day b (both YYYY-MM-DD): b - a.
+  function dayDiff(a, b) {
+    var p = a.split("-"), q = b.split("-");
+    return Math.round((Date.UTC(+q[0], +q[1] - 1, +q[2]) - Date.UTC(+p[0], +p[1] - 1, +p[2])) / 86400000);
+  }
+  // The due line of a card, or null without a real due date. cls is the tag colour.
+  function dueInfo(it, today) {
+    if (!realDate(it.due)) return null;
+    var d = dayDiff(today, it.due);
+    if (d < 0) return { days: d, text: "Overdue " + -d + (d === -1 ? " day" : " days"), cls: "now" };
+    if (d === 0) return { days: 0, text: "Due today", cls: "now" };
+    if (d === 1) return { days: 1, text: "Due tomorrow", cls: "soon" };
+    return { days: d, text: "Due " + it.due.slice(5), cls: "" };
+  }
+  // The wall clock of ms in the config tz, as minutes since 1970-01-01 00:00 of that clock (calendar arithmetic:
+  // a DST change moves no week boundary).
+  function wallMin(ms) { var p = zoneParts(ms, cfg.tz); return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute) / 60000; }
+  // The offset of the config tz at ms, in minutes.
+  function offMin(ms) { return wallMin(ms) - Math.floor(ms / 60000); }
+  // The wall-clock minute (as wallMin) at which the week of the wall-clock minute w started: the last cfg.week_start
+  // at or before w. Day 0 of the count, 1970-01-01, was a Thursday (day of week 4, Sunday 0).
+  function wallWeekStart(w) {
+    var day = Math.floor(w / 1440), s = (day - (day + 4 - cfg.week_start.day + 7) % 7) * 1440 + cfg.week_start.min;
+    return s > w ? s - 10080 : s;
+  }
+  // The week start of ms, never earlier than at any instant before ms. When the clocks went back in the last 3 hours,
+  // the wall clock repeats an hour: the week start is then also taken at the last minute before the change (found by
+  // halving), so a week that turned in the first pass of that hour stays turned in the second.
+  function weekStartOf(ms) {
+    var s = wallWeekStart(wallMin(ms)), lo = ms - 180 * 60000, hi = ms, off = offMin(ms);
+    if (offMin(lo) <= off) return s;
+    while (hi - lo > 60000) { var mid = lo + Math.max(1, Math.floor((hi - lo) / 120000)) * 60000; if (offMin(mid) > off) lo = mid; else hi = mid; }
+    return Math.max(s, wallWeekStart(wallMin(lo)));
+  }
+  // The bucket of a due date that a group can match: overdue, today, this_week (from tomorrow to the end of the
+  // current week), next_week (the week after), later, or none (no real due date). A due day counts at its start
+  // (00:00), so a card due on the start day of a week that starts at 12:00 belongs to the week that ends that noon.
+  // The bucket names are DUE_BUCKETS, defined at the top of "// ---- board config" (normConfig needs them when the page loads).
+  function dueBucket(due, ms) {
+    if (!realDate(due)) return "none";
+    var d = dayDiff(todayOf(ms), due);
+    if (d < 0) return "overdue";
+    if (d === 0) return "today";
+    var p = due.split("-"), at = Date.UTC(+p[0], +p[1] - 1, +p[2]) / 60000, s = weekStartOf(ms);
+    if (at < s + 10080) return "this_week";
+    if (at < s + 20160) return "next_week";
+    return "later";
+  }
+  // "Due today": the cards due today or earlier that are not closed, the most overdue first, then in the order of
+  // sorted. An answered card stays until it is closed.
+  function dueList(sorted, today) {
+    return sorted.filter(function (it) { return str(it.status) !== "closed" && !ctlDone(it) && realDate(it.due) && it.due <= today; })
+      .sort(function (a, b) { return a.due < b.due ? -1 : a.due > b.due ? 1 : 0; });
+  }
+
+  // ---- revisions and answers
+  function revOf(x) { return wholeRev(x ? x.rev : 1); }
+  function hasAnswer(id) { var r = resp.get(id); return !!(r && (r.choice || r.note)); }
+  // The card changed after the operator answered it.
+  function isChanged(it) { var r = resp.get(it.id); return !!(r && (r.choice || r.note) && revOf(it) > revOf(r)); }
+  // A note without an option on a card with options is a question to the agent.
+  function isQuestion(it, r) { return !!(r && r.note && !r.choice && optionsOf(it).length); }
+  // The response a save writes. A sent answer moves into history. An unsent draft is replaced.
+  function nextResponse(prev, itemId, choice, note, rev, now) {
+    var hist = prev && Array.isArray(prev.history) ? prev.history.slice() : [];
+    if (prev && prev.sent === true && (prev.choice || prev.note))
+      hist.push({ choice: prev.choice || "", note: prev.note || "", rev: revOf(prev), updated: prev.updated || "", batch: prev.batch || "" });
+    var doc = { itemId: itemId, choice: choice, note: note, rev: rev, updated: now, sent: false, batch: "" };
+    if (hist.length) doc.history = hist;
+    if (prev && prev.controls) doc.controls = prev.controls;
+    if (prev && prev.controls_sent) doc.controls_sent = prev.controls_sent;
+    return doc;
+  }
+  // Of two versions of one response, the one with the later "updated" instant wins. A tie keeps the database copy.
+  function newerDoc(got, mine) { return mine && (!got || cmpStamp(mine.updated, got.updated) > 0) ? mine : got; }
+  // What Send takes: unsent answers of cards that exist, are not closed, and did not change after the
+  // answer, and every unsent note.
+  function sendable() {
+    var r = [], n = [], c = [];
+    resp.forEach(function (x, id) {
+      var it = items.get(id);
+      // A control change goes out on a closed card too: an undo there must reach the agent.
+      if (it && ctlUnsent(it, x)) c.push(x);
+      if (x.sent || !(x.choice || x.note) || !it || it.status === "closed" || revOf(x) < revOf(it)) return;
+      r.push(x);
+    });
+    notes.forEach(function (x) { if (!x.sent && x.text) n.push(x); });
+    return { r: r, n: n, c: c };
+  }
+  // The batch carries a copy of every answer and note at send time; the agent reads the batch only.
+  // s is sendable()'s {r, n, c}; a missing list is empty. The page writes a batch once, with status "sent".
+  function batchDoc(bid, now, s) {
+    var rs = s.r || [], ns = s.n || [];
+    var cs = s.c || [];
+    var answers = Object.create(null), nn = Object.create(null), cc = Object.create(null);
+    rs.forEach(function (x) { answers[x.itemId] = { answer: x.choice, note: x.note, rev: revOf(x) }; });
+    ns.forEach(function (x) { nn[x.id] = { text: x.text, item: x.item || "" }; });
+    cs.forEach(function (x) { cc[x.itemId] = controlDiff(x.controls_sent, x.controls, revOf(items.get(x.itemId))); });
+    return { id: bid, created: now, itemIds: rs.map(function (x) { return x.itemId; }),
+      noteIds: ns.map(function (x) { return x.id; }), controlIds: cs.map(function (x) { return x.itemId; }),
+      answers: answers, notes: nn, controls: cc, status: "sent" };
+  }
+  // A batch is handled when the agent's ack set its status to "handled".
+  function isHandled(b) { return b.status === "handled"; }
+
+  // ---- quick controls. The operator's control state of a card lives in its response (controls); controls_sent is
+  // the state as of the last batch that carried it. Every control is off until cfg.controls turns it on.
+  // The assignees, in order: me, the agent, the people of the config, then "Not ours". "" is nobody.
+  function assignList() {
+    return [{ id: "me", label: "Me" }, { id: "agent", label: cfg.agent }].concat(cfg.people.map(function (x) { return { id: x.id, label: x.label }; }),
+      [{ id: "other", label: "Not ours" }]);
+  }
+  function assignIds() { return assignList().map(function (x) { return x.id; }); }
+  function anyControl() { return SCHEMA.controlNames.some(function (k) { return cfg.controls[k]; }); }
+  function ctlDefault() { return { rev: 1, assign: "", snooze: "", dismiss: false, close: false, done: false, tags_on: [], tags_off: [] }; }
+  // A control state read for a card at rev: snooze, dismiss, close and done answer one rev and clear when the card
+  // rev is higher; a control the config turns off reads as its default; bad values are cleared; tags are config
+  // ids, once each, sorted, never in both lists.
+  function ctlNorm(c, rev) {
+    var o = ctlDefault();
+    if (isObj(c)) {
+      ["assign", "snooze"].forEach(function (k) { if (typeof c[k] === "string") o[k] = c[k]; });
+      ["dismiss", "close", "done"].forEach(function (k) { o[k] = c[k] === true; });
+      o.tags_on = strs(c.tags_on); o.tags_off = strs(c.tags_off);
+    }
+    if (wholeRev(c && c.rev) < rev) { o.snooze = ""; o.dismiss = o.close = o.done = false; }
+    var d = ctlDefault();
+    SCHEMA.controlNames.forEach(function (k) {
+      if (cfg.controls[k]) return;
+      if (k === "tags") { o.tags_on = []; o.tags_off = []; } else o[k] = d[k];
+    });
+    if (assignIds().indexOf(o.assign) < 0) o.assign = "";
+    if (!realDate(o.snooze)) o.snooze = "";
+    var known = cfg.tags.map(function (t) { return t.id; });
+    function clean(l) { return l.filter(function (t, i) { return known.indexOf(t) >= 0 && l.indexOf(t) === i; }).sort(); }
+    var on = clean(o.tags_on), off = clean(o.tags_off);
+    o.tags_on = on.filter(function (t) { return off.indexOf(t) < 0; });
+    o.tags_off = off.filter(function (t) { return on.indexOf(t) < 0; });
+    o.rev = rev;
+    return o;
+  }
+  function ctlOf(it) { var r = resp.get(it.id); return ctlNorm(r && r.controls, revOf(it)); }
+  // What one Send carries for a card: rev plus only the changed controls; the unchanged enabled place keys ride in
+  // keep when a place key changed. null when nothing changed.
+  function controlDiff(sent, cur, rev) {
+    var a = ctlNorm(sent, rev), b = ctlNorm(cur, rev), out = { rev: rev };
+    SCHEMA.controlNames.forEach(function (k) {
+      if (!cfg.controls[k]) return;
+      if (k === "tags") {
+        if (a.tags_on.join("\n") !== b.tags_on.join("\n") || a.tags_off.join("\n") !== b.tags_off.join("\n")) { out.tags_on = b.tags_on; out.tags_off = b.tags_off; }
+      } else if (a[k] !== b[k]) out[k] = typeof b[k] === "boolean" ? (b[k] ? "on" : "off") : b[k];
+    });
+    if (SCHEMA.placeKeys.some(function (p) { return own(out, p); })) {
+      var keep = {};
+      SCHEMA.placeKeys.forEach(function (p) {
+        if (cfg.controls[p] && !own(out, p)) keep[p] = p === "assign" ? b.assign : (b[p] ? "on" : "off");
+      });
+      if (Object.keys(keep).length) out.keep = keep;
+    }
+    return Object.keys(out).length > 1 ? out : null;
+  }
+  function ctlUnsent(it, r) { return !!r && controlDiff(r.controls_sent, r.controls, revOf(it)) !== null; }
+  // The response doc after a control tap: the answer, history and controls_sent stay; the controls take the patch.
+  function withControls(prev, itemId, patch, rev, now) {
+    var doc = prev ? Object.assign({}, prev, { updated: now }) : { itemId: itemId, choice: "", note: "", rev: rev, updated: now, sent: false, batch: "" };
+    var c = ctlNorm(prev && prev.controls, rev);
+    Object.keys(patch || {}).forEach(function (k) { if (k !== "rev" && own(SCHEMA.ctl, k)) c[k] = patch[k]; });
+    doc.controls = ctlNorm(c, rev);
+    return doc;
+  }
+  // A control moved the card out of the open cards: dismissed, marked done, or Not ours.
+  function ctlDone(it) { var c = ctlOf(it); return c.dismiss || c.done || c.assign === "other"; }
+  // Why a card is in Done (or hidden): the control first, else the answer state ("closed" or "sent").
+  function doneReason(it) {
+    var c = ctlOf(it);
+    return c.assign === "other" ? "not ours" : c.dismiss ? "dismissed" : c.done ? "done" : stateOf(it);
+  }
+  // The day YYYY-MM-DD in cfg.tz that cardState compares a snooze with. render() sets it; the pure part reads no clock.
+  var ctlDay = "";
+  function setCtlDay(day) { ctlDay = day; }
+  // A snoozed card wakes at 00:00 of the wake day in cfg.tz: a day compare.
+  function isSnoozed(it, today) { return !isDone(it) && ctlOf(it).snooze > today; }
+  // The cards set to Not ours, in list order.
+  function notOursList(list) { return list.filter(function (it) { return cardState(it) === "hidden"; }); }
+  // The text key of a card's state tag: the reason in Done, "unsent" for an unsent control, else the answer state.
+  function stateLabel(it) {
+    var cs = cardState(it);
+    if (cs === "done" || cs === "hidden") return doneReason(it);
+    var st = stateOf(it);
+    if (st !== "closed" && st !== "changed" && ctlUnsent(it, resp.get(it.id))) return "unsent";
+    return st;
+  }
+  // The banner of a card, or "".
+  function ctlNote(it, today) {
+    var c = ctlOf(it);
+    if (c.assign === "other") return "Not ours: the agent stops tracking it";
+    if (c.close && it.status !== "closed") return "Close requested: the agent closes it in " + (str(it.source) || "the source");
+    if (c.dismiss) return "Dismissed: it comes back when something new arrives";
+    if (c.done) return "Marked done";
+    if (c.snooze > today) return "Snoozed until " + fmtDay(c.snooze);
+    return "";
+  }
+  // A day YYYY-MM-DD as short text, such as "Fri, Nov 20", or "".
+  function fmtDay(day) {
+    if (!realDate(day)) return "";
+    var p = day.split("-");
+    try { return new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])).toLocaleDateString([], { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }); } catch (e) { return ""; }
+  }
+  function snoozeDay(today, pick) { return pick === "day" ? addDays(today, 1) : pick === "week" ? addDays(today, 7) : ""; }
+  // A picked wake day: after today and at most 366 days ahead.
+  function snoozeOk(day, today) { return realDate(day) && day > today && day <= addDays(today, 366); }
+  // The tags a card has on the page: its own tags minus the ones the operator took off, plus the ones added.
+  function tagsOf(it) {
+    var c = ctlOf(it), out = strs(it.tags).filter(function (t) { return c.tags_off.indexOf(t) < 0; });
+    c.tags_on.forEach(function (t) { if (out.indexOf(t) < 0) out.push(t); });
+    return out;
+  }
+  // The tag lists after a tap on the chip of tag id.
+  function tagPatch(it, id) {
+    var c = ctlOf(it), own0 = strs(it.tags).indexOf(id) >= 0;
+    var on = c.tags_on.filter(function (t) { return t !== id; }), off = c.tags_off.filter(function (t) { return t !== id; });
+    if (tagsOf(it).indexOf(id) >= 0) { if (own0) off.push(id); }
+    else if (!own0) on.push(id);
+    return { tags_on: on.sort(), tags_off: off.sort() };
+  }
+
+  // ---- agent status. The strip of meta/status, the wake line, and the agent-changed dot of a card.
+  // How old a stamp is, in words; "" when it is unreadable. A future stamp is "just now".
+  function ageText(stamp, nowMs) {
+    var t = stampMs(stamp);
+    if (t === -Infinity) return "";
+    var m = Math.floor((nowMs - t) / 60000);
+    if (m < 1) return "just now";
+    if (m < 60) return m + " min ago";
+    if (m < 48 * 60) return Math.floor(m / 60) + " h ago";
+    return Math.floor(m / 1440) + " d ago";
+  }
+  // The strip of a coerced status (or null). fmtTime: a one-argument formatter (the page passes fmt).
+  // An empty now (a watcher window written before any status) is the idle status in every respect the strip shows.
+  // A document counts when its updated or its watcher window until is a readable time. The window is read only when
+  // until is a stamp of the schema form; a window with started but no such until counts as no window (the script
+  // never writes one). With no readable updated (a watch before any status) the window alone carries the strip: Idle,
+  // no age, never stale.
+  function statusView(st, nowMs, fmtTime) {
+    var t = st ? stampMs(st.updated) : -Infinity, timed = t !== -Infinity;
+    var win = st && st.watch && typeof st.watch.until === "string" && SCHEMA.stampRe.test(st.watch.until) && stampMs(st.watch.until) !== -Infinity ? st.watch : null;
+    var has = timed || !!win;
+    var n = has ? str(st.now) : "", idle = has && (!timed || n.toLowerCase() === "idle" || !n);
+    var head = !has ? "No status from the agent yet" : idle ? "Idle" + (st.waiting ? ", waiting for: " + st.waiting : "") : "Now: " + st.now;
+    var age = timed ? ageText(st.updated, nowMs) : "";
+    var stale = timed && !idle && (nowMs - t > cfg.status.stale_minutes * 60000 || t - nowMs > 5 * 60000);
+    if (stale) age = "last heard " + age;
+    return { has: has, idle: idle, head: head, age: age, when: timed ? fmtTime(st.updated) : "", stale: stale,
+      next: has ? st.next.slice(0, 3) : [], waiting: has && !idle ? st.waiting : "",
+      wake: wakeLine(cfg.wake, has ? win : null, nowMs, fmtTime) };
+  }
+  // A card changed since this viewer last marked it seen. Instants, never text: stamps carry offsets.
+  function cardChanged(it, seenMap) {
+    if (seenMap === null) return false;
+    if (!own(seenMap, it.id)) return true;
+    if (seenMap[it.id] === it.updated) return false;
+    var a = stampMs(seenMap[it.id]), b = stampMs(it.updated);
+    if (a === -Infinity || b === -Infinity) return true;
+    return a < b;
+  }
+  // The seen map of a card list: id -> updated, on a null-prototype object.
+  function seenOf(list) { var m = Object.create(null); list.forEach(function (it) { m[it.id] = it.updated; }); return m; }
+  // The stored seen map, or null when there is none or it is unreadable.
+  function seenFrom(text) {
+    var v;
+    try { v = JSON.parse(text); } catch (e) { return null; }
+    if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+    var m = Object.create(null);
+    Object.keys(v).forEach(function (k) { if (typeof v[k] === "string") m[k] = v[k]; });
+    return m;
+  }
+  // The dot: changed, and not in Done or Not ours.
+  function dotOn(it, seenMap) { return cardChanged(it, seenMap) && cardState(it) !== "done" && cardState(it) !== "hidden"; }
+  // A wait in words: 300 -> 5 min.
+  function durText(s) { return s < 120 ? s + " s" : s < 7200 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h"; }
+  // How the agent learns of a Send, and the window of its last watcher.
+  function wakeLine(plan, watch, nowMs, fmtTime) {
+    if (plan.mode === "off") return "Wake: off. Tell the agent to read the board.";
+    if (plan.mode === "comment") return "Wake: a comment on Send";
+    var u = watch ? stampMs(watch.until) : -Infinity;
+    var part = u > nowMs ? ", watcher planned until " + fmtTime(watch.until) : u !== -Infinity ? ", watcher window ended " + fmtTime(watch.until) : ", no watcher started";
+    return (plan.mode === "poll" ? "Wake: poll every " : "Wake: a comment on Send, and a poll every ") + durText(plan.poll_seconds) + part;
+  }
+  // The line under Send for a wake outcome.
+  function wakeNotice(plan, outcome) {
+    if (plan.mode === "off") return "Sent. Tell the agent to read the board.";
+    if (plan.mode === "poll") return "Sent. The watcher picks it up within " + durText(plan.poll_seconds) + ".";
+    var both = plan.mode === "both";
+    if (outcome === "no_capability") return both
+      ? "Sent. This page cannot post comments: ask the agent to republish it. The poll every " + durText(plan.poll_seconds) + " picks it up."
+      : "Sent. This page cannot post comments: ask the agent to republish it, and to read the board.";
+    if (outcome === "not_ready") return "Not ready yet. Try again in a moment.";
+    if (outcome === "not_ready_sent") return "Sent. The wake is not ready yet: tap Wake in a moment.";
+    if (outcome === "sent") return "Sent, and the agent was woken by a comment.";
+    if (outcome === "sent_unsaved") return "Sent, and the agent was woken. The thread was not saved, so the next wake starts a new one.";
+    if (outcome === "mark_sent") return "Sent, but some answers were not marked sent. The agent was woken.";
+    if (outcome === "gesture") return "Sent. Tap Wake the agent to send the comment.";
+    if (outcome === "consent_required") return "Sent. Allow comments from this page, then tap Wake the agent.";
+    if (outcome === "rate_limited") return "Sent. Too many wakes just now; tap Wake the agent in a minute.";
+    return both ? "Sent. No agent session takes comments here; the poll every " + durText(plan.poll_seconds) + " picks it up."
+      : "Sent. No agent session takes comments here; tell the agent to read the board.";
+  }
+  // The text of the wake comment: never an answer, a batch id or a card.
+  var WAKE_TEXT = "Read the decision board: answers were sent.";
+
+  // ---- visibility
+  function stateOf(it) {
+    var r = resp.get(it.id);
+    if (it.status === "closed") return "closed";
+    if (isChanged(it)) return "changed";
+    if (r && (r.choice || r.note)) return !r.sent || isPending(it.id) ? "unsent" : (isQuestion(it, r) ? "waiting" : "sent");
+    return "open";
+  }
+  // Answered and closed cards are done: they go to the folded group of done cards in each tab.
+  function isDone(it) { var st = stateOf(it); return st === "sent" || st === "closed" || ctlDone(it); }
+  // The state a group matches: hidden (Not ours: no group takes it), done, snoozed or active. A card that a control
+  // just moved keeps its old state while it lingers (lingerOf, outside "pure"; the tests and the script stub it as
+  // function () { return ""; }). A snooze is compared with ctlDay, the day render() set.
+  function cardState(it) {
+    var held = lingerOf(it.id);
+    if (held) return held;
+    if (ctlOf(it).assign === "other") return "hidden";
+    if (isDone(it)) return "done";
+    return isSnoozed(it, ctlDay) ? "snoozed" : "active";
+  }
+  function isActive(it) { return cardState(it) === "active"; }
+  // The text where the cards of a tab would be: "" when the tab shows a card.
+  function emptyText(total, active, done) {
+    if (!total) return "No cards yet. The agent adds cards to this board, and they appear here without a reload.";
+    if (active) return "";
+    return done ? "All answered. " + done + " in Done." : "No cards in this tab.";
+  }
+  // "Blocked on you": every card that is not done, whatever tab is selected.
+  function blocksOf(it) { return str(it.blocks); }
+  function blockedList(sorted) { return sorted.filter(function (it) { return isActive(it) && blocksOf(it) !== ""; }); }
+  function sortVal(key, it) {
+    if (key === "priority") return priRank(it.priority);
+    if (key === "due") return realDate(it.due) ? it.due : null;
+    if (key === "first_asked") return isObj(it.first_asked) && realDate(it.first_asked.date) ? it.first_asked.date : null;
+    if (key === "created" || key === "updated") { var t = stampMs(it[key]); return t === -Infinity ? null : t; }
+    if (key === "title") return str(it.title).toLowerCase();
+    return String(it.id);
+  }
+  function cardCmp(keys) {
+    return function (a, b) {
+      for (var i = 0; i < keys.length; i++) {
+        var desc = keys[i].charAt(0) === "-", k = desc ? keys[i].slice(1) : keys[i], va = sortVal(k, a), vb = sortVal(k, b);
+        if (va === null && vb === null) continue;
+        if (va === null) return 1;
+        if (vb === null) return -1;
+        if (va !== vb) return (va < vb ? -1 : 1) * (desc ? -1 : 1);
+      }
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    };
+  }
+  function sortedItems() { return Array.from(items.values()).sort(cardCmp(cfg.sort)); }
+  // now: the time in ms for the due buckets (the caller reads the clock, the pure part never does).
+  function matchOne(m, it, now) {
+    var st = cardState(it); if (st === "hidden" || (m.state !== "any" && m.state !== st && !(st === "snoozed" && m.state === "active"))) return false;
+    if (m.source && !(typeof it.source === "string" && m.source.indexOf(it.source.trim().toLowerCase()) >= 0)) return false;
+    if (m.tags && !tagsOf(it).some(function (t) { return m.tags.indexOf(t) >= 0; })) return false;
+    if (m.priority && m.priority.indexOf(str(it.priority)) < 0) return false;
+    if (m.kind && m.kind.indexOf(kindOf(it)) < 0) return false;
+    if (m.due && m.due.indexOf(dueBucket(it.due, now)) < 0) return false;
+    if (own(m, "blocked") && (blocksOf(it) !== "") !== m.blocked) return false;
+    return true;
+  }
+  function groupMatch(g, it, now) { return g.match.some(function (m) { return matchOne(m, it, now); }); }
+  // The sections of a list of sorted cards: the configured groups in order, then the tail groups "Other" (active
+  // cards no group took; "Open" when no group is configured) and "Done" (done cards no group took). Every card is
+  // in exactly one group, in the order of the list. Empty groups stay in the result; the page hides them.
+  function groupCards(list, now) {
+    var gs = cfg.groups.map(function (g) { return { id: g.id, label: g.label, fold: g.fold, cards: [] }; });
+    var other = { id: "_other", label: gs.length ? "Other" : "Open", fold: false, cards: [] }, done = { id: "_done", label: "Done", fold: true, cards: [] };
+    list.forEach(function (it) {
+      if (cardState(it) === "hidden") return;
+      for (var i = 0; i < cfg.groups.length; i++) if (groupMatch(cfg.groups[i], it, now)) { gs[i].cards.push(it); return; }
+      (cardState(it) === "done" ? done : other).cards.push(it);
+    });
+    return gs.concat([other, done]);
+  }
+  // A card with an answer and a control counts once.
+  function unsentCount() { var s = sendable(), ids = {}; s.r.concat(s.c).forEach(function (x) { ids[x.itemId] = true; }); return Object.keys(ids).length + s.n.length; }
+  function openCount() { var n = 0; items.forEach(function (it) { var s = stateOf(it); if ((s === "open" || s === "changed") && cardState(it) === "active") n++; }); return n; }
+
+  // ---- card text formatter. Escapes HTML first, then adds only the tags below.
+  // Markers: blank line = paragraph, "- " = bullet, "1. " = numbered step, "### " = heading,
+  // **bold**, `code`, a fence of three backticks = preformatted block with a copy button,
+  // and the section labels Before, Now, Suggested, Why, Risk, Your answer followed by a colon.
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function inline(t) {
+    return t.split(/(`[^`\n]+`)/).map(function (part, i) {
+      if (i % 2) return "<code>" + part.slice(1, -1) + "</code>";
+      return part.replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>");
+    }).join("");
+  }
+  function fmtText(src) {
+    var lines = esc(typeof src === "string" ? src : "").replace(/\r\n?/g, "\n").split("\n");
+    var out = [], para = [], list = null, fence = null, m, re = LABEL_RE;
+    function endPara() { if (para.length) { out.push("<p>" + para.join("<br>") + "</p>"); para = []; } }
+    function endList() { if (list) { out.push("<" + list.tag + list.attr + ">" + list.rows.join("") + "</" + list.tag + ">"); list = null; } }
+    function endFence() { if (fence) { out.push('<div class="pre"><button type="button" class="copy">Copy</button><pre>' + fence.join("\n") + "</pre></div>"); fence = null; } }
+    function row(tag, attr, html) {
+      endPara();
+      if (list && list.tag !== tag) endList();
+      list = list || { tag: tag, attr: attr, rows: [] };
+      list.rows.push("<li>" + html + "</li>");
+    }
+    lines.forEach(function (ln) {
+      if (/^\s*```/.test(ln)) { if (fence) endFence(); else { endPara(); endList(); fence = []; } return; }
+      if (fence) { fence.push(ln); return; }
+      if (!ln.trim()) { endPara(); endList(); return; }
+      if (ln.indexOf("- ") === 0) { row("ul", "", inline(ln.slice(2).trim())); return; }
+      m = /^(\d{1,9})\. +(.*)$/.exec(ln);
+      if (m) { row("ol", ' start="' + m[1] + '"', inline(m[2].trim())); return; }
+      endList();
+      if (ln.indexOf("### ") === 0) { endPara(); out.push("<h4>" + inline(ln.slice(4).trim()) + "</h4>"); return; }
+      m = re.exec(ln);
+      para.push(m ? "<strong>" + m[1] + ":</strong> " + inline(m[2]) : inline(ln));
+    });
+    endPara(); endList(); endFence();
+    return out.join("");
+  }
+  // ---- pure: end
+
+  // ---- reference guides: HTML and inline SVG through allowlists. The parse happens in an inert
+  // document, so nothing runs or loads. An element outside the list goes with its content. An
+  // attribute outside the list goes, and so does every attribute value with a "\" or "/*", and
+  // every value of a presentation attribute with a function other than url(), rgb(), rgba(), hsl() or hsla()
+  // (transform and gradienttransform also allow matrix, translate, scale, rotate, skewX and skewY).
+  // A url() stays only for a #id in the guide or an https: host on the config list domains.
+  // A style keeps only the listed CSS properties, with plain values. Ids get the prefix "ref-".
+  function set(s) { var o = Object.create(null); s.split(" ").forEach(function (k) { o[k] = true; }); return o; }
+  var REF_TAGS = set("a abbr b blockquote br caption code col colgroup dd del details div dl dt em figcaption figure h1 h2 h3 h4 h5 h6 hr i ins kbd li mark ol p pre q s small span strong sub summary sup table tbody td tfoot th thead tr u ul " +
+    "svg g path rect circle ellipse line polyline polygon text tspan title desc defs marker lineargradient radialgradient stop use symbol clippath");
+  var REF_ATTRS = set("id class title lang dir role aria-label aria-hidden colspan rowspan scope start reversed open width height align valign style href xlink:href " +
+    "viewbox xmlns preserveaspectratio d x y x1 y1 x2 y2 cx cy r rx ry dx dy fx fy points fill fill-opacity fill-rule stroke stroke-width stroke-opacity stroke-dasharray " +
+    "stroke-dashoffset stroke-linecap stroke-linejoin opacity transform text-anchor dominant-baseline font-size font-family font-weight font-style letter-spacing " +
+    "markerwidth markerheight markerunits refx refy orient offset stop-color stop-opacity gradientunits gradienttransform clippathunits");
+  // Text attributes: their value is shown or read as text, never painted or loaded.
+  var TEXT_ATTRS = set("id class title lang dir role aria-label");
+  // No position, z-index, pointer-events, opacity, inset, top, left, right, bottom or transform: a guide cannot cover the page.
+  var CSS_PROPS = set("color background-color border border-color border-style border-width border-radius border-collapse margin padding " +
+    "width height max-width min-width font-size font-weight font-style text-align text-decoration vertical-align white-space line-height fill stroke stroke-width display");
+  // An https: URL whose host is on the config list domains, or a subdomain of one.
+  function listedUrl(v) {
+    var u;
+    if (!/^https:\/\/[^\s'"()\\]+$/i.test(v)) return false;
+    try { u = new URL(v); } catch (e) { return false; }
+    var host = u.hostname.toLowerCase();
+    return u.protocol === "https:" && !u.username && !u.password && hostOk(host, cfg.domains);
+  }
+  // Check every url() of a value: a #id becomes #ref-id, a listed https: URL stays. Returns the
+  // value with each url() replaced by a plain token in "rest", for the later checks, or null.
+  var URL_RE = /url\s*\(\s*(['"]?)([^'"()\s]*)\1\s*\)/gi;
+  function checkUrls(v) {
+    var bad = false, out = v.replace(URL_RE, function (all, q, target) {
+      if (/^#[\w-]+$/.test(target)) return "url(#ref-" + target.slice(1) + ")";
+      if (listedUrl(target)) return "url(" + target + ")";
+      bad = true; return all;
+    });
+    if (bad) return null;
+    var rest = out.replace(URL_RE, "U");
+    return /url\s*\(/i.test(rest) || v.indexOf("/*") >= 0 ? null : { value: out, rest: rest };
+  }
+  function cleanStyle(v) {
+    return String(v).split(";").map(function (d) {
+      var i = d.indexOf(":"), p = i < 0 ? "" : d.slice(0, i).trim().toLowerCase(), val = i < 0 ? "" : d.slice(i + 1).trim();
+      var u = val === "" ? null : checkUrls(val);
+      var plain = !!u && !/[\\'"]/.test(u.rest) && u.rest.replace(/\b(rgba?|hsla?)\(/gi, "").indexOf("(") < 0;
+      return CSS_PROPS[p] && plain ? p + ": " + u.value : "";
+    }).filter(Boolean).join("; ");
+  }
+  // A link on <a> is kept for https:, http:, a fragment or a relative target. Not "//host", which
+  // leaves the page. Control characters and spaces cannot hide a scheme.
+  function okUrl(v) {
+    var s = String(v).replace(/[\u0000- \u007f-\u009f]/g, ""), m = /^([a-z][a-z0-9+.\-]*):/i.exec(s);
+    return s !== "" && s.indexOf("//") !== 0 && (!m || /^https?$/i.test(m[1]));
+  }
+  function sanitizeRef(src) {
+    var doc = new DOMParser().parseFromString("<!doctype html><html><body>" + (typeof src === "string" ? src : ""), "text/html");
+    function clean(node) {
+      Array.prototype.slice.call(node.childNodes).forEach(function (n) {
+        if (n.nodeType === 3) return;
+        var tag = n.nodeType === 1 ? String(n.localName).toLowerCase() : "";
+        if (!REF_TAGS[tag]) { n.remove(); return; }
+        Array.prototype.slice.call(n.attributes).forEach(function (a) {
+          var name = a.name.toLowerCase(), v = a.value, frag = v.trim().charAt(0) === "#", link = name === "href" || name === "xlink:href";
+          var u = name === "style" || link ? null : checkUrls(v);
+          // In a presentation attribute the only functions are url() (checked above), rgb(), rgba(), hsl() and hsla(),
+          // and in transform and gradienttransform also the SVG transform functions. A text attribute loads nothing, so "(" stays.
+          var fns = name === "transform" || name === "gradienttransform" ? /\b(rgba?|hsla?|matrix|translate|scale|rotate|skewx|skewy)\(/gi : /\b(rgba?|hsla?)\(/gi;
+          var fnOk = !!u && (TEXT_ATTRS[name] || u.rest.replace(fns, "").indexOf("(") < 0);
+          var keep = !!REF_ATTRS[name] && v.indexOf("\\") < 0 && (name === "style" || link || fnOk);
+          if (keep && link) keep = tag === "a" ? okUrl(v) : frag || listedUrl(v.trim());
+          if (!keep) { n.removeAttribute(a.name); return; }
+          if (name === "id") n.setAttribute(a.name, "ref-" + v.trim());
+          else if (link && frag) n.setAttribute(a.name, "#ref-" + v.trim().slice(1));
+          else if (name === "style") { var cs = cleanStyle(v); if (cs) n.setAttribute(a.name, cs); else n.removeAttribute(a.name); }
+          else if (u && u.value !== v) n.setAttribute(a.name, u.value);
+        });
+        if (tag === "use" && !n.hasAttribute("href") && !n.hasAttribute("xlink:href")) { n.remove(); return; }
+        if (tag === "a") { n.setAttribute("target", "_blank"); n.setAttribute("rel", "noopener noreferrer"); }
+        clean(n);
+      });
+    }
+    clean(doc.body);
+    // A wide table scrolls inside its own box, because the guide box clips.
+    Array.prototype.slice.call(doc.body.querySelectorAll("table")).forEach(function (t) {
+      var w = doc.createElement("div"); w.className = "tw"; t.parentNode.insertBefore(w, t); w.appendChild(t);
+    });
+    var out = document.createDocumentFragment();
+    while (doc.body.firstChild) out.appendChild(document.adoptNode(doc.body.firstChild));
+    return out;
+  }
+
+  // ---- draft
+  // Copy text to the clipboard; if the clipboard is closed, select the text of pre instead. b shows the result.
+  function copyText(text, pre, b) {
+    function done(ok) { b.textContent = ok ? "Copied" : "Selected. Copy it by hand"; setTimeout(function () { b.textContent = "Copy"; }, 1800); }
+    function bySelection() {
+      var ok = false;
+      try {
+        var r = document.createRange(), sel = window.getSelection();
+        r.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(r);
+        ok = document.execCommand("copy");
+        if (ok) sel.removeAllRanges();
+      } catch (err) {}
+      done(ok);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { done(true); }, bySelection);
+    else bySelection();
+  }
+  // The draft box of a card: its label, a Copy button, and the text. Text goes in by textContent only.
+  function buildDraft(c) {
+    c.dlabel = h("span", { class: "dlabel" });
+    c.dcopy = h("button", { class: "dcopy", type: "button", text: "Copy" });
+    c.dpre = h("pre", { class: "dtext" });
+    c.draft = h("div", { class: "draft" }, h("div", { class: "dhead" }, c.dlabel, c.dcopy), c.dpre);
+    c.draft.hidden = true;
+    c.dcopy.addEventListener("click", function () { copyText(draftText(c.it), c.dpre, c.dcopy); });
+  }
+  function renderDraft(c, it) {
+    var show = hasDraft(it), t = show ? draftText(it) : "";
+    c.draft.hidden = !show;
+    c.dlabel.textContent = show ? draftLabelOf(it) : "";
+    if (c.dpre.textContent !== t) c.dpre.textContent = t;
+  }
+
+  // ---- cards. Every DOM id of a card comes from its card number, never from the item id.
+  function buildCard(it) {
+    var c = { it: it, n: ++cardSeq };
+    c.pri = h("span", { class: "tag" });
+    c.state = h("span", { class: "tag" });
+    c.kind = h("span", { class: "tag" });
+    c.due = h("span", { class: "tag", hidden: true });
+    c.blocks = h("div", { class: "blocks" });
+    c.changed = h("div", { class: "changed", hidden: true });
+    c.result = h("div", { class: "result", hidden: true });
+    c.dot = h("span", { class: "dot", title: "Changed by the agent since you last marked it seen", hidden: true });
+    c.title = h("h2");
+    c.asked = h("div", { class: "asked", hidden: true });
+    c.chips = h("div", { class: "tags chips", hidden: true });
+    c.links = h("div", { class: "links", hidden: true });
+    c.summary = h("div", { class: "summary rich" });
+    c.evBody = h("div", { class: "evidence rich" });
+    c.ev = h("details", null, h("summary", { text: "Evidence" }), c.evBody);
+    buildDraft(c);
+    c.fs = h("fieldset", null);
+    c.form = h("form", { onsubmit: function (e) { e.preventDefault(); } }, c.fs);
+    c.ta = h("textarea", { id: "n" + c.n, placeholder: "Note or question (saved automatically)" });
+    c.save = h("span", { class: "small muted" });
+    c.clear = h("button", { class: "link small", type: "button", text: "Clear choice" });
+    c.about = h("button", { class: "link small", type: "button", text: "Free note about this card" });
+    c.guide = h("button", { class: "link small gopen", type: "button", text: "Open guide", hidden: true });
+    c.guide.addEventListener("click", function () { var g = guideForItem(Array.from(guides.values()), c.it.id); if (g) openGuide(g.id); });
+    c.about.addEventListener("click", function () { noteItem = c.it.id; render(); $("newnote").focus(); bringIntoView($("about"), false); });
+    buildControls(c);
+    c.el = h("article", { class: "card", id: "card-" + c.n, "data-item": it.id },
+      h("div", { class: "tags" }, c.dot, c.pri, c.kind, c.due, c.state),
+      c.chead, c.chips, c.asked, c.blocks, c.changed, c.result, c.guide, c.summary, c.draft, c.links, c.ev, c.form, c.ta,
+      c.banner, c.ctl, c.snz, c.panel,
+      h("div", { class: "foot" }, c.save, h("span", null, c.about, c.clear)), c.slimrow);
+    c.optKey = null;
+    c.ta.addEventListener("input", function () {
+      setSave(c, "Typing");
+      clearTimeout(timers.get(c.it.id));
+      timers.set(c.it.id, setTimeout(function () { timers.delete(c.it.id); saveResponse(c.it.id); }, 700));
+    });
+    c.ta.addEventListener("blur", function () { if (timers.has(c.it.id)) flushItem(c.it.id); });
+    c.clear.addEventListener("click", function () {
+      c.fs.querySelectorAll("input[type=radio]").forEach(function (r) { r.checked = false; });
+      flushItem(c.it.id);
+    });
+    return c;
+  }
+  function setSave(c, t) { c.save.textContent = t; }
+  // ---- quick controls on a card: the Done box in the gutter, Assign and Snooze in a row with the Edit button, the
+  // edit panel with the Dismiss and Close switches and the tag chips. Every element is made with h() and text.
+  function buildControls(c) {
+    c.doneBox = h("input", { type: "checkbox", id: "x" + c.n });
+    c.gut = h("label", { class: "gut", for: "x" + c.n, title: "Done" }, c.doneBox);
+    c.doneBox.addEventListener("change", function () { var v = c.doneBox.checked; setControl(c, { done: v }, v ? { done: false } : null); });
+    c.chead = h("div", { class: "chead" }, c.gut, c.title);
+    c.assign = h("select", { "aria-label": "Assign" });
+    c.assign.addEventListener("change", function () {
+      var was = ctlOf(c.it).assign, v = c.assign.value;
+      setControl(c, { assign: v }, v === "other" ? { assign: was } : null);
+    });
+    c.snzBtn = h("button", { type: "button", "aria-expanded": "false" });
+    c.snzBtn.addEventListener("click", function () { c.snzOpen = true; render(); });
+    c.more = h("button", { type: "button", class: "link small", "aria-expanded": "false", text: "Edit" });
+    c.more.addEventListener("click", function () { c.panelOpen = !c.panelOpen; c.more.setAttribute("aria-expanded", String(c.panelOpen)); render(); });
+    c.ctl = h("div", { class: "ctl" }, c.assign, c.snzBtn, c.more);
+    function snoozeTo(pick) {
+      var today = todayOf(clockMs()), ctl = ctlOf(c.it);
+      c.snzOpen = false; c.expanded = false;          // a new snooze folds the card again
+      setControl(c, { snooze: snoozeDay(today, pick) }, { snooze: ctl.snooze });
+      undoFocus(c);
+    }
+    c.snzDay = h("button", { type: "button", text: "+1 day" });
+    c.snzDay.addEventListener("click", function () { snoozeTo("day"); });
+    c.snzWeek = h("button", { type: "button", text: "+1 week" });
+    c.snzWeek.addEventListener("click", function () { snoozeTo("week"); });
+    c.snzWake = h("button", { type: "button", text: "Wake now" });
+    c.snzWake.addEventListener("click", function () { setControl(c, { snooze: "" }, null); });
+    c.snzDate = h("input", { type: "date", id: "d" + c.n });
+    c.snzDate.addEventListener("change", function () {
+      // Typing by keyboard passes through partial and out-of-range values: only a complete date in range snoozes;
+      // an out-of-range one stays in the field, marked invalid; an incomplete one (value "") does nothing.
+      var today = todayOf(clockMs()), ctl = ctlOf(c.it), day = c.snzDate.value;
+      if (!realDate(day)) { c.snzDate.setCustomValidity(""); return; }
+      if (!snoozeOk(day, today)) { c.snzDate.setCustomValidity("Pick a day after today, at most a year ahead."); return; }
+      c.snzDate.setCustomValidity("");
+      c.snzOpen = false; c.expanded = false;
+      setControl(c, { snooze: day }, { snooze: ctl.snooze });
+      undoFocus(c);
+    });
+    c.snzCancel = h("button", { type: "button", text: "Cancel" });
+    c.snzCancel.addEventListener("click", function () { c.snzOpen = false; render(); });
+    c.snz = h("div", { class: "snz", hidden: true }, h("div", { class: "row" }, c.snzDay, c.snzWeek, c.snzWake),
+      h("div", { class: "row" }, h("label", { class: "small muted", for: "d" + c.n, text: "Until" }), c.snzDate, c.snzCancel));
+    c.slimrow = h("div", { class: "slimrow" }, c.slimOpen = h("button", { type: "button", class: "open" }),
+      c.slimWake = h("button", { type: "button", class: "link small", text: "Wake" }));
+    c.slimOpen.addEventListener("click", function () { c.expanded = !c.expanded; render(); });
+    c.slimWake.addEventListener("click", function () { setControl(c, { snooze: "" }, null); });
+    c.banner = h("div", { class: "banner", hidden: true }, c.bannerText = h("span", { class: "grow" }));
+    // Undo sits beside the control that made the change (placeUndo); the banner keeps the state text.
+    c.undoBtn = h("button", { type: "button", class: "undo", text: "Undo", hidden: true });
+    c.undoBtn.addEventListener("click", function () {
+      var u = c.undo, at = c.undoAt, key = byKey();
+      if (!u) return;
+      c.undo = null; lingerUntil.delete(c.it.id); setControl(c, u, null);
+      // By keyboard: focus goes to the control the Undo restored, or to the Edit/Hide toggle when that control is hidden.
+      if (key && !ctlFocus(c, at) && isShown(c.more)) { try { c.more.focus({ preventScroll: true }); } catch (e) {} }
+    });
+    c.dismissSw = switchRow("Dismiss", "Hide it until something new comes in");
+    c.dismissSw.addEventListener("click", function () { var v = !ctlOf(c.it).dismiss; setControl(c, { dismiss: v }, v ? { dismiss: false } : null); });
+    c.closeSrc = str(c.it.source);
+    c.closeSw = switchRow("Close in " + (c.closeSrc || "the source"), "The agent closes the item there, then the card leaves");
+    c.closeSw.addEventListener("click", function () { setControl(c, { close: !ctlOf(c.it).close }, null); });
+    c.tagWrap = h("div", null, h("div", { class: "small muted", text: "Tags" }), c.tagBox = h("div", { class: "tags" }));
+    // Each switch sits in a row of its own, so an Undo can stand beside it.
+    c.dismissRow = h("div", { class: "swrow" }, c.dismissSw);
+    c.closeRow = h("div", { class: "swrow" }, c.closeSw);
+    c.panel = h("div", { class: "panel", hidden: true }, c.dismissRow, c.closeRow, c.tagWrap);
+  }
+  // The control a patch came from: the key Undo is placed by.
+  var UNDO_AT = ["done", "assign", "snooze", "dismiss", "close"];
+  function undoAt(patch) { return UNDO_AT.filter(function (k) { return own(patch, k); })[0] || ""; }
+  // Put the Undo of a card directly after the control that made the lingering change: the Done box in the title row,
+  // the Assign select, the Snooze button, or the Dismiss or Close switch. The DOM moves only when the place changes.
+  // A card has one Undo, for its latest change; two cards can each show their own. When the control sits in a hidden
+  // part of the card (the edit panel was closed during the linger), the Undo stands in the banner line beside the
+  // state text, and moves back beside the control when that part shows again. In the row of Assign and Snooze an
+  // Undo that wrapped to the next line is moved in under its control (again on a resize: the wiring calls placeUndo).
+  function undoAnchor(c) { return { done: c.gut, assign: c.assign, snooze: c.snzBtn, dismiss: c.dismissSw, close: c.closeSw }[c.undoAt] || null; }
+  function placeUndo(c) {
+    var u = c.undoBtn, at = undoAnchor(c), e;
+    if (u.hidden || !at || !at.parentNode) return;
+    for (e = at; e && e !== c.el; e = e.parentNode) if (e.hidden) break;
+    if (e && e !== c.el) { if (u.parentNode !== c.banner) c.banner.append(u); at = null; }
+    else if (at.nextSibling !== u) at.parentNode.insertBefore(u, at.nextSibling);
+    if (!u.style || !u.getBoundingClientRect) return;
+    u.style.marginLeft = "";
+    if (!at || at.parentNode !== c.ctl) return;
+    var a = at.getBoundingClientRect(), b = u.getBoundingClientRect(), r = c.ctl.getBoundingClientRect();
+    if (b.top >= a.bottom - 1 && a.left > r.left) u.style.marginLeft = Math.max(0, Math.min(a.left - r.left, r.width - b.width)) + "px";
+  }
+  // Keyboard focus around Undo. keyNav: the last input was a key, not a pointer (the wiring sets it), so mouse and
+  // touch keep the browser's own focus.
+  var keyNav = false;
+  function byKey() { return keyNav; }
+  // Shown: laid out (offsetParent), or in the test stub not inside a hidden element.
+  function isShown(el) {
+    if (el.offsetParent !== undefined) return !!el.offsetParent;
+    for (var e = el; e; e = e.parentNode) if (e.hidden) return false;
+    return true;
+  }
+  // Focus the control of an Undo key (the Done box, the Assign select, the Snooze button, a switch) when it shows;
+  // true when it did.
+  function ctlFocus(c, at) {
+    var el = { done: c.doneBox, assign: c.assign, snooze: c.snzBtn, dismiss: c.dismissSw, close: c.closeSw }[at];
+    if (!el || !isShown(el)) return false;
+    try { el.focus({ preventScroll: true }); } catch (e) {}
+    return true;
+  }
+  // After a snooze choice made by keyboard, the Undo takes the focus that the closed chooser lost.
+  function undoFocus(c) { if (byKey() && !c.undoBtn.hidden) { try { c.undoBtn.focus({ preventScroll: true }); } catch (e) {} } }
+  // The linger of card c ended. An Undo that had focus hands it to its control, when that still shows.
+  // In practice the card usually leaves its place (to Done, Not ours or a slim row), so focus mostly drops to the body.
+  function lingerEnd(c, id) {
+    if (lingerOf(id)) return;
+    var had = document.activeElement === c.undoBtn, at = c.undoAt;
+    lingerUntil.delete(id); c.undo = null;
+    if (had) { render(); ctlFocus(c, at); } else schedule();
+  }
+  // A switch: the whole row is the tap target; aria-checked carries the state. Text by textContent only.
+  // b.lab and b.hint are the two text spans, so a caller can change the text later.
+  function switchRow(label, hint) {
+    var k = h("span", { class: "k", "aria-hidden": "true" });
+    var lab = h("span", { text: label }), hint2 = h("span", { class: "small muted", text: hint });
+    var b = h("button", { type: "button", class: "sw", role: "switch", "aria-checked": "false" },
+      h("span", null, lab, h("br"), hint2), k);
+    b.lab = lab; b.hint = hint2;
+    return b;
+  }
+  // A control tap: save at once; a card that this moves to Snoozed, Done or Not ours stays in place for LINGER_MS, with Undo.
+  function setControl(c, patch, undo) {
+    var id = c.it.id;
+    // A tap that cannot move the card (tags, or an assign other than "other") keeps a running linger and its Undo.
+    var quiet = Object.keys(patch).every(function (k) { return k === "tags_on" || k === "tags_off" || (k === "assign" && patch.assign !== "other"); });
+    if (quiet) { saveControls(id, patch); render(); return; }
+    var before = cardState(c.it);                 // a lingering card reports the state it keeps
+    lingerUntil.delete(id);
+    saveControls(id, patch);                      // sets resp synchronously, before the write resolves
+    var after = cardState(c.it);
+    c.undo = undo || null; c.undoAt = undoAt(patch);
+    if (undo && after !== before && after !== "active") {
+      lingerUntil.set(id, { until: clockMs() + LINGER_MS, state: before });
+      setTimeout(function () { lingerEnd(c, id); }, LINGER_MS + 50);
+    }
+    render();
+  }
+  // The one write of a control: the whole response, through the item's chain, like saveResponse.
+  function saveControls(id, patch) {
+    seenOne(id);
+    var c = cards.get(id);
+    if (!c || c.broken || !db || !loaded.config) return Promise.resolve();   // no control write before meta/config
+    var prev = resp.get(id) || null, doc = withControls(prev, id, patch, revOf(c.it), nowStamp());
+    lastDoc.set(id, doc); resp.set(id, doc);
+    inflight.set(id, (inflight.get(id) || 0) + 1); totalInflight++; renderSync();
+    return enqueue(id, function () {
+      if (resp.get(id) !== doc) return null;                   // a later tap already folded this one in
+      return db.doc("responses/" + id).set(doc).then(function () { lastSaved = savedTime(); showMsg(""); });
+    }).catch(function (e) {
+      // Put prev back only when nothing newer (a later tap, or an answer saveResponse stored) replaced this doc.
+      if (resp.get(id) === doc) { lastDoc.delete(id); if (prev) resp.set(id, prev); else resp.delete(id); }
+      showMsg("A control was not saved: " + errText(e));
+    }).then(function () { inflight.set(id, inflight.get(id) - 1); totalInflight--; schedule(); });
+  }
+  // The control parts of one card. today is ctlDay, the day render() set (no clock read here).
+  function renderControls(c, it) {
+    var on = cfg.controls, ctl = ctlOf(it), today = ctlDay, lingering = !!lingerOf(it.id);
+    var place = cardState(it), note = ctlNote(it, today);
+    c.more.hidden = !(on.dismiss || (on.close && str(it.source_key)) || (on.tags && cfg.tags.length));
+    c.more.textContent = c.panelOpen ? "Hide" : "Edit";
+    c.ctl.hidden = !(on.assign || on.snooze) && c.more.hidden;
+    c.panel.hidden = c.more.hidden || !c.panelOpen;
+    c.banner.hidden = !note; c.bannerText.textContent = note; c.undoBtn.hidden = !(lingering && c.undo);
+    c.dismissRow.hidden = !on.dismiss; c.closeRow.hidden = !on.close || !str(it.source_key);
+    c.el.classList.toggle("slim", place === "snoozed" && !c.expanded);
+    // Assign
+    var list = assignList(), aKey = JSON.stringify(list);
+    if (c.assignKey !== aKey) {
+      c.assignKey = aKey; c.assign.textContent = "";
+      c.assign.append(h("option", { value: "", text: "Assign: nobody" }));
+      list.forEach(function (x) { c.assign.append(h("option", { value: x.id, text: "Assign: " + x.label })); });
+    }
+    c.assign.hidden = !on.assign;
+    if (!isPending(it.id)) c.assign.value = ctl.assign;
+    // Snooze
+    var snoozed = ctl.snooze > today;
+    c.snzBtn.hidden = !on.snooze || place === "done" || place === "hidden";
+    c.snzBtn.textContent = snoozed ? "Snoozed to " + fmtDay(ctl.snooze) : "Snooze";
+    c.snzBtn.setAttribute("aria-expanded", c.snzOpen ? "true" : "false");
+    c.snz.hidden = c.snzBtn.hidden || !c.snzOpen;
+    c.snzDate.min = addDays(today, 1); c.snzDate.max = addDays(today, 366);
+    c.snzWake.hidden = !snoozed;
+    c.slimOpen.textContent = "Snoozed to " + fmtDay(ctl.snooze) + " · " + (it.title || it.id);
+    // Dismiss
+    c.dismissSw.hidden = !on.dismiss;
+    c.dismissSw.setAttribute("aria-checked", ctl.dismiss ? "true" : "false");
+    // Close
+    if (str(it.source) !== c.closeSrc) { c.closeSrc = str(it.source); c.closeSw.lab.textContent = "Close in " + (c.closeSrc || "the source"); }
+    c.closeSw.hidden = !on.close || !str(it.source_key);
+    c.closeSw.setAttribute("aria-checked", ctl.close ? "true" : "false");
+    c.closeSw.disabled = it.status === "closed";
+    // Done
+    c.gut.hidden = !on.done;
+    if (!isPending(it.id)) c.doneBox.checked = ctl.done;
+    // Tags
+    c.tagWrap.hidden = !on.tags || !cfg.tags.length;
+    var tKey = JSON.stringify(cfg.tags);
+    if (c.tagKey !== tKey) {
+      c.tagKey = tKey; c.tagBox.textContent = "";
+      cfg.tags.forEach(function (t) {
+        var chip = h("button", { type: "button", class: "tag chip", "aria-pressed": "false", "data-tag": t.id, text: t.label });
+        chip.addEventListener("click", function () { setControl(c, tagPatch(c.it, t.id), null); });
+        c.tagBox.append(chip);
+      });
+    }
+    var mine = tagsOf(it);
+    Array.prototype.forEach.call(c.tagBox.children, function (chip) { chip.setAttribute("aria-pressed", mine.indexOf(chip.dataset.tag) >= 0 ? "true" : "false"); });
+    placeUndo(c);
+  }
+  var STATE_TEXT = { waiting: "waiting on agent" };
+
+  // Tags, links and the first ask of a card: the page checks each again and drops what does not pass. Text goes in by textContent only.
+  function renderMeta(c, it, now) {
+    var chips = tagChips(it), chipKey = JSON.stringify(chips);
+    if (c.chipKey !== chipKey) {
+      c.chipKey = chipKey; c.chips.textContent = "";
+      chips.forEach(function (t) { c.chips.append(h("span", { class: "tag chip", text: t.label })); });
+    }
+    c.chips.hidden = !chips.length;
+    var links = validLinks(it), linkKey = JSON.stringify(links);
+    if (c.linkKey !== linkKey) {
+      c.linkKey = linkKey; c.links.textContent = "";
+      links.forEach(function (l) {
+        c.links.append(h("span", { class: "link" }, h("a", { href: l.href, target: "_blank", rel: "noopener noreferrer", text: l.text }),
+          l.text !== l.host ? h("span", { class: "small muted", text: " " + l.host }) : null));
+      });
+    }
+    c.links.hidden = !links.length;
+    c.asked.textContent = askedText(it.first_asked, now, cfg.tz);
+    c.asked.hidden = !c.asked.textContent;
+  }
+  function updateCard(c, it) {
+    c.it = it;
+    var r = resp.get(it.id), k = kindOf(it), st = stateOf(it), changed = st === "changed";
+    c.pri.className = "tag " + priClass(it.priority);
+    c.pri.textContent = priLabel(it.priority);
+    c.title.textContent = it.title || it.id;
+    c.kind.textContent = kindLabel(k);
+    c.kind.hidden = isDefaultKind(k);
+    c.kind.className = "tag" + (isDefaultKind(k) ? "" : " now");
+    var di = dueInfo(it, lastDay);
+    c.due.textContent = di ? di.text : "";
+    c.due.className = "tag" + (di && di.cls ? " " + di.cls : "");
+    c.due.hidden = !di;
+    c.blocks.textContent = blocksOf(it) ? "Blocks: " + blocksOf(it) : "";
+    c.blocks.hidden = !blocksOf(it);
+    c.changed.hidden = !changed;
+    c.changed.textContent = changed ? "Changed since your answer: this is version " + revOf(it) + ", you answered version " + revOf(r) +
+      (r.choice ? " with “" + r.choice + "”" : "") + ". Answer again." : "";
+    c.result.textContent = it.result ? "Result: " + it.result + (fmt(it.result_at) ? " · " + fmt(it.result_at) : "") : ""; c.result.hidden = !it.result;
+    c.dot.hidden = !dotOn(it, seenCards);
+    renderMeta(c, it, clockMs());
+    // fmtText escapes the text. Write the HTML only when the text changed, so that a "Copied" label and a selection stay.
+    var rich = JSON.stringify([it.summary, it.evidence]);
+    if (c.rich !== rich) { c.rich = rich; c.summary.innerHTML = fmtText(it.summary); c.evBody.innerHTML = fmtText(it.evidence); }
+    renderDraft(c, it);
+    var cg = guideForItem(Array.from(guides.values()), it.id);
+    c.guide.hidden = !cg;
+    c.guide.title = cg ? (cg.title || cg.id) : "";
+    c.ev.hidden = !it.evidence;
+    var lab = stateLabel(it);
+    c.state.className = "tag" + (lab === "unsent" || lab === "changed" || lab === "waiting" ? " soon" : (lab === "sent" ? " good" : ""));
+    c.state.textContent = STATE_TEXT[lab] || lab;
+    c.el.classList.toggle("done", st === "sent" || st === "closed");
+
+    var opts = optionsOf(it);
+    var key = JSON.stringify([opts, it.recommendation]);
+    if (c.optKey !== key) {
+      c.optKey = key;
+      c.fs.textContent = "";
+      c.fs.append(h("legend", { class: "small muted", text: opts.length ? "Options" : "" }));
+      opts.forEach(function (o, i) {
+        var inp = h("input", { type: "radio", name: "opt", value: o, id: "o" + c.n + "-" + i });
+        // "click" also fires on the option that is already checked: on a changed card that is a new answer.
+        inp.addEventListener("click", function () { flushItem(c.it.id); });
+        inp.addEventListener("change", function () { flushItem(c.it.id); });
+        c.fs.append(h("label", { class: "opt", for: inp.id }, inp,
+          h("span", { class: "t" }, o, (it.recommendation && o === it.recommendation) ? h("span", { class: "rec", text: "recommended" }) : null)));
+      });
+    }
+    c.form.hidden = !opts.length;
+    c.clear.hidden = !opts.length;
+    if (!isPending(it.id)) {
+      var ch = r ? r.choice : "";
+      c.fs.querySelectorAll("input[type=radio]").forEach(function (inp) { inp.checked = ch !== "" && inp.value === ch; });
+      var nv = r ? r.note : "";
+      if (c.ta.value !== nv && document.activeElement !== c.ta) c.ta.value = nv;
+      if (r && r.updated) setSave(c, (r.sent ? "Sent" : "Saved") + " " + fmt(r.updated));
+      else setSave(c, "");
+    }
+    renderControls(c, it);
+  }
+  // A card that fails to render shows one line instead, so one bad record cannot blank the board.
+  function brokenCard(it) { return h("article", { class: "card", "data-item": it.id, text: "Could not render " + it.id }); }
+
+  // A write that carries a time stamp waits for meta/config, so the stamp has the config tz (loaded.config is set
+  // also when the document is missing or its read fails).
+  function ready() { return !!db && loaded.items && loaded.responses && loaded.notes && loaded.config; }
+  function render() {
+    var now = clockMs(), today = todayOf(now); lastDay = today; lastWeek = weekStartOf(now);
+    setCtlDay(today);
+    if (seenCards === null && loaded.items) markAllSeen();
+    var glist = Array.from(guides.values());
+    // A guide tab stays selected while the guides load, and an item tab while the config loads. An unknown tab falls back to All.
+    if (isGuideTab(f.tab) ? (loaded.guides && !guideOfTab(glist, f.tab))
+      : (f.tab !== "all" && loaded.config && !cfg.tabs.some(function (t) { return t.id === f.tab; }))) f.tab = "all";
+    var guide = guideOfTab(glist, f.tab);
+    var list = sortedItems(), vis = list.filter(function (it) { return inTab(it, f.tab); });
+    var active = vis.filter(isActive), done = vis.filter(isDone), onGuide = isGuideTab(f.tab);
+    try { renderGuide(guide); } catch (e) { $("guide").textContent = "Could not render the guide " + guide.id; }
+    renderTabs(tabCounts(list, isActive), guideList(glist, false));
+    renderArchived(guideList(glist, true));
+    renderNow();
+    renderDue(dueList(list, today), today);
+    renderBlocked(blockedList(list));
+    var groups = groupCards(vis, now);
+    $("board").hidden = onGuide;
+    renderGroups(groups);
+    renderSide(groups, onGuide);
+    renderNotOurs(onGuide ? [] : notOursList(vis));
+    Array.from(cards.keys()).forEach(function (k) { if (!items.has(k)) cards.delete(k); });
+
+    // empty states
+    var em = $("empty");
+    if (onGuide) { em.hidden = !!guide; em.textContent = "Loading the guide"; }
+    else if (!loaded.items) { em.hidden = false; em.textContent = "Loading cards"; }
+    else { em.textContent = emptyText(items.size, active.length, done.length); em.hidden = !em.textContent; }
+
+    // header: every count comes from the items and responses
+    var n = unsentCount(), b = $("send");
+    $("c-open").textContent = openCount();
+    $("c-unsent").textContent = n;
+    b.textContent = sending ? "Sending (" + n + ")" : "Send to " + cfg.agent + " (" + n + ")";
+    b.disabled = sending || n === 0 || !ready();
+    var lb = Array.from(batches.values()).sort(function (a, b2) { return cmpStamp(b2.created, a.created); })[0];
+    var sentAt = lb ? fmt(lb.created) : "", doneAt = lb ? fmt(lb.handled_at) : "";
+    $("lastbatch").textContent = lb
+      ? "Last sent" + (sentAt ? " " + sentAt : "") + ", " + (lb.itemIds.length + lb.noteIds.length) + " in batch, " +
+        (isHandled(lb) ? "handled" + (doneAt ? " " + doneAt : "") : "not handled yet")
+      : (loaded.batches ? "Nothing sent yet" : "");
+    $("refreshed").textContent = refreshedText(cardDocs.get(SCHEMA.cardsDoc), fmt);
+    $("zone").textContent = zoneNote(cfg.tz);
+    $("settings").textContent = cfg.settings; $("settings").hidden = !cfg.settings;
+    $("wake").hidden = !(wakeOutcome === "gesture" || wakeOutcome === "consent_required" || wakeOutcome === "rate_limited" || wakeOutcome === "not_ready" || wakeOutcome === "not_ready_sent");
+    $("wakestate").textContent = wakeOutcome ? wakeNotice(cfg.wake, wakeOutcome) : "";
+    $("ttl").textContent = boardTitle(meta);
+    document.title = boardTitle(meta);
+    $("newnote").placeholder = "A message to " + cfg.agent + " that is not tied to an item. It goes out with the next batch.";
+    renderNotes();
+    renderSync();
+  }
+  // Give focus back to el when a DOM move took it away and el is still on the page.
+  function restoreFocus(el) { if (el && el !== document.activeElement && document.contains(el)) { try { el.focus({ preventScroll: true }); } catch (e) {} } }
+  // The cards of a list in order. The DOM changes only when the order changes.
+  function placeCards(cont, list, focused) {
+    var want = list.map(function (it) {
+      var c = cards.get(it.id);
+      try {
+        if (!c || c.broken) { c = buildCard(it); cards.set(it.id, c); }
+        updateCard(c, it);
+      } catch (e) { c = { broken: true, el: brokenCard(it) }; cards.set(it.id, c); }
+      return c.el;
+    });
+    var cur = Array.from(cont.children);
+    if (cur.length === want.length && cur.every(function (e, i) { return e === want[i]; })) return;
+    var keep = new Set(want); focused = focused || document.activeElement;
+    cur.forEach(function (e) { if (!keep.has(e)) e.remove(); });
+    want.forEach(function (e, i) { if (cont.children[i] !== e) cont.insertBefore(e, cont.children[i] || null); });
+    restoreFocus(focused);
+  }
+  var groupEls = new Map(), sideKey = null;
+  // One section per group, built once per group id. A group for done cards is a folded details element.
+  function groupEl(g) {
+    var x = groupEls.get(g.id);
+    if (x && x.fold === g.fold) return x;
+    var lab = h("span", { class: "gl" }), n = h("span", { class: "n" }), list = h("div", { class: "glist" });
+    var el = g.fold ? h("details", { class: "grp" }, h("summary", null, lab, n), list) : h("section", { class: "grp" }, h("h3", null, lab, n), list);
+    x = { el: el, list: list, lab: lab, n: n, fold: g.fold };
+    groupEls.set(g.id, x);
+    return x;
+  }
+  function renderGroups(groups) {
+    var box = $("groups"), focused = document.activeElement, want = groups.map(function (g) {
+      var x = groupEl(g);
+      x.lab.textContent = g.label;
+      x.n.textContent = String(g.cards.length);
+      x.el.hidden = !g.cards.length;
+      placeCards(x.list, g.cards, focused);
+      return x.el;
+    });
+    var keep = new Set(want);
+    Array.from(box.children).forEach(function (e) { if (!keep.has(e)) e.remove(); });
+    want.forEach(function (e, i) { if (box.children[i] !== e) box.insertBefore(e, box.children[i] || null); });
+    restoreFocus(focused);
+  }
+  // The side list: one row per group that holds a card, on a wide screen only (CSS). A tap opens and shows the group.
+  function renderSide(groups, onGuide) {
+    var box = $("side"), rows = groups.filter(function (g) { return g.cards.length; });
+    box.hidden = onGuide || rows.length < 2;
+    $("board").classList.toggle("has-side", !box.hidden);
+    var hd = document.querySelector("header.bar");
+    if (hd) document.documentElement.style.setProperty("--hdr", Math.ceil(hd.getBoundingClientRect().height) + 8 + "px");
+    var key = JSON.stringify(rows.map(function (g) { return [g.id, g.label, g.cards.length]; }));
+    if (key === sideKey) return;
+    sideKey = key;
+    box.textContent = "";
+    rows.forEach(function (g) {
+      box.append(h("button", { type: "button", class: "srow", onclick: function () { goToGroup(g.id); } },
+        h("span", { class: "sl", text: g.label }), h("span", { class: "n", text: String(g.cards.length) })));
+    });
+  }
+  function goToGroup(id) {
+    var x = groupEls.get(id);
+    if (!x || x.el.hidden) return;
+    if (x.fold) x.el.open = true;
+    bringIntoView(x.el, false);
+  }
+  var blockedKey = null;
+  var dueKey = null, lastDay = "", lastWeek = 0;
+  // "Blocked on you": one folded line with the count; a tap opens the list. With no row, one plain line.
+  // The fold keeps its open state when the list is rebuilt.
+  function renderBlocked(rows) {
+    var box = $("blocked");
+    var key = JSON.stringify([rows.map(function (it) { return [it.id, it.title, kindOf(it), blocksOf(it), it.priority]; }), cfg.kinds]);
+    if (key === blockedKey) return;
+    blockedKey = key;
+    var was = box.querySelector("details.bfold"), open = !!(was && was.open);
+    box.textContent = "";
+    if (!rows.length) { box.append(h("div", { class: "muted small", text: "Nothing is blocked on you." })); return; }
+    var list = h("div", { class: "blist" });
+    rows.forEach(function (it) {
+      var k = kindOf(it);
+      list.append(h("button", { type: "button", class: "brow", onclick: function () { goToCard(it.id); } },
+        h("span", { class: "bt" },
+          h("span", { class: "tag" + (isDefaultKind(k) ? "" : " now"), text: kindLabel(k) }),
+          h("span", { class: "tt", text: it.title || it.id })),
+        h("span", { class: "bb", text: "Blocks: " + blocksOf(it) })));
+    });
+    var fold = h("details", { class: "bfold" }, h("summary", null, "Blocked on you ", h("span", { class: "n", text: String(rows.length) })), list);
+    fold.open = open;
+    box.append(fold);
+  }
+  // The agent strip: the status head and its age (the exact time on hover), behind a tap the next steps, what the
+  // agent waits for, the wake line and Mark all seen. Text by textContent only; the fold keeps its open state.
+  function renderNow() {
+    var box = $("agentnow");
+    box.hidden = !loaded.config;
+    var view = statusView(agentStatus, clockMs(), fmt), n = dotCount(), key = JSON.stringify([view, n]);
+    if (key === nowKey) return;
+    nowKey = key;
+    var was = box.querySelector("details"), open = !!(was && was.open);
+    box.textContent = "";
+    box.classList.toggle("stale", view.stale);
+    var d = h("details", null, h("summary", null, h("span", { class: "tt", text: view.head }), " ", h("span", { class: "age", text: view.age, title: view.when })));
+    if (view.next.length) {
+      var ol = h("ol");
+      view.next.forEach(function (x) { ol.append(h("li", { text: x })); });
+      d.append(h("h4", { text: "Next" }), ol);
+    }
+    if (view.waiting) d.append(h("div", { text: "Waiting for: " + view.waiting }));
+    d.append(h("div", { class: "small muted", text: view.wake }));
+    if (n > 0) d.append(h("button", { type: "button", class: "link small", text: "Mark all seen", onclick: markAllSeen }));
+    d.open = open;
+    box.append(d);
+  }
+  // "Due today": a link per card, no card text and no Copy button. Hidden when no card is due.
+  function renderDue(rows, today) {
+    var box = $("due"), key = JSON.stringify([rows.map(function (it) { return [it.id, it.title, it.due]; }), today]);
+    box.hidden = !rows.length;
+    if (key === dueKey) return;
+    dueKey = key;
+    box.textContent = "";
+    if (!rows.length) return;
+    box.append(h("h3", null, "Due today", h("span", { class: "n", text: String(rows.length) })));
+    var list = h("div", { class: "blist" });
+    rows.forEach(function (it) {
+      var di = dueInfo(it, today);
+      list.append(h("button", { type: "button", class: "brow", onclick: function () { goToCard(it.id); } },
+        h("span", { class: "bt" }, h("span", { class: "tag now", text: di.text }), h("span", { class: "tt", text: it.title || it.id }))));
+    });
+    box.append(list);
+  }
+  // Not ours: the cards the operator set to "Not ours", out of every group. One folded line at the end of the tab
+  // opens them; the Assign select of a card there brings it back.
+  function renderNotOurs(rows) {
+    var box = $("notours");
+    box.hidden = !rows.length;
+    $("nosum").textContent = rows.length + " not ours - " + (box.open ? "hide" : "show");
+    placeCards($("nolist"), rows);
+  }
+  // A tap on a "Blocked on you" or "Due today" entry or a guide's card link: select the tab of the card, render,
+  // unfold the card's group if it is folded, and only then scroll.
+  function goToCard(id) {
+    var it = items.get(id);
+    if (!it) return;
+    if (!inTab(it, f.tab)) { f.tab = tabOf(it, cfg.tabs) || "all"; saveFilter(); }
+    render();
+    var c = cards.get(id);
+    if (!c || !c.el.isConnected) return;
+    var fold = c.el.closest("details.grp");
+    if (fold) fold.open = true;
+    bringIntoView(c.el, true);
+  }
+  // Scroll an element to just below the sticky header. The header height changes with the
+  // width of the screen and the text in it, so measure it at the time of the tap.
+  var viewTimer = 0, flashTimer = 0;
+  function bringIntoView(el, flash) {
+    var hd = document.querySelector("header.bar");
+    var need = (hd ? (parseFloat(getComputedStyle(hd).top) || 0) + hd.getBoundingClientRect().height : 0) + 8;
+    var smooth = !(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    function go(how) { try { el.scrollIntoView({ block: "start", behavior: how }); } catch (e) { el.scrollIntoView(); } }
+    el.style.scrollMarginTop = need + "px";
+    go(smooth ? "smooth" : "auto");
+    // A smooth scroll can stop early. Look once, and jump if the element is still out of place.
+    // A touch or a wheel turn in between means that the viewer scrolls, so leave the view alone.
+    clearTimeout(viewTimer);
+    function stop() { clearTimeout(viewTimer); }
+    viewTimer = setTimeout(function () {
+      window.removeEventListener("touchstart", stop); window.removeEventListener("wheel", stop);
+      var top = el.isConnected ? el.getBoundingClientRect().top : need;
+      if (top < need - 10 || top > need + 40) go("auto");
+    }, 700);
+    window.addEventListener("touchstart", stop, { once: true, passive: true });
+    window.addEventListener("wheel", stop, { once: true, passive: true });
+    if (flash) {
+      document.querySelectorAll(".flash").forEach(function (e) { e.classList.remove("flash"); });
+      el.classList.add("flash");
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(function () { el.classList.remove("flash"); }, 1800);
+    }
+  }
+  var tabsKey = null;
+  function tabButton(key, label, isGuide) {
+    return h("button", { type: "button", role: "tab", class: "tab" + (isGuide ? " g" : ""), "data-tab": key, onclick: function () { f.tab = key; saveFilter(); render(); } },
+      h("span", { class: "tl", text: label }), isGuide ? null : h("span", { class: "n" }));
+  }
+  function renderTabs(counts, gl) {
+    var box = $("tabs"), tabs = shownTabs();
+    var key = JSON.stringify([tabs.map(function (t) { return [t.id, t.label]; }), gl.map(function (g) { return [g.id, g.title, guideChanged(g, seen)]; })]);
+    if (key !== tabsKey) {
+      tabsKey = key;
+      box.textContent = "";
+      box.append(tabButton("all", "All", false));
+      tabs.forEach(function (t) { box.append(tabButton(t.id, t.label, false)); });
+      gl.forEach(function (g) {
+        var b = tabButton(guideKey(g), guideLabel(g), true);
+        if (guideChanged(g, seen)) b.append(h("span", { class: "dot", title: "Changed since you looked" }));
+        box.append(b);
+      });
+    }
+    Array.from(box.children).forEach(function (b) {
+      var k = b.getAttribute("data-tab"), n = b.querySelector(".n");
+      b.setAttribute("aria-selected", k === f.tab ? "true" : "false");
+      if (n) n.textContent = String(counts[k] || 0);
+    });
+  }
+  // ---- guides. A text guide goes through fmtText, which escapes it first. A reference guide goes
+  // through sanitizeRef. A status guide has no Archive button and marks itself seen when shown.
+  var guideShown = null, archivedKey = null;
+  function renderGuide(g) {
+    var box = $("guide");
+    box.hidden = !g;
+    if (!g) { guideShown = null; return; }
+    var kind = guideKind(g), hasCard = !!(g.item && items.has(g.item)), changed = guideChanged(g, seen);
+    if (kind === "status" && g.updated && seen[g.id] !== g.updated) { seen[g.id] = g.updated; saveSeen(); }
+    var key = JSON.stringify([g, hasCard, cfg.domains, changed]);
+    if (key === guideShown) return;
+    guideShown = key;
+    box.textContent = "";
+    box.append(h("div", { class: "tags" }, h("span", { class: "tag", text: kind === "reference" ? "Reference" : (kind === "status" ? "Status" : "Guide") }),
+        changed ? h("span", { class: "tag soon", text: "changed since you looked" }) : null, h("span", { class: "grow" }),
+        h("span", { class: "small muted", text: fmt(g.updated) ? "Updated " + fmt(g.updated) : "" })),
+      h("h2", { text: g.title || g.id }));
+    guideSections(g).forEach(function (s) {
+      var body = h("div", { class: "rich gbody" + (kind === "reference" ? " ref" : "") });
+      if (kind === "reference") body.append(sanitizeRef(s.body));
+      else body.innerHTML = fmtText(s.body);
+      box.append(h("section", { class: "gsec" },
+        s.title ? h("h3", { text: s.title }) : null,
+        fmt(s.updated) ? h("span", { class: "small muted", text: "updated " + fmt(s.updated) }) : null, body));
+    });
+    box.append(h("div", { class: "foot" },
+      hasCard ? h("button", { class: "link small gcard", type: "button", text: "Go to the card", onclick: function () { goToCard(g.item); } }) : h("span"),
+      kind === "status" ? null : h("button", { class: "garchive", type: "button", text: "Archive", onclick: function () { setGuideStatus(g.id, "archived"); } })));
+  }
+  function renderArchived(gl) {
+    var box = $("archived"), key = JSON.stringify(gl.map(function (g) { return [g.id, g.title]; }));
+    box.hidden = !gl.length;
+    if (key === archivedKey) return;
+    archivedKey = key;
+    box.textContent = "";
+    box.append(h("h3", { text: "Archived guides" }));
+    gl.forEach(function (g) {
+      box.append(h("div", { class: "nitem arow" }, h("span", { text: g.title || g.id }),
+        h("button", { class: "link small greopen", type: "button", text: "Reopen", onclick: function () { setGuideStatus(g.id, "active"); } })));
+    });
+  }
+  function openGuide(id) {
+    f.tab = "guide:" + id; saveFilter(); render();
+    if (!$("guide").hidden) bringIntoView($("guide"), false);
+  }
+  // The one write of the page to "guides": the status and the time of the change.
+  function setGuideStatus(id, status) {
+    if (!db) return;
+    if (!loaded.config) { showMsg("The board is still loading. Try again in a moment."); return; }
+    var now = nowStamp();
+    db.doc("guides/" + id).update({ status: status, updated: now }).then(function () {
+      var g = guides.get(id);
+      if (g) { g.status = status; g.updated = now; }
+      showMsg("");
+      if (status === "active") openGuide(id); else { saveFilter(); render(); }
+    }, function (e) { showMsg("The guide was not saved: " + errText(e)); });
+  }
+  function renderNotes() {
+    var box = $("nlist"), ab = $("about"), it = noteItem ? items.get(noteItem) : null;
+    if (noteItem && !it) noteItem = "";
+    ab.hidden = !it;
+    ab.textContent = "";
+    if (it) ab.append(h("span", { class: "grow", text: "About: " + (it.title || it.id) }),
+      h("button", { class: "link small", type: "button", text: "Not about a card", onclick: function () { noteItem = ""; render(); } }));
+    box.textContent = "";
+    Array.from(notes.values()).filter(function (x) { return !x.sent; })
+      .sort(function (a, b) { return cmpStamp(a.created, b.created); })
+      .forEach(function (x) {
+        var about = x.item && items.get(x.item);
+        box.append(h("div", { class: "nitem" }, h("span", { text: (about ? "About “" + (about.title || about.id) + "”: " : "") + x.text }),
+          h("button", { class: "link small", type: "button", text: "Remove", onclick: function () { removeNote(x.id); } })));
+      });
+  }
+  function renderSync() {
+    var s = $("sync");
+    if (!db) s.textContent = "No database";
+    else if (unreachable && !(loaded.items && loaded.responses && loaded.config)) s.textContent = "Cannot reach the database yet";
+    else if (!loaded.config) s.textContent = "Loading";               // nothing saves before meta/config
+    else if (totalInflight > 0 || timers.size > 0) s.textContent = "Saving";
+    else if (!(loaded.items && loaded.responses)) s.textContent = "Loading";
+    else s.textContent = lastSaved ? "Saved " + lastSaved : "Live";
+  }
+  var raf = 0;
+  // Set when the start timer found the board still not loaded after 10 s; its text stays until the data is in.
+  var unreachable = false;
+  function schedule() { if (!raf) raf = requestAnimationFrame(function () { raf = 0; render(); }); }
+
+  // ---- writes. One chain per item, so each write sees the one before it.
+  function enqueue(key, fn) {
+    var prev = chains.get(key) || Promise.resolve();
+    var p = prev.catch(function () {}).then(fn);
+    chains.set(key, p);
+    return p;
+  }
+  function flushItem(id) {
+    if (timers.has(id)) { clearTimeout(timers.get(id)); timers.delete(id); }
+    return saveResponse(id);
+  }
+  function saveResponse(id) {
+    seenOne(id);
+    var c = cards.get(id);
+    if (!c || c.broken || !db) return Promise.resolve();
+    // Before meta/config the answer stays pending (the card keeps what was typed) and saves again in a moment.
+    if (!loaded.config) {
+      clearTimeout(timers.get(id));
+      timers.set(id, setTimeout(function () { timers.delete(id); saveResponse(id); }, 700));
+      renderSync();
+      return Promise.resolve();
+    }
+    var checked = c.fs.querySelector("input[type=radio]:checked");
+    var choice = checked ? checked.value : "", note = c.ta.value, prev = null;
+    inflight.set(id, (inflight.get(id) || 0) + 1); totalInflight++;
+    setSave(c, "Saving"); renderSync();
+    return enqueue(id, function () {
+      prev = resp.get(id) || null;
+      var rev = revOf(c.it);
+      // Nothing changed: no write. The same answer on a card with a newer rev is a new answer.
+      if (prev ? prev.choice === choice && prev.note === note && revOf(prev) === rev : !choice && !note) return null;
+      var doc = nextResponse(prev, id, choice, note, rev, nowStamp());
+      lastDoc.set(id, doc); resp.set(id, doc);
+      return db.doc("responses/" + id).set(doc).then(function () {
+        lastSaved = savedTime();
+        showMsg("");
+      });
+    }).catch(function (e) {
+      lastDoc.delete(id);
+      if (prev) resp.set(id, prev); else resp.delete(id);
+      setSave(c, "Not saved: " + errText(e));
+      showMsg("A save failed: " + errText(e));
+    }).then(function () {
+      inflight.set(id, inflight.get(id) - 1); totalInflight--;
+      schedule();
+    });
+  }
+  function flushAll() {
+    var ps = [];
+    Array.from(timers.keys()).forEach(function (id) { ps.push(flushItem(id)); });
+    Array.from(chains.values()).forEach(function (p) { ps.push(p.catch(function () {})); });
+    return Promise.all(ps);
+  }
+  // A note added before meta/config waits in its box and is added once the config is in (applyConfigDoc), with the
+  // text the box holds then: the latest text wins. A box emptied meanwhile adds nothing and clears the note state.
+  var noteWait = false;
+  function addNote() {
+    var t = $("newnote").value.trim(), waited = noteWait;
+    noteWait = false;
+    if (!t || !db) { if (waited) $("notestate").textContent = ""; return; }
+    if (!loaded.config) { noteWait = true; $("notestate").textContent = "Saving"; return; }
+    var id = "n" + idStamp() + "-" + rid(), it = noteItem ? items.get(noteItem) : null;
+    var doc = { id: id, text: t, item: it ? it.id : "", created: nowStamp(), sent: false, batch: "" };
+    $("notestate").textContent = "Saving";
+    db.doc("notes/" + id).set(doc).then(function () {
+      $("newnote").value = ""; noteItem = ""; $("notestate").textContent = "Added, goes out with the next batch"; schedule();
+    }, function (e) { $("notestate").textContent = "Not saved: " + errText(e); });
+  }
+  function removeNote(id) { if (db) db.doc("notes/" + id).delete().catch(function (e) { showMsg(errText(e)); }); }
+
+  // Send: one batch. The page first writes the batch with a copy of every answer and note, and only
+  // then marks them sent. A failure before the batch leaves everything unsent; a failure after it can
+  // send an answer twice, never lose one. An answer changed during the send stays unsent. The page
+  // writes a batch once, with set and a fresh id, and never again: a resend is a new batch.
+  function sendGroup(s) {
+    var bid = "b" + idStamp() + "-" + rid();
+    return db.doc("batches/" + bid).set(batchDoc(bid, nowStamp(), s)).then(function () {
+      // One mark per card of the answers and the controls together.
+      var byId = {};
+      s.r.forEach(function (x) { byId[x.itemId] = { x: x, ans: true }; });
+      s.c.forEach(function (x) { (byId[x.itemId] = byId[x.itemId] || { x: x }).ctl = true; });
+      var marks = Object.keys(byId).map(function (id) {
+        var m = byId[id];
+        return enqueue(id, function () {
+          var cur = resp.get(id), same = !!cur && cur.updated === m.x.updated;
+          // An answer changed during the send stays unsent. The controls that went out are recorded as sent also when
+          // the response changed meanwhile, so the next batch carries only what changed since.
+          if (!cur || (!same && !(m.ctl && m.x.controls))) return null;
+          var d = Object.assign({}, cur, { updated: nowStamp() });
+          if (m.ans && same) { d.sent = true; d.batch = bid; }
+          if (m.ctl && m.x.controls) d.controls_sent = m.x.controls;
+          lastDoc.set(id, d); resp.set(id, d);
+          return db.doc("responses/" + id).set(d);
+        });
+      }).concat(s.n.map(function (x) {
+        return db.doc("notes/" + x.id).update({ sent: true, batch: bid }).then(function () { var nn = notes.get(x.id); if (nn) { nn.sent = true; nn.batch = bid; } });
+      }));
+      return Promise.all(marks).then(null, function (e) { throw { stage: "mark", bid: bid, e: e }; });
+    }, function (e) { throw { stage: "batch", e: e }; });
+  }
+  // ---- wake: Send posts a short comment to Claude in the thread of meta/wake, when the config wake mode has comments.
+  // The anchor of a new thread, read at the start of the click (the gesture), before any await.
+  function wakeAnchor() {
+    return comments && typeof comments.anchorFor === "function" ? comments.anchorFor($("send")).catch(function () { return null; }) : Promise.resolve(null);
+  }
+  // The wake comment; called only from a click handler (Send or Wake), with the promise of wakeAnchor. Resolves to an outcome of wakeNotice.
+  function wakeAgent(anchorP) {
+    if (!cfg.wake.comment) return Promise.resolve("none");
+    // No comments object yet: "not_ready" while the capability has not resolved, "no_capability" once it resolved absent.
+    if (!comments) return Promise.resolve(commentsOff ? "no_capability" : "not_ready");
+    if (typeof comments.sendToClaude !== "function") return Promise.resolve("unavailable");
+    return comments.canSendToClaude().then(function (v) {
+      if (v !== "available") return v;
+      var go = function (target) { return comments.sendToClaude(target).then(function (r) {
+          if (wakeDoc && wakeDoc.thread === r.threadId) return "sent";
+          return db.doc("meta/wake").set({ thread: r.threadId, updated: nowStamp() }).then(function () { return "sent"; }, function () { return "sent_unsaved"; });
+        }); };
+      var fresh = function () { return anchorP.then(function (an) { if (!an) throw { code: "unavailable" }; return go({ anchor: an, text: WAKE_TEXT }); }); };
+      return (wakeDoc && wakeDoc.thread ? go({ threadId: wakeDoc.thread, text: WAKE_TEXT }).catch(function (e) { if (e && e.code === "not_found") return fresh(); throw e; }) : fresh());
+    }).catch(function (e) {
+      var c = e && e.code;
+      return c === "claude_unavailable" ? "gesture" : c === "consent_required" || c === "forbidden" || c === "rate_limited" ? c : "unavailable";
+    });
+  }
+  // A plain notice clears after 30 s; a notice that shows the Wake button stays until the next press.
+  function setWakeOutcome(o) {
+    wakeOutcome = o; clearTimeout(wakeTimer);
+    if (o !== "gesture" && o !== "consent_required" && o !== "rate_limited" && o !== "not_ready" && o !== "not_ready_sent") wakeTimer = setTimeout(function () { wakeOutcome = ""; schedule(); }, 30000);
+    schedule();
+  }
+  // The outcome of the wake after a Send that went out: a wake that is not ready yet says the batch did go out.
+  function sentOutcome(o) { setWakeOutcome(o === "not_ready" ? "not_ready_sent" : o); }
+  // While the comments capability has not resolved 30 s after the page started, it counts as absent (commentsLate);
+  // a later resolve to a usable object replaces that (see the wiring).
+  var COMMENTS_WAIT_MS = 30000;
+  function commentsLate() {
+    if (comments || commentsOff) return;
+    commentsOff = true;
+    if (wakeOutcome === "not_ready" || wakeOutcome === "not_ready_sent") setWakeOutcome("no_capability");
+  }
+  function send() {
+    var anchorP = wakeAnchor(), went = false;
+    if (sending || !ready()) return;
+    sending = true; render();
+    flushAll().then(function () { var s = sendable(); if (s.r.length + s.n.length + s.c.length) { went = true; return sendGroup(s); } }).then(function () { showMsg(""); if (went) wakeAgent(anchorP).then(sentOutcome); }, function (x) {
+      if (x && x.stage === "mark") {
+        showMsg("Batch " + x.bid + " went out, but some answers were not marked sent: " + errText(x.e) + ". They can go out again.");
+        wakeAgent(anchorP).then(function (o) { sentOutcome(o === "sent" || o === "sent_unsaved" ? "mark_sent" : o); });
+      } else if (x && x.stage === "batch") showMsg("Send failed, nothing went out: " + errText(x.e));
+      else showMsg("Send failed: " + errText(x));
+    }).then(function () { sending = false; schedule(); });
+  }
+
+  // ---- reads. Every document goes through coerce. For responses, the newer copy wins over a late
+  // get(), and a copy that this page wrote wins until a live snapshot confirms it.
+  var KIND = { cards: "cards", responses: "response", batches: "batch", notes: "note", guides: "guide" };
+  function applySnap(map, snap, name, isGet) {
+    var next = new Map();
+    snap.docs.forEach(function (d) {
+      if (!d.exists) return;
+      try {
+        var x = coerce(KIND[name], d.data());
+        if (own(x, "id")) x.id = d.id;
+        if (name === "responses") x.itemId = d.id;
+        next.set(d.id, x);
+      } catch (e) { /* an unreadable document is left out */ }
+    });
+    if (name === "responses") {
+      // A get() can answer late, after newer writes: there every copy already held that is newer wins.
+      if (isGet) map.forEach(function (held, id) { if (newerDoc(next.get(id), held) === held) next.set(id, held); });
+      lastDoc.forEach(function (mine, id) {
+        var got = next.get(id);
+        if (newerDoc(got, mine) === mine) next.set(id, mine); else if (!isGet) lastDoc.delete(id);
+      });
+    }
+    map.clear();
+    next.forEach(function (v, k) { map.set(k, v); });
+    loaded[name] = true;
+    if (name === "cards") { items = cardsOf(map.get(SCHEMA.cardsDoc)); loaded.items = true; }
+    schedule();
+  }
+  function applyMeta(d) { var x = d && d.exists ? d.data() : null; meta = isObj(x) ? x : null; schedule(); }
+  function applyConfigDoc(d) { applyConfig(d && d.exists ? d.data() : null); loaded.config = true; if (noteWait) addNote(); schedule(); }
+  function applyStatus(d) { var x = d && d.exists ? d.data() : null; agentStatus = isObj(x) ? coerce("status", x) : null; schedule(); }
+  var COLS = [["cards", cardDocs], ["responses", resp], ["batches", batches], ["notes", notes], ["guides", guides]];
+  function refresh() {
+    if (!db) return;
+    $("refresh").disabled = true;
+    Promise.all(COLS.map(function (c) { return db.collection(c[0]).get().then(function (s) { applySnap(c[1], s, c[0], true); }); }))
+      .then(function () { return Promise.all([db.doc("meta/board").get(), db.doc("meta/config").get(), db.doc("meta/status").get()]); })
+      .then(function (d) { applyMeta(d[0]); applyConfigDoc(d[1]); applyStatus(d[2]); })
+      .catch(function (e) { showMsg("Refresh failed: " + errText(e)); })
+      .then(function () { $("refresh").disabled = false; });
+  }
+  function start(dbns) {
+    db = dbns;
+    if (!db) { showMsg("The database is not available in this view. Sign in, or open the page in claude.ai."); $("empty").textContent = "No database."; renderSync(); return; }
+    var t = setTimeout(function () { if (!(loaded.items && loaded.responses && loaded.config)) { unreachable = true; renderSync(); } }, 10000);
+    COLS.forEach(function (c) {
+      db.collection(c[0]).onSnapshot(function (s) {
+        applySnap(c[1], s, c[0], false);
+        if (loaded.items && loaded.responses && loaded.config) clearTimeout(t);
+      }, function (e) { loaded[c[0]] = true; showMsg(c[0] + ": " + errText(e)); });
+    });
+    db.doc("meta/board").onSnapshot(applyMeta, function () {});
+    db.doc("meta/config").onSnapshot(applyConfigDoc, function () { applyConfigDoc(null); });
+    db.doc("meta/status").onSnapshot(applyStatus, function () {});
+    db.doc("meta/wake").onSnapshot(function (d) { var x = d && d.exists ? d.data() : null; wakeDoc = isObj(x) ? coerce("wake", x) : null; }, function () {});
+  }
+
+  // ---- wiring
+  $("send").addEventListener("click", send);
+  $("wake").addEventListener("click", function () { var anchorP = wakeAnchor(); wakeAgent(anchorP).then(setWakeOutcome); });
+  $("refresh").addEventListener("click", refresh);
+  $("addnote").addEventListener("click", addNote);
+  // Copy button of a preformatted block. If the clipboard is closed, select the text instead.
+  document.addEventListener("click", function (e) {
+    var b = e.target && e.target.closest ? e.target.closest("button.copy") : null;
+    var pre = b ? b.parentNode.querySelector("pre") : null;
+    if (!pre) return; copyText(pre.textContent, pre, b);
+  });
+  // The last input kind, for the focus rules of Undo (byKey).
+  document.addEventListener("keydown", function () { keyNav = true; }, true);
+  document.addEventListener("pointerdown", function () { keyNav = false; }, true);
+  // A resize or rotation moves a wrapped Undo: place every shown Undo again.
+  window.addEventListener("resize", function () { cards.forEach(function (c) { if (c.undoBtn && !c.undoBtn.hidden) placeUndo(c); }); });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
+  window.addEventListener("focus", refresh);
+  setInterval(function () { var t = clockMs(); if (todayOf(t) !== lastDay || weekStartOf(t) !== lastWeek) schedule(); }, 60000);
+  setInterval(renderNow, 60000);
+  $("notours").addEventListener("toggle", schedule);
+
+  render();
+  if (window.claude && window.claude.use) {
+    window.claude.use("db").then(start, function () { start(null); });
+    setTimeout(commentsLate, COMMENTS_WAIT_MS);
+    // A capability that resolves after the 30 s bound is still adopted: the next Send or Wake wakes as normal.
+    window.claude.use("comments").then(function (c) { comments = c || null; commentsOff = !c; }, function () { commentsOff = true; });
+  } else { start(null); }
+})();
+</script>

@@ -29,7 +29,13 @@
     "url": "https://x/1234"
   },
   "prompt_cache": {
+    "caching_observed": true,
+    "expires_at": 1789002520,
     "hit_ratio": 0.91,
+    "last_miss_cause": null,
+    "misses": 0,
+    "recache_tokens_if_cold": 132000,
+    "requests": 12,
     "ttl": "1h",
     "warm": true
   },

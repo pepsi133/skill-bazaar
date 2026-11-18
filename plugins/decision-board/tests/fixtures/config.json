@@ -1,0 +1,33 @@
+{
+ "title": "Lab board",
+ "agent": "Coordinator",
+ "tabs": [
+  {
+   "id": "net",
+   "label": "Network",
+   "match": {
+    "source": [
+     "router"
+    ]
+   }
+  },
+  {
+   "id": "other",
+   "label": "Other",
+   "rest": true
+  }
+ ],
+ "link_hosts": [
+  "example.com"
+ ],
+ "tags": [
+  {
+   "id": "cost",
+   "label": "Costs money"
+  },
+  {
+   "id": "security",
+   "label": "Security"
+  }
+ ]
+}

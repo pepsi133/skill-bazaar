@@ -257,7 +257,7 @@ class TestColor(Base):
 
     def test_cold_cache_is_amber_never_red(self):
         line = self.render("cost-only.json")
-        self.assertIn("\033[38;5;179mcache cold", line)
+        self.assertIn("\033[38;5;179mcache 5m cold", line)
         self.assertNotIn("\033[38;5;160mcache", line)
 
     def test_vim_modes_differ(self):
@@ -506,6 +506,89 @@ class TestAuditRegressions(Base):
 
     def render_payload(self, **fields) -> str:
         return BS.render(self.payload(**fields), now=NOW)
+
+
+class TestPromptCache(Base):
+    """The cache segment, against the prompt_cache shape Claude Code sends."""
+
+    def cache(self, **fields) -> str:
+        base = {"warm": True, "caching_observed": True, "ttl": "1h", "expires_at": NOW + 1800,
+                "requests": 5, "misses": 0, "hit_ratio": 0.8, "last_miss_cause": None,
+                "recache_tokens_if_cold": 40000}
+        base.update(fields)
+        line = BS.render(json.dumps({"prompt_cache": base}), now=NOW)
+        return self.plain(line)
+
+    def segment(self, **fields) -> str:
+        return [p for p in self.cache(**fields).split(" | ") if p.startswith("cache")][0]
+
+    def test_warm_shows_ttl_and_expiry_clock(self):
+        self.assertEqual(self.segment(), "cache 1h warm >00:56 80%")
+
+    def test_five_minute_ttl(self):
+        self.assertEqual(self.segment(ttl="5m", expires_at=NOW + 240), "cache 5m warm >00:30 80%")
+
+    def test_cold_shows_since_and_recache_tokens(self):
+        self.assertEqual(self.segment(warm=False, expires_at=NOW - 600),
+                         "cache 1h cold since 00:16 ~40k 80%")
+
+    def test_warm_flag_past_expiry_renders_cold(self):
+        """warm is computed when the payload is built; the clock decides at render."""
+        self.assertIn("cold since 00:26", self.segment(expires_at=NOW))
+
+    def test_null_recache_estimate_is_omitted(self):
+        """null means the next turn re-caches a compacted prompt of unknown size."""
+        self.assertNotIn("~", self.segment(warm=False, recache_tokens_if_cold=None))
+
+    def test_first_request_hides_the_zero_hit_ratio(self):
+        self.assertEqual(self.segment(requests=1, hit_ratio=0), "cache 1h warm >00:56")
+
+    def test_misses_show_count_and_last_cause(self):
+        seg = self.segment(misses=2, last_miss_cause={"causes": ["tools_changed", "model_changed"]})
+        self.assertTrue(seg.endswith("2 miss: tools/model"), seg)
+
+    def test_unknown_miss_cause_is_cleaned_not_dropped(self):
+        seg = self.segment(misses=1, last_miss_cause={"causes": ["New\u001b[31m_Cause"]})
+        self.assertTrue(seg.endswith("1 miss: new31m_cause"), seg)
+
+    def test_non_string_miss_cause_is_skipped(self):
+        seg = self.segment(misses=1, last_miss_cause={"causes": [["x"], {"y": 1}, "model_changed"]})
+        self.assertTrue(seg.endswith("1 miss: model"), seg)
+
+    def test_miss_without_cause(self):
+        self.assertTrue(self.segment(misses=3).endswith("3 miss"))
+
+    def test_caching_not_observed_is_off(self):
+        self.assertEqual(self.segment(warm=False, caching_observed=False, expires_at=None), "cache off")
+
+    def test_unknown_ttl_is_omitted_not_echoed(self):
+        self.assertEqual(self.segment(ttl="forever"), "cache warm >00:56 80%")
+
+    def test_huge_expiry_is_unknown_not_blank(self):
+        self.assertEqual(self.segment(expires_at=1e300), "cache ?")
+
+    def test_unicode_glyph(self):
+        os.environ["BOBBY_STATUSLINE_GLYPHS"] = "unicode"
+        self.assertIn("warm \u21bb00:56", self.cache())
+
+
+class TestPromptCacheColor(Base):
+    def setUp(self):
+        super().setUp()
+        del os.environ["NO_COLOR"]
+
+    def raw(self, **fields) -> str:
+        base = {"warm": True, "caching_observed": True, "ttl": "1h", "expires_at": NOW + 1800}
+        base.update(fields)
+        return BS.render(json.dumps({"prompt_cache": base}), now=NOW)
+
+    def test_warm_with_time_left_is_green(self):
+        self.assertIn("\033[38;5;108mcache 1h warm", self.raw())
+
+    def test_last_fifth_of_the_ttl_is_amber(self):
+        self.assertIn("\033[38;5;179mcache 1h warm", self.raw(expires_at=NOW + 700))
+        self.assertIn("\033[38;5;179mcache 5m warm", self.raw(ttl="5m", expires_at=NOW + 50))
+        self.assertIn("\033[38;5;108mcache 5m warm", self.raw(ttl="5m", expires_at=NOW + 70))
 
 
 class TestMultiColorSegments(Base):

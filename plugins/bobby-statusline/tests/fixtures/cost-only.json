@@ -18,7 +18,20 @@
     "display_name": "Opus 5"
   },
   "prompt_cache": {
-    "hit_ratio": 0.0,
+    "caching_observed": true,
+    "expires_at": 1788999280,
+    "hit_ratio": 0.62,
+    "last_miss_cause": {
+      "causes": [
+        "tools_changed"
+      ],
+      "tools_added": 2,
+      "tools_removed": 0
+    },
+    "misses": 1,
+    "recache_tokens_if_cold": 40210,
+    "requests": 3,
+    "ttl": "5m",
     "warm": false
   }
 }

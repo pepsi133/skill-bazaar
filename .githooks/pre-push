@@ -2,7 +2,7 @@
 # pre-push: this repository is public. Ask once before anything leaves the machine.
 #
 # Enable, once per clone:   ln -s ../../.githooks/pre-push .git/hooks/pre-push
-# Skip for one push:        git push --no-verify
+# Skip for one push:        the operator, never an agent, runs git push --no-verify
 #
 # The hook scans nothing. It lists the commits the push would publish and asks
 # for a y/N answer on the terminal. No terminal means no push.
@@ -44,7 +44,7 @@ count=$(printf '%s\n' "$commits" | wc -l | tr -d ' ')
 } >&2
 
 if ! { exec 3</dev/tty; } 2>/dev/null; then
-    printf 'No terminal to ask on. Push cancelled. Run it from a terminal, or git push --no-verify.\n' >&2
+    printf 'No terminal to ask on. Push cancelled. Ask the operator to push from a terminal.\n' >&2
     exit 1
 fi
 printf 'Push? [y/N] ' >&2

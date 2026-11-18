@@ -68,9 +68,9 @@ roadmap/{backlog,in-progress,done}/  — Idea tracking (kanban-style)
     before the hook arrives. The core text above *Platform execution notes* must stay
     tool-agnostic. The hook must be named in *Platform execution notes*. The skill must read
     correctly for a tool that cannot run the hook, which makes the hook optional rather than
-    load-bearing. `skills/agent-delegation/hooks/` is the one case in the tree: that skill
-    documents `PreToolUse`, `agent_id` and the subagent transcript path already, and the hook
-    enforces a rule the skill states in prose.
+    load-bearing. No skill in the tree uses this exception. Before you use
+    it, make sure that the hook does not need a human: an `ask` decision blocks a headless
+    session (`claude -p`, an agent driven by another agent), because nobody can answer it.
 
 11. **A `compatibility` claim does not have to be spotless, but it must be deliberate.** The
     Agent Skills spec carries six frontmatter fields: `name`, `description`, `license`,
