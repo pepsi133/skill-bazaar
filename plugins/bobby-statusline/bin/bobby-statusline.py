@@ -27,6 +27,9 @@ Design invariants:
     must not be able to have the status line render ~/.ssh/id_rsa every keystroke.
   * limit-guard owns its own cache, state, and pause logic. This script calls it,
     it does not reimplement it.
+  * The usage ledger is the only thing this script writes. It runs only when
+    the cost segment shows an estimate, it stops at LEDGER_BUDGET_MS, and every
+    failure in it is swallowed.
 """
 
 from __future__ import annotations
@@ -36,10 +39,11 @@ import io
 import json
 import os
 import re
+import stat
 import sys
 import time
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 # --------------------------------------------------------------------------
 # Paths
@@ -126,11 +130,13 @@ PRIORITY = [
 DEFAULTS = {
     "layout": "one-row",  # one-row | two-row
     "billing": "auto",  # auto | plan | cost | both
+    "cost_source": "auto",  # auto | payload | estimate
     "glyphs": "ascii",  # ascii | unicode
     "color": True,
     "separator": " | ",
     "segments": {key: True for key in PRIORITY},
     "priority": list(PRIORITY),
+    "prices": {},
 }
 DEFAULTS["segments"]["worktree"] = False
 
@@ -138,6 +144,7 @@ ENUMS = {
     "layout": ("one-row", "two-row"),
     "billing": ("auto", "plan", "cost", "both"),
     "glyphs": ("ascii", "unicode"),
+    "cost_source": ("auto", "payload", "estimate"),
 }
 
 # The two-row layout splits by meaning, not by width: a segment never jumps rows
@@ -149,7 +156,7 @@ def load_config() -> dict:
     cfg = json.loads(json.dumps(DEFAULTS))  # deep copy, stdlib only
 
     stored = read_json(os.path.join(config_home(), CONFIG_FILE)) or {}
-    for key in ("layout", "billing", "glyphs", "separator"):
+    for key in ("layout", "billing", "cost_source", "glyphs", "separator"):
         if isinstance(stored.get(key), str):
             cfg[key] = stored[key]
     if isinstance(stored.get("color"), bool):
@@ -161,9 +168,11 @@ def load_config() -> dict:
                 cfg["segments"][key] = val
     if isinstance(stored.get("priority"), list):
         cfg["priority"] = _merge_priority(stored["priority"])
+    if isinstance(stored.get("prices"), dict):
+        cfg["prices"] = _user_prices(stored["prices"])
 
     env = os.environ
-    for key in ("layout", "billing", "glyphs", "separator"):
+    for key in ("layout", "billing", "cost_source", "glyphs", "separator"):
         val = env.get("BOBBY_STATUSLINE_" + key.upper())
         if val:
             cfg[key] = val
@@ -189,6 +198,27 @@ def load_config() -> dict:
             cfg[key] = DEFAULTS[key]
     cfg["separator"] = clean(cfg["separator"], 8) or DEFAULTS["separator"]
     return cfg
+
+
+def _user_prices(raw: dict) -> dict:
+    """The valid entries of the `prices` key. A malformed entry is ignored.
+
+    An entry is a model id prefix and five prices in USD per million tokens:
+    input, output, cache read, cache write 5m, cache write 1h.
+    """
+    out = {}
+    for key, val in raw.items():
+        if not isinstance(key, str) or not key.strip() or len(out) >= 64:
+            continue
+        if not isinstance(val, list) or len(val) != 5:
+            continue
+        if not all(
+            isinstance(n, (int, float)) and not isinstance(n, bool) and 0 <= n < 1e9
+            for n in val
+        ):
+            continue
+        out[key.strip().lower()[:96]] = [float(n) for n in val]
+    return out
 
 
 def _merge_priority(order) -> list:
@@ -518,6 +548,517 @@ def cache_segment(cache: dict, now: float, g: dict) -> tuple:
 
 
 # --------------------------------------------------------------------------
+# Usage ledger: token totals from the session transcripts
+# --------------------------------------------------------------------------
+
+# The payload counts the main session only, and on some accounts it carries no
+# cost at all. The transcripts carry the usage of every API response, the
+# subagents included. Reading them whole on every render costs far more than
+# the render is allowed, so the ledger keeps a byte offset and the running
+# totals for each transcript in a sidecar file and reads only what was appended.
+
+LEDGER_BUDGET_MS = 15.0  # per render. What is left is read by the next render.
+LEDGER_SCHEMA = 1
+LEDGER_IDS = 16  # message ids remembered per transcript
+LEDGER_IDLE_S = 600  # a transcript this quiet no longer needs its id map
+LEDGER_PRUNE_S = 30 * 86400
+LEDGER_MAX_FILES = 2000
+LEDGER_MAX_DIRS = 512
+LEDGER_MAX_DEPTH = 3  # subagents/workflows/<id>/agent-*.jsonl
+LEDGER_CHUNK = 1 << 20
+LEDGER_MAX_LINE = 32 << 20
+LEDGER_MAX_SIDECAR = 8 << 20
+LEDGER_MAX_MODELS = 32
+
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+SIDECAR_RE = re.compile(r"^(?:[A-Za-z0-9_-]{1,64}\.json|\.[A-Za-z0-9_-]{1,64}\.[0-9]+\.tmp)$")
+
+# A usage tuple: input, output, cache read, cache write 5m, cache write 1h,
+# web search requests.
+ZERO = (0, 0, 0, 0, 0, 0)
+
+
+def _tok(val) -> int:
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        return 0
+    return int(val) if 0 <= val < 1e15 else 0
+
+
+def usage_tuple(usage: dict) -> list:
+    created = _tok(usage.get("cache_creation_input_tokens"))
+    detail = usage.get("cache_creation")
+    if isinstance(detail, dict):
+        five = _tok(detail.get("ephemeral_5m_input_tokens"))
+        hour = _tok(detail.get("ephemeral_1h_input_tokens"))
+    else:
+        # No split in the response. The 5m rate is the lower one, and the
+        # default TTL of a request that names none.
+        five, hour = created, 0
+    tools = usage.get("server_tool_use")
+    searches = _tok(tools.get("web_search_requests")) if isinstance(tools, dict) else 0
+    return [
+        _tok(usage.get("input_tokens")),
+        _tok(usage.get("output_tokens")),
+        _tok(usage.get("cache_read_input_tokens")),
+        five,
+        hour,
+        searches,
+    ]
+
+
+def _new_entry() -> dict:
+    return {"off": 0, "t": {}, "ids": {}}
+
+
+def _checked_tuple(raw) -> list:
+    if not isinstance(raw, list) or len(raw) != 6:
+        raise ValueError("tuple")
+    for n in raw:
+        if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+            raise ValueError("tuple")
+    return list(raw)
+
+
+def _checked_entry(raw) -> dict:
+    """A sidecar entry, or ValueError. A sidecar is trusted only as far as its shape."""
+    if not isinstance(raw, dict):
+        raise ValueError("entry")
+    off = raw.get("off")
+    if isinstance(off, bool) or not isinstance(off, int) or off < 0:
+        raise ValueError("off")
+    totals, ids = raw.get("t"), raw.get("ids", {})
+    if not isinstance(totals, dict) or not isinstance(ids, dict):
+        raise ValueError("entry")
+    entry = _new_entry()
+    entry["off"] = off
+    for model, speeds in totals.items():
+        if not isinstance(speeds, dict) or not set(speeds) <= {"n", "f"}:
+            raise ValueError("speeds")
+        entry["t"][model] = {speed: _checked_tuple(tup) for speed, tup in speeds.items()}
+    for mid, tup in ids.items():
+        entry["ids"][mid] = _checked_tuple(tup)
+    return entry
+
+
+def ledger_count(entry: dict, line: bytes) -> None:
+    """Add one transcript line to an entry, if it is an API response.
+
+    One response is written as several lines, one per content block, with the
+    same message id and the same usage, so an id counts once. A later line of a
+    known id adds only what grew. A `user` line can quote the usage of a finished
+    subagent; the subagent's own transcript already has it, so only a line whose
+    top-level type is `assistant` counts.
+    """
+    if b'"usage"' not in line:
+        return
+    if b'"type":"assistant"' not in line and b'"type": "assistant"' not in line:
+        return
+    try:
+        obj = json.loads(line)
+    except (ValueError, RecursionError):
+        return
+    if not isinstance(obj, dict) or obj.get("type") != "assistant":
+        return
+    msg = obj.get("message")
+    usage = msg.get("usage") if isinstance(msg, dict) else None
+    if not isinstance(usage, dict):
+        return
+
+    tup = usage_tuple(usage)
+    ids = entry["ids"]
+    mid = msg.get("id")
+    mid = mid[:128] if isinstance(mid, str) and mid else None
+    if mid is not None and mid in ids:
+        seen = ids[mid]
+        delta = [max(0, new - old) for new, old in zip(tup, seen)]
+        ids[mid] = [max(new, old) for new, old in zip(tup, seen)]
+    else:
+        delta = tup
+        if mid is not None:
+            ids[mid] = tup
+            while len(ids) > LEDGER_IDS:
+                del ids[next(iter(ids))]
+    if not any(delta):
+        return
+
+    model = msg.get("model")
+    model = clean(model, 96) if isinstance(model, str) and model else "?"
+    totals = entry["t"]
+    if model not in totals and len(totals) >= LEDGER_MAX_MODELS:
+        model = "?"
+    speed = "f" if usage.get("speed") == "fast" else "n"
+    bucket = totals.setdefault(model, {}).setdefault(speed, list(ZERO))
+    for i, n in enumerate(delta):
+        bucket[i] += n
+
+
+def ledger_scan(path: str, entry: dict, deadline: float) -> tuple:
+    """Read what was appended to one transcript. Returns (done, changed, mtime).
+
+    `done` is False when the time ran out before the last complete line. The
+    offset moves only past complete lines, so a line that Claude Code is still
+    writing is read by a later render.
+    """
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return True, False, None
+    if not stat.S_ISREG(st.st_mode):  # a symlink is not a regular file to lstat
+        return True, False, None
+    changed = False
+    if st.st_size < entry["off"]:
+        # Truncated or replaced. The totals belong to bytes that are gone.
+        entry.update(_new_entry())
+        changed = True
+    if st.st_size == entry["off"]:
+        return True, changed, st.st_mtime
+    if time.perf_counter() >= deadline:
+        return False, changed, st.st_mtime
+
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            return True, changed, st.st_mtime
+        fh.seek(entry["off"])
+        carry = b""
+        while True:
+            if time.perf_counter() >= deadline:
+                return False, changed, st.st_mtime
+            chunk = fh.read(LEDGER_CHUNK)
+            if not chunk:
+                return True, changed, st.st_mtime
+            buf = carry + chunk if carry else chunk
+            end = buf.rfind(b"\n")
+            if end < 0:
+                if len(buf) > LEDGER_MAX_LINE:
+                    # No transcript line is this long. Skip the bytes; the tail
+                    # of the line fails to parse later and is skipped too.
+                    entry["off"] += len(buf)
+                    changed = True
+                    buf = b""
+                carry = buf
+                continue
+            used = 0
+            for line in buf[:end].split(b"\n"):
+                ledger_count(entry, line)
+                used += len(line) + 1
+                if time.perf_counter() >= deadline and used <= end:
+                    entry["off"] += used
+                    return False, True, st.st_mtime
+            entry["off"] += end + 1
+            changed = True
+            carry = buf[end + 1:]
+
+
+def ledger_files(transcript: str) -> list:
+    """(key, path) of every subagent transcript of a session, symlinks refused."""
+    root = os.path.join(transcript[: -len(".jsonl")], "subagents")
+    stack, found, scanned = [(root, "", 1)], [], 0
+    while stack and scanned < LEDGER_MAX_DIRS and len(found) < LEDGER_MAX_FILES:
+        path, rel, depth = stack.pop()
+        scanned += 1
+        try:
+            if os.path.islink(path):
+                continue
+            with os.scandir(path) as it:
+                for item in it:
+                    name = item.name
+                    if item.is_symlink():
+                        continue
+                    if item.is_dir(follow_symlinks=False):
+                        if depth < LEDGER_MAX_DEPTH:
+                            stack.append((item.path, rel + name + "/", depth + 1))
+                    elif (
+                        name.startswith("agent-")
+                        and name.endswith(".jsonl")
+                        and item.is_file(follow_symlinks=False)
+                    ):
+                        found.append((rel + name, item.path))
+                        if len(found) >= LEDGER_MAX_FILES:
+                            break
+        except OSError:
+            continue
+    found.sort()
+    return found
+
+
+def ledger_dir() -> str:
+    return os.path.join(config_home(), "bobby-statusline", "usage")
+
+
+def ledger_load(path: str, transcript: str) -> dict | None:
+    """The sidecar of a session. None means start from zero."""
+    try:
+        if os.path.islink(path):
+            return None
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as fh:
+            raw = json.loads(fh.read(LEDGER_MAX_SIDECAR))
+        if not isinstance(raw, dict) or raw.get("v") != LEDGER_SCHEMA:
+            return None
+        if raw.get("path") != transcript or not isinstance(raw.get("sub"), dict):
+            return None
+        return {
+            "main": _checked_entry(raw.get("main")),
+            "sub": {key: _checked_entry(val) for key, val in raw["sub"].items()},
+        }
+    except (OSError, ValueError, RecursionError):
+        return None
+
+
+def ledger_save(session_id: str, transcript: str, state: dict) -> None:
+    """Write the sidecar: 0700 directory, 0600 file, temp file then rename."""
+    base = os.path.dirname(ledger_dir())
+    for folder in (base, ledger_dir()):
+        try:
+            os.mkdir(folder, 0o700)
+            os.chmod(folder, 0o700)
+        except FileExistsError:
+            pass
+        if not stat.S_ISDIR(os.lstat(folder).st_mode):
+            raise OSError("not a directory: %s" % folder)
+    dest = os.path.join(ledger_dir(), session_id + ".json")
+    fresh = not os.path.lexists(dest)
+    if os.path.islink(dest):
+        raise OSError("symlink: %s" % dest)
+
+    body = json.dumps(
+        {"v": LEDGER_SCHEMA, "path": transcript, "main": state["main"], "sub": state["sub"]},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    tmp = os.path.join(ledger_dir(), ".%s.%d.tmp" % (session_id, os.getpid()))
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(tmp, flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(body)
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    if fresh:
+        ledger_prune(time.time())
+
+
+def ledger_prune(wall: float) -> None:
+    """Delete sidecars of sessions that ended long ago. Runs once per new session."""
+    try:
+        with os.scandir(ledger_dir()) as it:
+            for item in it:
+                try:
+                    if not SIDECAR_RE.match(item.name) or item.is_symlink():
+                        continue
+                    info = item.stat(follow_symlinks=False)
+                    if stat.S_ISREG(info.st_mode) and wall - info.st_mtime > LEDGER_PRUNE_S:
+                        os.unlink(item.path)
+                except OSError:
+                    continue
+    except OSError:
+        pass
+
+
+def _merge_totals(into: dict, totals: dict) -> None:
+    for model, speeds in totals.items():
+        for speed, tup in speeds.items():
+            bucket = into.setdefault(model, {}).setdefault(speed, list(ZERO))
+            for i, n in enumerate(tup):
+                bucket[i] += n
+
+
+def ledger_totals(data: dict) -> dict | None:
+    """Token totals of the session: {'main', 'sub', 'partial', 'read'}, or None.
+
+    `main` and `sub` map a model id to {'n': tuple, 'f': tuple}, normal and fast
+    speed apart. None means there is nothing to estimate from: no transcript, no
+    usable session id, or a failure. This function never raises.
+    """
+    try:
+        return _ledger_totals(data)
+    except Exception:
+        return None
+
+
+def _ledger_totals(data: dict) -> dict | None:
+    start = time.perf_counter()
+    deadline = start + LEDGER_BUDGET_MS / 1000.0
+
+    session_id = data.get("session_id")
+    transcript = data.get("transcript_path")
+    if not isinstance(session_id, str) or not SESSION_ID_RE.match(session_id):
+        return None
+    if not isinstance(transcript, str) or not transcript.endswith(".jsonl"):
+        return None
+    if not os.path.isabs(transcript) or "\x00" in transcript:
+        return None
+    try:
+        if not stat.S_ISREG(os.lstat(transcript).st_mode):
+            return None
+    except OSError:
+        return None
+
+    sidecar = os.path.join(ledger_dir(), session_id + ".json")
+    state = ledger_load(sidecar, transcript) or {"main": _new_entry(), "sub": {}}
+
+    partial, dirty, mtimes = False, False, {}
+    before = state["main"]["off"] + sum(e["off"] for e in state["sub"].values())
+    done, changed, mtimes[""] = ledger_scan(transcript, state["main"], deadline)
+    partial, dirty = partial or not done, dirty or changed
+    for key, path in ledger_files(transcript):
+        entry = state["sub"].get(key)
+        if entry is None:
+            entry = _new_entry()
+        try:
+            done, changed, mtimes[key] = ledger_scan(path, entry, deadline)
+        except OSError:
+            continue
+        if changed or entry["off"]:
+            state["sub"][key] = entry
+        partial, dirty = partial or not done, dirty or changed
+    after = state["main"]["off"] + sum(e["off"] for e in state["sub"].values())
+
+    if dirty:
+        wall = time.time()
+        for key, entry in [("", state["main"])] + list(state["sub"].items()):
+            mtime = mtimes.get(key)
+            if entry["ids"] and (mtime is None or wall - mtime > LEDGER_IDLE_S):
+                entry["ids"] = {}
+        try:
+            ledger_save(session_id, transcript, state)
+        except OSError:
+            # The totals of this render are still right. Without a sidecar the
+            # next render starts from zero again.
+            pass
+
+    sub = {}
+    for entry in state["sub"].values():
+        _merge_totals(sub, entry["t"])
+    return {
+        "main": state["main"]["t"],
+        "sub": sub,
+        "partial": partial,
+        "read": max(0, after - before),
+    }
+
+
+# --------------------------------------------------------------------------
+# Prices
+# --------------------------------------------------------------------------
+
+# USD per million tokens: input, output, cache read. List prices of the
+# Claude API. A partner platform has its own list; the `prices` key of the
+# configuration file overrides an entry.
+PRICES = {
+    "claude-fable-5-2": (8, 40, 0.20),
+    "claude-fable-5-1": (10, 50, 0.25),
+    "claude-fable-5": (10, 50, 1.00),
+    "claude-mythos-5-2": (8, 40, 0.20),
+    "claude-mythos-5-1": (10, 50, 0.25),
+    "claude-opus-5-5": (4, 20, 0.20),
+    "claude-opus-5": (5, 25, 0.50),
+    "claude-opus-4-8": (5, 25, 0.50),
+    "claude-opus-4-7": (5, 25, 0.50),
+    "claude-opus-4-6": (5, 25, 0.50),
+    "claude-sonnet-5-5": (2, 10, 0.10),
+    "claude-sonnet-5": (2, 10, 0.20),
+    "claude-sonnet-4-6": (3, 15, 0.30),
+    "claude-haiku-5-5": (0.10, 0.50, 0.01),
+    "claude-haiku-4-5": (1, 5, 0.10),
+}
+CACHE_WRITE_5M, CACHE_WRITE_1H = 1.25, 2.0  # multiples of the input price
+WEB_SEARCH_USD = 0.01  # per request
+FAST_FACTOR = 2.0  # on the token prices
+
+MODEL_TAIL = re.compile(r"(?:\[1m\]|-v[0-9]+(?::[0-9]+)?|-[0-9]{8})$")
+
+
+def price_table(user: dict | None = None) -> dict:
+    """Model id prefix -> five prices. A user entry replaces a built-in one."""
+    table = {
+        key: (inp, out, read, inp * CACHE_WRITE_5M, inp * CACHE_WRITE_1H)
+        for key, (inp, out, read) in PRICES.items()
+    }
+    for key, val in (user or {}).items():
+        table[key] = tuple(val)
+    return table
+
+
+def normalise_model(model: str) -> str:
+    """'us.anthropic.claude-opus-5-5-20260101-v1:0' -> 'claude-opus-5-5'."""
+    name = model.strip().lower()
+    cut = name.find("anthropic.")
+    if cut >= 0:
+        name = name[cut + len("anthropic."):]
+    name = name.split("@", 1)[0]
+    while True:
+        short = MODEL_TAIL.sub("", name)
+        if short == name:
+            return name
+        name = short
+
+
+def price_for(model: str, table: dict):
+    """The prices of the longest prefix that matches, or None."""
+    name = normalise_model(model)
+    best = None
+    for key in table:
+        if name.startswith(key) and (best is None or len(key) > len(best)):
+            best = key
+    return table[best] if best is not None else None
+
+
+def ledger_cost(totals: dict, table: dict) -> tuple:
+    """(USD, unknown) for {model: {'n': tuple, 'f': tuple}}.
+
+    A model with tokens and no price counts as zero and sets `unknown`. A model
+    with no tokens, such as a synthetic message, is ignored.
+    """
+    usd, unknown = 0.0, False
+    for model, speeds in totals.items():
+        for speed, tup in speeds.items():
+            if not any(tup):
+                continue
+            price = price_for(model, table)
+            if price is None:
+                unknown = True
+                continue
+            tokens = sum(n * p for n, p in zip(tup[:5], price)) / 1e6
+            usd += tokens * (FAST_FACTOR if speed == "f" else 1.0) + tup[5] * WEB_SEARCH_USD
+    return usd, unknown
+
+
+def estimate_text(data: dict, cfg: dict) -> str:
+    """'~$1.63+? (sub $0.40)': the total with subagents, then the subagent share.
+
+    `~` marks an estimate, `+` a scan that is not finished, `?` a model with no
+    price. '$?' when there is nothing to estimate from.
+    """
+    try:
+        result = ledger_totals(data)
+        if result is None:
+            return "$?"
+        table = price_table(cfg.get("prices"))
+        main, unknown_main = ledger_cost(result["main"], table)
+        sub, unknown_sub = ledger_cost(result["sub"], table)
+        text = "~$%.2f" % (main + sub)
+        if result["partial"]:
+            text += "+"
+        if unknown_main or unknown_sub:
+            text += "?"
+        if float("%.2f" % sub) >= 0.01:
+            text += " (sub $%.2f)" % sub
+        return text
+    except Exception:
+        return "$?"
+
+
+# --------------------------------------------------------------------------
 # Segments
 # --------------------------------------------------------------------------
 
@@ -624,9 +1165,17 @@ def build_segments(data: dict, cfg: dict, state: dict, now: float) -> list:
             stamp = "%s%s" % (g["reset"], fmt_short(resets, now)) if resets else ""
             add(key, "%s %d%% %s" % (label, wpct, stamp) if stamp else "%s %d%%" % (label, wpct),
                 usage_color(wpct))
-    if show_cost:
+    if show_cost and on.get("cost"):
         cost = (data.get("cost") or {}).get("total_cost_usd")
-        add("cost", "$?" if cost is None else "$%.2f" % _num(cost), C_COST)
+        source = cfg["cost_source"]
+        if source == "auto":
+            known = isinstance(cost, (int, float)) and not isinstance(cost, bool)
+            source = "payload" if known else "estimate"
+        if source == "estimate":
+            # The only branch that reads transcripts and writes the sidecar.
+            add("cost", estimate_text(data, cfg), C_COST)
+        else:
+            add("cost", "$?" if cost is None else "$%.2f" % _num(cost), C_COST)
 
     cache = data.get("prompt_cache")
     if isinstance(cache, dict):
@@ -828,12 +1377,25 @@ Preferences live in %s. Every key is optional:
 {
   "layout": "one-row",        // one-row | two-row
   "billing": "auto",          // auto | plan | cost | both
+  "cost_source": "auto",      // auto | payload | estimate
   "glyphs": "ascii",          // ascii | unicode
   "color": true,
   "separator": " | ",
   "segments": { "worktree": true },
-  "priority": [%s]
+  "priority": [%s],
+  "prices": { "claude-opus-5-5": [4, 20, 0.2, 5, 8] }
 }
+
+cost_source decides where the cost segment gets its number. "payload" shows
+cost.total_cost_usd from Claude Code, which is absent on some accounts and then
+shows as "$?". "estimate" sums the token usage in the session
+transcripts, subagents included, against list prices, and shows it as
+"~$1.63 (sub $0.40)". "auto" uses the payload number when there is one and the
+estimate when there is not. The estimate keeps its progress in
+%s
+and writes nothing else. "prices" overrides a list price: a model id prefix and
+five numbers in USD per million tokens (input, output, cache read, cache write
+5m, cache write 1h).
 """
 
 
@@ -847,6 +1409,7 @@ def run_install() -> int:
             here,
             os.path.join(config_home(), CONFIG_FILE),
             ", ".join('"%s"' % k for k in PRIORITY),
+            os.path.join(ledger_dir(), "<session id>.json"),
         )
     )
     return 0

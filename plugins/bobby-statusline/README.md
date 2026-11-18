@@ -102,7 +102,7 @@ is dropped last.
 | 4 | context | `context_window` | `ctx 132k/1M (13%)` | on |
 | 5 | 5 hour | `rate_limits.five_hour` | `5h 26% >03:20` | auto |
 | 6 | 7 day | `rate_limits.seven_day` | `7d 14% >Wed 11:00` | auto |
-| 7 | cost | `cost.total_cost_usd` | `$0.42` | auto |
+| 7 | cost | `cost.total_cost_usd`, or the session transcripts | `$0.42`, `~$1.63 (sub $0.40)` | auto |
 | 8 | prompt cache | `prompt_cache` | `cache 1h warm >03:52 91%` | on |
 | 9 | model | `model.display_name` | `Opus 5 1M` | on |
 | 10 | effort | `effort.level` | `high effort` | on |
@@ -166,12 +166,14 @@ Three layers, later wins: built-in defaults, then the JSON file, then the enviro
 {
   "layout": "one-row",
   "billing": "auto",
+  "cost_source": "auto",
   "glyphs": "ascii",
   "color": true,
   "separator": " | ",
   "segments": { "worktree": true },
   "priority": ["paused", "vim", "flags", "ctx", "five_hour", "seven_day", "cost",
-               "cache", "model", "effort", "mode", "agent", "pr", "worktree", "lines"]
+               "cache", "model", "effort", "mode", "agent", "pr", "worktree", "lines"],
+  "prices": { "claude-opus-5-5": [4, 20, 0.2, 5, 8] }
 }
 ```
 
@@ -179,17 +181,20 @@ Three layers, later wins: built-in defaults, then the JSON file, then the enviro
 |---|---|---|
 | `layout` | `one-row`, `two-row` | `two-row` puts identity above and numbers below |
 | `billing` | `auto`, `plan`, `cost`, `both` | which of the usage windows and the cost segment appear |
+| `cost_source` | `auto`, `payload`, `estimate` | where the cost segment gets its number. See [The cost estimate](#the-cost-estimate) |
 | `glyphs` | `ascii`, `unicode` | `unicode` uses `↻`, `·`, and `⎇` instead of `>`, `+`, and `git:` |
 | `color` | `true`, `false` | `NO_COLOR` in the environment also turns color off |
 | `separator` | any short string | the text between segments |
 | `segments` | sparse object | lists only what differs from the default |
 | `priority` | list of keys | drop order, most protected first. Unlisted keys go to the end |
+| `prices` | object | price overrides for the estimate: a model id prefix and five numbers |
 
 Environment overrides, useful for one project or one experiment:
 
 ```bash
 BOBBY_STATUSLINE_LAYOUT=two-row
 BOBBY_STATUSLINE_BILLING=both
+BOBBY_STATUSLINE_COST_SOURCE=estimate
 BOBBY_STATUSLINE_GLYPHS=unicode
 BOBBY_STATUSLINE_SEGMENTS=+worktree,-agent    # a delta list, not a full set
 BOBBY_STATUSLINE_PRIORITY=vim,ctx,five_hour
@@ -209,6 +214,136 @@ the signal that this session bills by token cost. In `auto` mode a plan session 
 hides the windows. One blind spot: at the very first render of a session, before any API
 response, a plan user looks like a token-cost user for one row. Set `billing` explicitly to
 avoid that, or set `both` to see everything.
+
+`billing` decides whether the cost segment appears. `cost_source` decides where its number
+comes from. With both on `auto`, the shape of the payload decides:
+
+| Account | Payload | Row in `auto` | Transcripts read |
+|---|---|---|---|
+| Subscription (Pro, Max) | `rate_limits` present | `5h` and `7d`, no cost segment | no |
+| API key, billed by token | no `rate_limits`, `cost.total_cost_usd` present | `$0.42`, the number from Claude Code | no |
+| Partner platform or enterprise gateway | no `rate_limits`, no `cost.total_cost_usd` | `~$0.42 (sub $0.10)`, the estimate | yes |
+
+A subscription session shows a cost only when `billing` is `cost` or `both`. Any session
+shows the estimate when `cost_source` is `estimate`.
+
+## The cost estimate
+
+The payload has the token usage of the main session only. On some accounts it has no
+`cost.total_cost_usd`, and the cost segment shows `$?`. The estimate fills that gap. It adds
+up the token usage that Claude Code writes to the session transcripts, for the main session
+and for every subagent, and multiplies it by a price table.
+
+```
+~$1.63                  an estimate. No subagent cost, or less than one cent
+~$1.63 (sub $0.40)      1.63 in total, of which 0.40 is subagents
+~$1.63+ (sub $0.40)     the scan is not finished. The number grows on the next renders
+~$1.63?                 a model with no price is in the session. It counts as 0
+$?                      no transcript, no usable session id, or a read failure
+```
+
+| `cost_source` | Cost segment |
+|---|---|
+| `payload` | `cost.total_cost_usd` from Claude Code, `$?` when it is absent. No transcript is read |
+| `estimate` | always the estimate |
+| `auto` | the payload number when it is a number, the estimate when it is not |
+
+The payload number, when it exists, already includes the subagents. It has no `(sub ...)`
+part, because the payload does not split it.
+
+### What it reads and writes
+
+- The main transcript, from `transcript_path` in the payload.
+- Every `agent-*.jsonl` file in the `subagents` directory next to it, down to three levels,
+  which covers `subagents/workflows/<id>/`. No more than 2000 files.
+- Only lines whose type is `assistant`. One API response is several lines with one message
+  id, so an id counts once.
+
+A render reads only the bytes that were appended since the last render. The progress is in
+`${CLAUDE_CONFIG_DIR:-~/.claude}/bobby-statusline/usage/<session id>.json`: a byte offset
+and the token totals for each transcript. The directory has mode 0700 and the file has mode
+0600. The file is written to a temporary name and then renamed. Symlinks are refused on every
+path. A new session deletes the files of sessions that are more than 30 days old.
+
+The scan has 15 milliseconds for each render. A long session that is seen for the first
+time needs a few renders, and the `+` marker shows until the scan is complete. About 12 MB
+of transcripts took three renders on the maintainer's machine. After that a render that
+finds nothing new costs about 0.15 milliseconds.
+
+The scan runs only when the cost segment is shown and its source is the estimate. With
+`payload`, or with `auto` and a payload number, nothing is read and nothing is written.
+
+### Prices
+
+Built-in list prices, in USD for each million tokens:
+
+| Model id prefix | Input | Output | Cache read |
+|---|---|---|---|
+| `claude-fable-5-2`, `claude-mythos-5-2` | 8 | 40 | 0.20 |
+| `claude-fable-5-1`, `claude-mythos-5-1` | 10 | 50 | 0.25 |
+| `claude-fable-5` | 10 | 50 | 1.00 |
+| `claude-opus-5-5` | 4 | 20 | 0.20 |
+| `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6` | 5 | 25 | 0.50 |
+| `claude-sonnet-5-5` | 2 | 10 | 0.10 |
+| `claude-sonnet-5` | 2 | 10 | 0.20 |
+| `claude-sonnet-4-6` | 3 | 15 | 0.30 |
+| `claude-haiku-5-5` | 0.10 | 0.50 | 0.01 |
+| `claude-haiku-4-5` | 1 | 5 | 0.10 |
+
+A cache write with a 5 minute TTL costs 1.25 times the input price. A cache write with a
+1 hour TTL costs 2 times the input price. A web search costs $0.01 for each request. Fast
+mode doubles the token prices.
+
+The model id is made lower-case before the lookup. A provider prefix that ends in
+`anthropic.`, an `@` suffix, a `[1m]` suffix, a `-v1:0` suffix and an 8-digit date are
+removed. Then the longest prefix that matches wins, so `claude-opus-5-5` is not priced as
+`claude-opus-5`.
+
+To change a price or add a model, put it in `bobby-statusline.json`. The five numbers are
+input, output, cache read, cache write 5m and cache write 1h:
+
+```json
+{
+  "prices": {
+    "claude-opus-5-5": [4, 20, 0.2, 5, 8],
+    "my-gateway-model": [1, 5, 0.1, 1.25, 2]
+  }
+}
+```
+
+An entry of yours replaces the built-in entry with the same prefix. An entry that is not a
+list of five numbers is ignored. Prices come from this table and from your file only.
+Nothing is downloaded.
+
+### Limits
+
+- It is an estimate at list price, not a bill. A partner platform has its own price list,
+  and a contract can have a discount. Use `prices` for those.
+- Claude Code makes a few requests that are in no transcript, such as the one that names the
+  session. The estimate does not contain them, so it is a little lower than the number from
+  Claude Code. In a long session with many such requests the difference was about 12 percent.
+- Haiku 5.5 has a higher rate for a prompt above 100K tokens. The estimate ignores that and
+  uses one rate.
+- When a transcript does not say how a cache write splits into 5 minute and 1 hour TTL, the
+  write counts at the 5 minute rate.
+- A model that the table does not know counts as $0 and the `?` marker appears.
+- The transcript of a session that was removed or rotated cannot be counted.
+
+## No network access
+
+The plugin opens no connection. It has no network code, it starts no process during a
+render, and it downloads nothing, the prices included.
+
+It reads local files only: the payload on standard input, the session transcripts for the
+estimate, the two badge flag files, its configuration file, and the `limit-guard` state.
+
+It writes one kind of file: the estimate's progress file under
+`${CLAUDE_CONFIG_DIR:-~/.claude}/bobby-statusline/usage/`. `limit-guard`, when it is
+installed, writes its own cache through its own code. `--selftest` is the only command that
+starts processes, and they are copies of this script.
+
+`TestNoEgress` in the test suite parses the script and fails when it imports a network
+module, or when anything other than the selftest imports `subprocess`.
 
 ## Color
 
@@ -357,12 +492,14 @@ cost is one `python3` start every 30 seconds while the session sits idle.
 - **Per-model sub-limits.** `rate_limits` exposes three aggregate percentages and no
   breakdown.
 - **Your actual bill.** `cost.total_cost_usd` is computed client-side at list price and
-  resets on `/clear`.
+  resets on `/clear`. The estimate is computed from list prices too. Neither knows a
+  discount or the price list of a partner platform.
+- **Subagent tokens in the context segment.** `context_window` describes the main session.
+  The estimate counts subagent cost, but no segment shows a subagent's context.
+- **A cost split when Claude Code supplies the number.** `cost.total_cost_usd` is one
+  figure. Only the estimate can show the `(sub ...)` part.
 - **Spend outside this session.** Today, this week, and other sessions are not in the
-  payload. Session transcripts under `~/.claude/projects/` do record per-message token
-  counts and timestamps, with no dollar field, so a figure means summing tokens against a
-  price table. Scanning that per render costs far more than the budget allows, so it needs
-  a cached sidecar and is not part of this version.
+  payload. The estimate reads the transcripts of the current session only.
 
 ## Tests
 
@@ -371,16 +508,20 @@ cd plugins/bobby-statusline && python3 -m unittest discover -s tests -p 'test_*.
 python3 bin/bobby-statusline.py --selftest
 ```
 
-99 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
+154 tests cover the golden renders, width fitting at nine widths, badge hardening (symlink,
 oversize, escape bytes, whitelist), the billing modes, the color thresholds, both layouts,
 the configuration layers, the prompt cache states and colors, the pause state, the `limit-guard` bridge including an old gate
-and a raising gate, the slash command's contract, and one regression test per fixed defect
+and a raising gate, the slash command's contract, the usage ledger (one count for each message id, main and
+subagent totals, incremental reads, truncation, symlinks, the time limit), the price lookup,
+the cost sources for the three account shapes, the absence of network code, and one
+regression test per fixed defect
 (`TestAuditRegressions`, nine tests). Each of those fails against the code as it stood
 before its fix.
 
 Every test isolates `CLAUDE_CONFIG_DIR` into a temporary directory, including the tests that
 run the script as a subprocess, so a run reads none of the developer's own session state and
-writes nothing into their real `limit-guard` cache. `--selftest` does the same from a shell:
+writes nothing into their real `limit-guard` cache. The ledger tests write synthetic
+transcripts into that temporary directory. `--selftest` does the same from a shell:
 it points `LIMIT_GUARD_HOME` at a temporary directory for the run, so the captures it measures
 never touch the real cache or pause state. The clock is pinned by passing
 `render(payload, now=...)`, so the expectations do not drift with the date and nothing in the

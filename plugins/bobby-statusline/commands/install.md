@@ -36,7 +36,10 @@ show the change first and never guess at a path.
      directory, if they want to see the drop order.
    - Preferences live in `${CLAUDE_CONFIG_DIR:-~/.claude}/bobby-statusline.json`. The
      plugin README lists every key. The common ones are `billing` (`auto`, `plan`, `cost`,
-     `both`), `layout` (`one-row`, `two-row`), and `segments`.
+     `both`), `cost_source` (`auto`, `payload`, `estimate`), `layout` (`one-row`,
+     `two-row`), and `segments`. With `cost_source` on `estimate`, the cost segment adds up
+     the token usage in the session transcripts, subagents included, and shows it as
+     `~$1.63 (sub $0.40)`.
 
 Do not change any other setting, do not install anything, and do not edit files outside
 settings.json.

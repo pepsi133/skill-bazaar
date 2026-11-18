@@ -612,6 +612,610 @@ class TestMultiColorSegments(Base):
         self.assertIn("\033[", self.render("full.json", COLUMNS=8))
 
 
+SESSION = "0a1b2c3d-0000-4000-8000-00000000abcd"
+
+
+def usage(inp=0, out=0, read=0, w5=0, w1=0, search=0, speed="standard", detail=True):
+    val = {
+        "input_tokens": inp,
+        "output_tokens": out,
+        "cache_read_input_tokens": read,
+        "cache_creation_input_tokens": w5 + w1,
+        "server_tool_use": {"web_search_requests": search},
+        "speed": speed,
+    }
+    if detail:
+        val["cache_creation"] = {
+            "ephemeral_5m_input_tokens": w5,
+            "ephemeral_1h_input_tokens": w1,
+        }
+    return val
+
+
+def assistant(mid, model="claude-opus-5-5", **fields) -> str:
+    """One transcript line in the compact form Claude Code writes."""
+    return json.dumps(
+        {"type": "assistant", "message": {"id": mid, "model": model, "usage": usage(**fields)}},
+        separators=(",", ":"),
+    )
+
+
+class LedgerBase(Base):
+    """Synthetic transcripts under the temporary config directory."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = os.path.join(self.config, "projects", "sample")
+        os.makedirs(self.project)
+        self.transcript = os.path.join(self.project, SESSION + ".jsonl")
+        self.subagents = os.path.join(self.project, SESSION, "subagents")
+        self.sidecar = os.path.join(
+            self.config, "bobby-statusline", "usage", SESSION + ".json"
+        )
+        budget = BS.LEDGER_BUDGET_MS
+        self.addCleanup(lambda: setattr(BS, "LEDGER_BUDGET_MS", budget))
+        # A loaded machine must not turn a correct total into a partial one.
+        BS.LEDGER_BUDGET_MS = 5000.0
+
+    def append(self, path, *lines, newline=True):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "ab") as fh:
+            fh.write("\n".join(lines).encode("utf-8") + (b"\n" if newline else b""))
+
+    def agent(self, name="agent-a1.jsonl", *parts):
+        return os.path.join(self.subagents, *parts, name)
+
+    def payload(self, **fields) -> dict:
+        base = {"session_id": SESSION, "transcript_path": self.transcript}
+        base.update(fields)
+        return base
+
+    def totals(self, **fields):
+        return BS.ledger_totals(self.payload(**fields))
+
+    def cost_segment(self, source="estimate", **fields) -> str:
+        if source:
+            os.environ["BOBBY_STATUSLINE_COST_SOURCE"] = source
+        row = self.plain(BS.render(json.dumps(self.payload(**fields)), now=NOW))
+        found = [part for part in row.split(" | ") if "$" in part]
+        return found[0] if found else ""
+
+
+class TestLedger(LedgerBase):
+    def test_one_message_id_counts_once(self):
+        """One response is several lines, one per content block, same usage."""
+        line = assistant("msg_1", inp=100, out=50)
+        self.append(self.transcript, line, line, line, assistant("msg_2", inp=7))
+        self.assertEqual(
+            self.totals()["main"], {"claude-opus-5-5": {"n": [107, 50, 0, 0, 0, 0]}}
+        )
+
+    def test_later_line_of_a_known_id_adds_only_what_grew(self):
+        self.append(
+            self.transcript,
+            assistant("msg_1", inp=100, out=10),
+            assistant("msg_1", inp=100, out=60),
+            assistant("msg_1", inp=90, out=60),
+        )
+        self.assertEqual(self.totals()["main"]["claude-opus-5-5"]["n"][:2], [100, 60])
+
+    def test_dedup_survives_two_renders(self):
+        self.append(self.transcript, assistant("msg_1", inp=100, out=10))
+        self.totals()
+        self.append(self.transcript, assistant("msg_1", inp=100, out=10))
+        self.assertEqual(self.totals()["main"]["claude-opus-5-5"]["n"][:2], [100, 10])
+
+    def test_user_line_with_nested_usage_is_not_counted(self):
+        quoted = json.dumps(
+            {
+                "type": "user",
+                "note": '"type":"assistant"',
+                "toolUseResult": {"usage": usage(inp=999999, out=999999)},
+                "message": {"id": "msg_9", "model": "claude-opus-5-5",
+                            "usage": usage(inp=999999)},
+            },
+            separators=(",", ":"),
+        )
+        self.append(self.transcript, quoted, assistant("msg_1", inp=5))
+        self.assertEqual(self.totals()["main"]["claude-opus-5-5"]["n"][0], 5)
+
+    def test_spaced_json_is_counted_too(self):
+        line = json.dumps(json.loads(assistant("msg_1", inp=5)))
+        self.append(self.transcript, line)
+        self.assertEqual(self.totals()["main"]["claude-opus-5-5"]["n"][0], 5)
+
+    def test_main_and_subagents_are_kept_apart(self):
+        self.append(self.transcript, assistant("msg_1", inp=1000))
+        self.append(self.agent(), assistant("msg_2", inp=200))
+        self.append(self.agent("agent-b2.jsonl", "workflows", "wf-1"), assistant("msg_3", inp=30))
+        # Not transcripts: every other file in the directory is ignored.
+        self.append(self.agent("journal.jsonl"), assistant("msg_4", inp=4000))
+        self.append(self.agent("agent-a1.meta.json"), assistant("msg_5", inp=4000))
+        self.append(
+            self.agent("agent-c3.jsonl", "a", "b", "c"), assistant("msg_6", inp=4000)
+        )
+        result = self.totals()
+        self.assertEqual(result["main"]["claude-opus-5-5"]["n"][0], 1000)
+        self.assertEqual(result["sub"]["claude-opus-5-5"]["n"][0], 230)
+        self.assertFalse(result["partial"])
+
+    def test_second_render_reads_only_the_new_bytes(self):
+        self.append(self.transcript, assistant("msg_1", inp=100))
+        self.append(self.agent(), assistant("msg_2", inp=10))
+        first = self.totals()
+        size = os.path.getsize(self.transcript) + os.path.getsize(self.agent())
+        self.assertEqual(first["read"], size)
+        self.assertEqual(self.totals()["read"], 0)
+
+        more = assistant("msg_3", inp=1)
+        self.append(self.agent(), more)
+        third = self.totals()
+        self.assertEqual(third["read"], len(more) + 1)
+        self.assertEqual(third["main"]["claude-opus-5-5"]["n"][0], 100)
+        self.assertEqual(third["sub"]["claude-opus-5-5"]["n"][0], 11)
+
+    def test_unchanged_transcripts_do_not_rewrite_the_sidecar(self):
+        self.append(self.transcript, assistant("msg_1", inp=100))
+        self.totals()
+        os.utime(self.sidecar, (1000, 1000))
+        self.totals()
+        self.assertEqual(os.stat(self.sidecar).st_mtime, 1000)
+
+    def test_truncated_file_is_rescanned(self):
+        self.append(self.transcript, assistant("msg_1", inp=100), assistant("msg_2", inp=100))
+        self.assertEqual(self.totals()["main"]["claude-opus-5-5"]["n"][0], 200)
+        with open(self.transcript, "wb") as fh:
+            fh.write(assistant("msg_3", inp=7).encode() + b"\n")
+        self.assertEqual(self.totals()["main"]["claude-opus-5-5"]["n"][0], 7)
+
+    def test_partial_last_line_is_not_consumed(self):
+        whole = assistant("msg_1", inp=100)
+        tail = assistant("msg_2", inp=50)
+        self.append(self.transcript, whole)
+        self.append(self.transcript, tail[:40], newline=False)
+        result = self.totals()
+        self.assertEqual(result["main"]["claude-opus-5-5"]["n"][0], 100)
+        self.assertEqual(result["read"], len(whole) + 1)
+        self.append(self.transcript, tail[40:])
+        self.assertEqual(self.totals()["main"]["claude-opus-5-5"]["n"][0], 150)
+
+    def test_symlinked_main_transcript_is_refused(self):
+        real = os.path.join(self.project, "real.jsonl")
+        self.append(real, assistant("msg_1", inp=100))
+        os.symlink(real, self.transcript)
+        self.assertIsNone(self.totals())
+        self.assertEqual(self.cost_segment(), "$?")
+
+    def test_symlinked_subagent_transcript_is_refused(self):
+        self.append(self.transcript, assistant("msg_1", inp=100))
+        real = os.path.join(self.project, "real.jsonl")
+        self.append(real, assistant("msg_2", inp=100))
+        os.makedirs(self.subagents)
+        os.symlink(real, self.agent())
+        os.symlink(self.project, os.path.join(self.subagents, "workflows"))
+        self.assertEqual(self.totals()["sub"], {})
+
+    def test_symlinked_sidecar_is_not_read_or_followed(self):
+        self.append(self.transcript, assistant("msg_1", inp=100))
+        self.totals()
+        target = os.path.join(self.config, "elsewhere.json")
+        os.replace(self.sidecar, target)
+        with open(target, "rb") as fh:
+            body = fh.read()
+        os.symlink(target, self.sidecar)
+        self.append(self.transcript, assistant("msg_2", inp=1))
+        result = self.totals()
+        # Started from zero, so the whole file was read again.
+        self.assertEqual(result["read"], os.path.getsize(self.transcript))
+        self.assertEqual(result["main"]["claude-opus-5-5"]["n"][0], 101)
+        with open(target, "rb") as fh:
+            self.assertEqual(fh.read(), body)
+
+    def test_sidecar_modes(self):
+        self.append(self.transcript, assistant("msg_1", inp=100))
+        self.totals()
+        self.assertEqual(os.stat(self.sidecar).st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(os.path.dirname(self.sidecar)).st_mode & 0o777, 0o700)
+        self.assertEqual(os.listdir(os.path.dirname(self.sidecar)), [SESSION + ".json"])
+
+    def test_other_schema_version_starts_from_zero(self):
+        self.append(self.transcript, assistant("msg_1", inp=100))
+        self.totals()
+        with open(self.sidecar, encoding="utf-8") as fh:
+            stored = json.load(fh)
+        stored["v"] = 99
+        stored["main"]["t"] = {"claude-opus-5-5": {"n": [5000, 0, 0, 0, 0, 0]}}
+        with open(self.sidecar, "w", encoding="utf-8") as fh:
+            json.dump(stored, fh)
+        self.assertEqual(self.totals()["main"]["claude-opus-5-5"]["n"][0], 100)
+
+    def test_garbage_sidecar_starts_from_zero(self):
+        self.append(self.transcript, assistant("msg_1", inp=100))
+        self.totals()
+        for body in ("{ not json", '{"v":1}', '{"v":1,"path":"x","main":[],"sub":{}}', "[]"):
+            with self.subTest(body=body):
+                with open(self.sidecar, "w", encoding="utf-8") as fh:
+                    fh.write(body)
+                self.assertEqual(self.totals()["main"]["claude-opus-5-5"]["n"][0], 100)
+
+    def test_zero_budget_marks_the_result_partial(self):
+        self.append(self.transcript, assistant("msg_1", inp=1000000))
+        BS.LEDGER_BUDGET_MS = 0
+        self.assertTrue(self.totals()["partial"])
+        self.assertEqual(self.cost_segment(), "~$0.00+")
+        BS.LEDGER_BUDGET_MS = 5000.0
+        self.assertEqual(self.cost_segment(), "~$4.00")
+
+    def test_budget_that_runs_out_is_continued_by_the_next_render(self):
+        lines = [assistant("msg_%d" % i, inp=1) for i in range(400)]
+        self.append(self.transcript, *lines)
+        clock = {"calls": 0}
+        real = BS.time.perf_counter
+
+        def ticking():
+            clock["calls"] += 1
+            return clock["calls"] * 0.001  # every look at the clock costs 1 ms
+
+        BS.LEDGER_BUDGET_MS = 100.0
+        BS.time.perf_counter = ticking
+        try:
+            first = self.totals()
+            clock["calls"] = 0
+            seen = first["main"]["claude-opus-5-5"]["n"][0]
+            self.assertTrue(first["partial"])
+            self.assertTrue(0 < seen < 400, seen)
+            renders = 1
+            while renders < 20:
+                clock["calls"] = 0
+                result = self.totals()
+                renders += 1
+                if not result["partial"]:
+                    break
+        finally:
+            BS.time.perf_counter = real
+        self.assertFalse(result["partial"])
+        self.assertEqual(result["main"]["claude-opus-5-5"]["n"][0], 400)
+
+    def test_missing_cache_detail_counts_as_five_minute_writes(self):
+        self.append(self.transcript, assistant("msg_1", w5=300, detail=False))
+        self.assertEqual(
+            self.totals()["main"]["claude-opus-5-5"]["n"], [0, 0, 0, 300, 0, 0]
+        )
+
+    def test_fast_speed_is_kept_apart(self):
+        self.append(
+            self.transcript,
+            assistant("msg_1", inp=10),
+            assistant("msg_2", inp=20, speed="fast"),
+        )
+        model = self.totals()["main"]["claude-opus-5-5"]
+        self.assertEqual((model["n"][0], model["f"][0]), (10, 20))
+
+    def test_id_map_keeps_sixteen_and_drops_when_the_file_is_idle(self):
+        self.append(self.transcript, *[assistant("msg_%d" % i, inp=1) for i in range(40)])
+        self.totals()
+        with open(self.sidecar, encoding="utf-8") as fh:
+            ids = json.load(fh)["main"]["ids"]
+        self.assertEqual(list(ids), ["msg_%d" % i for i in range(24, 40)])
+
+        self.append(self.transcript, assistant("msg_40", inp=1))
+        old = time.time() - 3600
+        os.utime(self.transcript, (old, old))
+        self.totals()
+        with open(self.sidecar, encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["main"]["ids"], {})
+
+    def test_new_sidecar_prunes_old_ones(self):
+        folder = os.path.dirname(self.sidecar)
+        os.makedirs(folder)
+        old, recent, other = (os.path.join(folder, n) for n in ("old.json", "recent.json", "notes.txt"))
+        for path in (old, recent, other):
+            with open(path, "w") as fh:
+                fh.write("{}")
+        stamp = time.time() - 31 * 86400
+        os.utime(old, (stamp, stamp))
+        os.utime(other, (stamp, stamp))
+        self.append(self.transcript, assistant("msg_1", inp=1))
+        self.totals()
+        self.assertEqual(
+            sorted(os.listdir(folder)), sorted(["recent.json", "notes.txt", SESSION + ".json"])
+        )
+
+    def test_bad_session_id_gives_no_estimate(self):
+        self.append(self.transcript, assistant("msg_1", inp=100))
+        for bad in ("../../etc/passwd", "a b", "", "x" * 65, None, 7, "a/b"):
+            with self.subTest(session_id=bad):
+                self.assertEqual(self.cost_segment(session_id=bad), "$?")
+        self.assertFalse(os.path.exists(os.path.join(self.config, "bobby-statusline")))
+
+    def test_missing_transcript_gives_no_estimate(self):
+        self.assertEqual(self.cost_segment(), "$?")
+        for bad in (None, 7, "relative.jsonl", self.project, self.transcript[:-1]):
+            with self.subTest(transcript_path=bad):
+                self.assertEqual(self.cost_segment(transcript_path=bad), "$?")
+        self.assertFalse(os.path.exists(os.path.join(self.config, "bobby-statusline")))
+
+    def test_garbage_transcript_never_raises(self):
+        with open(self.transcript, "wb") as fh:
+            fh.write(b'\xff\xfe"usage""type":"assistant"\n')
+            fh.write(b'{"type":"assistant","message":"usage"}\n')
+            fh.write(b'{"type":"assistant","message":{"usage":[1],"id":3}}\n')
+            fh.write(b'{"type":"assistant","message":{"usage":{"input_tokens":"x",'
+                     b'"output_tokens":-5,"cache_creation":7,"server_tool_use":[]},'
+                     b'"id":{"a":1},"model":["m"]}}\n')
+            fh.write(b'["type":"assistant","usage"]\n')
+            fh.write(b"[" * 100000 + b'"usage""type":"assistant"\n')
+            fh.write(b"\x00" * 5000 + b"\n\n\n")
+            fh.write(assistant("msg_1", inp=1000000).encode() + b"\n")
+        self.assertEqual(self.cost_segment(), "~$4.00")
+
+    def test_unwritable_sidecar_directory_still_renders(self):
+        self.append(self.transcript, assistant("msg_1", inp=1000000))
+        with open(os.path.join(self.config, "bobby-statusline"), "w") as fh:
+            fh.write("a file where the directory should be")
+        self.assertEqual(self.cost_segment(), "~$4.00")
+
+
+class TestPrices(LedgerBase):
+    def cost(self, model, user=None, speed="n", tup=(1000000, 1000000, 1000000, 1000000, 1000000, 0)):
+        return BS.ledger_cost({model: {speed: list(tup)}}, BS.price_table(user))
+
+    def test_list_price_with_derived_cache_writes(self):
+        # 4 + 20 + 0.20 + 1.25 * 4 + 2 * 4
+        usd, unknown = self.cost("claude-opus-5-5")
+        self.assertAlmostEqual(usd, 37.2)
+        self.assertFalse(unknown)
+
+    def test_model_id_normalisation(self):
+        for name in (
+            "claude-opus-5-5",
+            "Claude-Opus-5-5",
+            "claude-opus-5-5-20260101",
+            "claude-opus-5-5[1m]",
+            "claude-opus-5-5@20260101",
+            "us.anthropic.claude-opus-5-5-20260101-v1:0",
+            "anthropic.claude-opus-5-5-v2",
+            "global.anthropic.claude-opus-5-5-20260101-v1:0[1m]",
+        ):
+            with self.subTest(model=name):
+                self.assertEqual(BS.normalise_model(name), "claude-opus-5-5")
+
+    def test_longest_prefix_wins(self):
+        self.assertAlmostEqual(self.cost("claude-opus-5-5-20260101")[0], 37.2)
+        # 5 + 25 + 0.50 + 6.25 + 10
+        self.assertAlmostEqual(self.cost("claude-opus-5-20260101")[0], 46.75)
+        self.assertAlmostEqual(self.cost("claude-fable-5-2")[0], 8 + 40 + 0.2 + 10 + 16)
+        self.assertAlmostEqual(self.cost("claude-fable-5")[0], 10 + 50 + 1 + 12.5 + 20)
+
+    def test_user_price_wins_over_the_list(self):
+        user = BS._user_prices({"claude-opus-5-5": [1, 2, 3, 4, 5], "my-model": [1, 1, 1, 1, 1]})
+        self.assertAlmostEqual(self.cost("claude-opus-5-5", user)[0], 15)
+        self.assertAlmostEqual(self.cost("my-model-large", user)[0], 5)
+        self.assertAlmostEqual(self.cost("claude-opus-5", user)[0], 46.75)
+
+    def test_malformed_user_prices_are_ignored(self):
+        user = BS._user_prices(
+            {
+                "claude-opus-5-5": [1, 2, 3],
+                "claude-opus-5": "cheap",
+                "claude-sonnet-5": [1, 2, 3, 4, "5"],
+                "claude-haiku-5-5": [1, 2, 3, 4, -5],
+                "claude-haiku-4-5": [True, 2, 3, 4, 5],
+                "": [1, 2, 3, 4, 5],
+                "ok": [1, 2, 3, 4, 5],
+            }
+        )
+        self.assertEqual(user, {"ok": [1.0, 2.0, 3.0, 4.0, 5.0]})
+
+    def test_unknown_model_counts_as_zero_and_is_marked(self):
+        self.assertEqual(self.cost("some-other-model"), (0.0, True))
+
+    def test_model_without_tokens_is_ignored(self):
+        self.assertEqual(self.cost("<synthetic>", tup=(0, 0, 0, 0, 0, 0)), (0.0, False))
+
+    def test_fast_speed_doubles_the_token_prices(self):
+        self.assertAlmostEqual(self.cost("claude-opus-5-5", speed="f")[0], 74.4)
+
+    def test_web_search_is_a_cent_per_request_at_any_speed(self):
+        for speed in ("n", "f"):
+            usd, _ = self.cost("claude-opus-5-5", speed=speed, tup=(0, 0, 0, 0, 0, 3))
+            self.assertAlmostEqual(usd, 0.03)
+
+    def test_prices_from_the_config_file_reach_the_row(self):
+        self.append(self.transcript, assistant("msg_1", model="my-model", inp=1000000))
+        self.assertEqual(self.cost_segment(), "~$0.00?")
+        with open(os.path.join(self.config, "bobby-statusline.json"), "w") as fh:
+            json.dump({"prices": {"my-model": [3, 0, 0, 0, 0], "bad": [1]}}, fh)
+        self.assertEqual(self.cost_segment(), "~$3.00")
+
+
+class TestCostSource(LedgerBase):
+    def setUp(self):
+        super().setUp()
+        # Main: 0.4 + 0.8 = 1.20 USD. Subagent: 0.40 USD.
+        self.append(self.transcript, assistant("msg_1", inp=100000, out=40000))
+        self.append(self.agent(), assistant("msg_2", inp=100000))
+
+    def test_estimate_shows_the_total_and_the_subagent_share(self):
+        self.assertEqual(self.cost_segment(), "~$1.60 (sub $0.40)")
+
+    def test_subagent_share_below_a_cent_is_not_shown(self):
+        with open(self.agent(), "wb") as fh:
+            fh.write(assistant("msg_2", inp=1000).encode() + b"\n")
+        self.assertEqual(self.cost_segment(), "~$1.20")
+
+    def test_partial_and_unknown_markers_sit_after_the_total(self):
+        self.append(self.agent("agent-b2.jsonl"), assistant("msg_3", model="other", inp=5))
+        self.assertEqual(self.cost_segment(), "~$1.60? (sub $0.40)")
+        BS.LEDGER_BUDGET_MS = 0
+        self.append(self.transcript, assistant("msg_4", inp=100000))
+        self.assertEqual(self.cost_segment(), "~$1.60+? (sub $0.40)")
+
+    def test_estimate_ignores_the_payload_cost(self):
+        self.assertEqual(
+            self.cost_segment(cost={"total_cost_usd": 9.99}), "~$1.60 (sub $0.40)"
+        )
+
+    def test_payload_never_reads_transcripts(self):
+        self.assertEqual(self.cost_segment("payload", cost={"total_cost_usd": 9.99}), "$9.99")
+        self.assertEqual(self.cost_segment("payload"), "$?")
+        self.assertFalse(os.path.exists(self.sidecar))
+
+    def test_auto_prefers_the_payload_number(self):
+        self.assertEqual(self.cost_segment("auto", cost={"total_cost_usd": 9.99}), "$9.99")
+        self.assertEqual(self.cost_segment("auto", cost={"total_cost_usd": 0}), "$0.00")
+        self.assertFalse(os.path.exists(self.sidecar))
+
+    def test_auto_falls_back_to_the_estimate(self):
+        self.assertEqual(self.cost_segment("auto"), "~$1.60 (sub $0.40)")
+        self.assertEqual(
+            self.cost_segment("auto", cost={"total_lines_added": 3}), "~$1.60 (sub $0.40)"
+        )
+        self.assertEqual(
+            self.cost_segment("auto", cost={"total_cost_usd": None}), "~$1.60 (sub $0.40)"
+        )
+
+    def test_unknown_cost_source_falls_back_to_auto(self):
+        self.assertEqual(self.cost_segment("nonsense", cost={"total_cost_usd": 9.99}), "$9.99")
+
+    def test_cost_source_from_the_config_file(self):
+        with open(os.path.join(self.config, "bobby-statusline.json"), "w") as fh:
+            json.dump({"cost_source": "estimate"}, fh)
+        self.assertEqual(
+            self.cost_segment(None, cost={"total_cost_usd": 9.99}), "~$1.60 (sub $0.40)"
+        )
+
+    def test_hidden_cost_segment_runs_no_ledger(self):
+        os.environ["BOBBY_STATUSLINE_SEGMENTS"] = "-cost"
+        self.assertEqual(self.cost_segment(), "")
+        os.environ["BOBBY_STATUSLINE_SEGMENTS"] = ""
+        os.environ["BOBBY_STATUSLINE_BILLING"] = "plan"
+        self.assertEqual(self.cost_segment(), "")
+        self.assertFalse(os.path.exists(self.sidecar))
+
+    def test_estimate_keeps_the_cost_color(self):
+        del os.environ["NO_COLOR"]
+        os.environ["BOBBY_STATUSLINE_COST_SOURCE"] = "estimate"
+        row = BS.render(json.dumps(self.payload()), now=NOW)
+        self.assertIn("\033[38;5;109m~$1.60 (sub $0.40)\033[0m", row)
+
+
+class TestBillingShapes(LedgerBase):
+    """billing auto and cost_source auto, for the three account shapes."""
+
+    LIMITS = {
+        "five_hour": {"used_percentage": 26, "resets_at": NOW + 3600},
+        "seven_day": {"used_percentage": 14, "resets_at": NOW + 86400},
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.append(self.transcript, assistant("msg_1", inp=100000, out=40000))
+        self.append(self.agent(), assistant("msg_2", inp=100000))
+
+    def row(self, **fields) -> str:
+        return self.plain(BS.render(json.dumps(self.payload(**fields)), now=NOW))
+
+    def test_token_billing_with_a_payload_cost_shows_it_and_runs_no_ledger(self):
+        row = self.row(cost={"total_cost_usd": 1.37, "total_lines_added": 2})
+        self.assertIn("$1.37", row)
+        self.assertNotIn("~$", row)
+        self.assertNotIn("5h", row)
+        self.assertFalse(os.path.exists(os.path.join(self.config, "bobby-statusline")))
+
+    def test_token_billing_without_a_payload_cost_shows_the_estimate(self):
+        row = self.row(cost={"total_lines_added": 2, "total_lines_removed": 1})
+        self.assertIn("~$1.60 (sub $0.40)", row)
+        self.assertNotIn("5h", row)
+        self.assertIn("+2/-1", row)
+        self.assertTrue(os.path.isfile(self.sidecar))
+
+    def test_subscription_shows_no_cost_and_runs_no_ledger(self):
+        row = self.row(rate_limits=self.LIMITS, cost={"total_cost_usd": 1.37})
+        self.assertIn("5h 26%", row)
+        self.assertNotIn("$", row)
+        row = self.row(rate_limits=self.LIMITS, cost={"total_lines_added": 2})
+        self.assertNotIn("$", row)
+        self.assertFalse(os.path.exists(os.path.join(self.config, "bobby-statusline")))
+
+
+class TestNoEgress(unittest.TestCase):
+    """The script opens no connection and a render forks no process."""
+
+    NETWORK = {
+        "socket", "socketserver", "ssl", "urllib", "http", "ftplib", "smtplib", "poplib",
+        "imaplib", "telnetlib", "xmlrpc", "asyncio", "requests", "httpx", "aiohttp",
+        "urllib3", "websockets",
+    }
+    PROCESS = {"subprocess", "multiprocessing", "pty", "pexpect"}
+    OS_CALLS = re.compile(r"^(system|popen|fork|forkpty|exec[lv]p?e?|spawn[lv]p?e?|posix_spawnp?)$")
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+
+        cls.ast = ast
+        with open(SCRIPT, encoding="utf-8") as fh:
+            cls.tree = ast.parse(fh.read())
+
+    def imports(self, node):
+        """(root module, node) for every import below `node`."""
+        for item in self.ast.walk(node):
+            if isinstance(item, self.ast.Import):
+                for alias in item.names:
+                    yield alias.name.split(".")[0], item
+            elif isinstance(item, self.ast.ImportFrom):
+                yield (item.module or "").split(".")[0], item
+
+    def functions(self):
+        return [
+            n for n in self.ast.walk(self.tree)
+            if isinstance(n, (self.ast.FunctionDef, self.ast.AsyncFunctionDef))
+        ]
+
+    def callers_of(self, name):
+        return sorted(
+            fn.name for fn in self.functions()
+            if any(isinstance(n, self.ast.Name) and n.id == name for n in self.ast.walk(fn))
+        )
+
+    def test_no_network_module_is_imported(self):
+        found = sorted({root for root, _ in self.imports(self.tree) if root in self.NETWORK})
+        self.assertEqual(found, [])
+
+    def test_no_dynamic_import_by_name(self):
+        for node in self.ast.walk(self.tree):
+            if isinstance(node, self.ast.Call):
+                name = getattr(node.func, "id", getattr(node.func, "attr", ""))
+                self.assertNotIn(name, ("__import__", "import_module", "eval", "exec"))
+
+    def test_subprocess_is_imported_only_by_the_selftest(self):
+        top = [
+            root for stmt in self.tree.body
+            if isinstance(stmt, (self.ast.Import, self.ast.ImportFrom))
+            for root, _ in self.imports(stmt)
+        ]
+        self.assertEqual([m for m in top if m in self.PROCESS], [])
+        holders = sorted(
+            fn.name for fn in self.functions()
+            if any(root in self.PROCESS for root, _ in self.imports(fn))
+        )
+        self.assertEqual(holders, ["_measure"])
+        # The selftest is reached from the command line only, never from a render.
+        self.assertEqual(self.callers_of("_measure"), ["run_selftest"])
+        self.assertEqual(self.callers_of("run_selftest"), ["main"])
+
+    def test_no_process_is_started_through_os(self):
+        for node in self.ast.walk(self.tree):
+            if isinstance(node, self.ast.Attribute):
+                self.assertIsNone(self.OS_CALLS.match(node.attr), node.attr)
+
+    def test_no_url_outside_comments_and_docstrings(self):
+        for node in self.ast.walk(self.tree):
+            if isinstance(node, self.ast.Constant) and isinstance(node.value, str):
+                self.assertIsNone(re.search(r"[a-z][a-z0-9+.-]*://", node.value), node.value[:60])
+
+
 class TestSlashCommand(unittest.TestCase):
     """The install command is a prompt, so what is testable is its contract."""
 
