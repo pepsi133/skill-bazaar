@@ -35,11 +35,15 @@ function sh(...argv) { const lines = []; const code = run(argv, (l) => lines.pus
 const CONFIRMS = new Set(["check", "sync", "close", "ack", "status", "watch", "guide", "purge"]);
 const strict = (b, ...argv) => sh(...argv, "--state", b.state);
 const cmd = (b, ...argv) => strict(b, ...argv, ...(CONFIRMS.has(argv[0]) ? ["--confirmed"] : []));
-// A dump as an agent makes it: the data-only files, and the reply lines saved to versions.txt.
-function dumpNow(b) { const lines = dump(b.db, b.dump); fs.mkdirSync(b.dump, { recursive: true }); fs.writeFileSync(path.join(b.dump, "versions.txt"), lines.join("\n") + "\n"); return b.dump; }
-const dumped = (b, ...argv) => cmd(b, ...argv, "--dump", dumpNow(b));
+// A dump as an agent makes it: the data-only files; the reply lines of the dump call go to a reply file that the
+// commands needing versions take as --reply.
+function dumpNow(b) { const lines = dump(b.db, b.dump); fs.mkdirSync(b.dump, { recursive: true }); fs.writeFileSync(replyOf(b), "Listed documents:\n" + lines.join("\n") + "\n"); return b.dump; }
+const replyOf = (b) => path.join(path.dirname(b.board), "reply.txt");
+const NEEDS_REPLY = new Set(["adopt", "guide", "purge"]);
+const withReply = (b, argv) => (NEEDS_REPLY.has(argv[0]) ? ["--reply", replyOf(b)] : []);
+const dumped = (b, ...argv) => cmd(b, ...argv, "--dump", dumpNow(b), ...withReply(b, argv));
 // A dump whose calls succeeded: read and adopt take --dumped.
-const ok2 = (b, ...argv) => cmd(b, ...argv, "--dump", dumpNow(b), "--dumped");
+const ok2 = (b, ...argv) => cmd(b, ...argv, "--dump", dumpNow(b), "--dumped", ...withReply(b, argv));
 function apply(b, r) { const ws = writesOf(r.lines); ws.forEach((w) => applyBatch(b.db, w)); return ws.flat(); }
 const doc = (b, c, id) => { const d = readDb(b.db).get(c); return d && d.get(id); };
 const card = (b, id) => JSON.parse(fs.readFileSync(b.state, "utf8")).cards.find((c) => c.id === id);

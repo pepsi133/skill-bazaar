@@ -37,11 +37,15 @@ function sh(...argv) { const lines = []; const code = run(argv, (l) => lines.pus
 const CONFIRMS = new Set(["check", "sync", "close", "ack", "status", "watch", "guide", "purge"]);
 const strict = (b, ...argv) => sh(...argv, "--state", b.state);
 const cmd = (b, ...argv) => strict(b, ...argv, ...(CONFIRMS.has(argv[0]) ? ["--confirmed"] : []));
-// A dump as an agent makes it: the data-only files, and the reply lines saved to versions.txt.
-function dumpNow(b) { const lines = dump(b.db, b.dump); fs.mkdirSync(b.dump, { recursive: true }); fs.writeFileSync(path.join(b.dump, "versions.txt"), lines.join("\n") + "\n"); return b.dump; }
-const dumped = (b, ...argv) => cmd(b, ...argv, "--dump", dumpNow(b));
+// A dump as an agent makes it: the data-only files; the reply lines of the dump call go to a reply file that the
+// commands needing versions take as --reply.
+function dumpNow(b) { const lines = dump(b.db, b.dump); fs.mkdirSync(b.dump, { recursive: true }); fs.writeFileSync(replyOf(b), "Listed documents:\n" + lines.join("\n") + "\n"); return b.dump; }
+const replyOf = (b) => path.join(path.dirname(b.board), "reply.txt");
+const NEEDS_REPLY = new Set(["adopt", "guide", "purge"]);
+const withReply = (b, argv) => (NEEDS_REPLY.has(argv[0]) ? ["--reply", replyOf(b)] : []);
+const dumped = (b, ...argv) => cmd(b, ...argv, "--dump", dumpNow(b), ...withReply(b, argv));
 // A dump whose calls succeeded: read and adopt take --dumped.
-const ok2 = (b, ...argv) => cmd(b, ...argv, "--dump", dumpNow(b), "--dumped");
+const ok2 = (b, ...argv) => cmd(b, ...argv, "--dump", dumpNow(b), "--dumped", ...withReply(b, argv));
 // waiting takes no state.
 const wait = (b) => sh("waiting", "--dump", dumpNow(b));
 // The agent passes each array and then confirms it.
@@ -207,29 +211,30 @@ ok("adopt: a create onto an existing document takes the board's version; a missi
   assert.deepEqual(ad.lines.slice(0, 1), ["cards: write again, pinned to a create"]);
   assert.equal(writesOf(ad.lines)[0][0].if_version, undefined);
 });
-ok("versions.txt: adopt pins to the version of the reply line of a data-only file; a path relative to the cwd counts", () => {
+ok("--reply: adopt pins to the version of the reply line of a data-only file; a path relative to the cwd counts", () => {
   const b = fresh();
   setState(b, (st) => { delete st.next.cards; });
   assert.throws(() => apply(b, cmd(b, "close", "disk-size")), /if_version is required/);
   dumpNow(b);
   assert.equal(JSON.parse(fs.readFileSync(path.join(b.dump, "cards", "main.json"), "utf8")).version, undefined, "the dump file holds only the data");
-  const vt = path.join(b.dump, "versions.txt");
+  const vt = replyOf(b);
   fs.writeFileSync(vt, fs.readFileSync(vt, "utf8").split("\n").map((l) => l.replace(/"(\/[^"]+)"$/, (m, p) => JSON.stringify(path.relative(process.cwd(), p)))).join("\n"));
-  const ad = cmd(b, "adopt", "--dump", b.dump, "--dumped");
+  const ad = cmd(b, "adopt", "--dump", b.dump, "--dumped", "--reply", vt);
   assert.equal(ad.code, 0, ad.text);
   assert.equal(apply(b, ad)[0].if_version, 3);
 });
-ok("versions.txt: purge pins its deletes to the versions of the reply lines", () => {
+ok("--reply: purge pins its deletes to the versions of the reply lines", () => {
   const b = fresh(), r = dumped(b, "purge", "--ids", "old-dns");
   assert.equal(r.code, 0, r.text);
   assert.deepEqual(apply(b, r).map((w) => [w.collection, w.if_version]), [["responses", 2], ["batches", 1], ["cards", 3]]);
 });
-ok("versions.txt: a document without a reply line stops the command and says to pass the reply", () => {
+ok("--reply: a document without a reply line stops the command and says to pass the reply", () => {
   const b = fresh();
   dumpNow(b);
-  const vt = path.join(b.dump, "versions.txt");
+  const vt = replyOf(b);
   fs.writeFileSync(vt, fs.readFileSync(vt, "utf8").split("\n").filter((l) => !l.includes("cards/main.json")).join("\n"));
-  const ad = cmd(b, "adopt", "--dump", b.dump, "--dumped");
+  const ad = cmd(b, "adopt", "--dump", b.dump, "--dumped", "--reply", vt), plainAd = cmd(b, "adopt", "--dump", b.dump, "--dumped");
+  assert.equal(plainAd.lines[0], ad.lines[0], "no --reply: the same refusal, which names --reply");
   assert.deepEqual([ad.code, ad.lines[0]], [1, "cards/main: the dump has no whole-number version. Pass the reply text of the dump call with --reply (a file, or - for the standard input), or dump again; write nothing until then"]);
 });
 ok("--reply: the reply text of the dump call, as a file or on the standard input, gives the versions; other lines of it are ignored", () => {
@@ -237,7 +242,6 @@ ok("--reply: the reply text of the dump call, as a file or on the standard input
   setState(b, (st) => { delete st.next.cards; });
   assert.throws(() => apply(b, cmd(b, "close", "disk-size")), /if_version is required/);
   const lines = dump(b.db, b.dump), reply = "Listed 3 documents (limit 1000):\n" + lines.join("\n") + "\nnext_cursor: none\n";
-  assert.equal(fs.existsSync(path.join(b.dump, "versions.txt")), false);
   const none = cmd(b, "adopt", "--dump", b.dump, "--dumped");
   assert.equal(none.code, 1);
   const rf = path.join(tmp, "reply-" + n + ".txt");
@@ -907,7 +911,7 @@ ok("ack: an update of batches/<id> pinned to version 1, with the cards write of 
   assert.deepEqual([state(b).pending[`batches/${BB}`], state(b).unlogged], [undefined, undefined]);
   assert.deepEqual(ok2(b, "read").lines, ["no batches waiting"], "logged once");
   assert.deepEqual(dumped(b, "ack", BB).lines, [`ack ${BB}: already handled`, "no writes"]);
-  // ack reads no version: a dump without versions.txt and a batch file without a version give the same pin.
+  // ack reads no version: a dump without a reply and a batch file without a version give the same pin.
   const c = fresh(), bare = path.join(c.dir, "bare");
   fs.mkdirSync(path.join(bare, "batches"), { recursive: true });
   fs.writeFileSync(path.join(bare, "batches", BB + ".json"), JSON.stringify(JSON.parse(fs.readFileSync(path.join(c.db, "batches", BB + ".json"), "utf8")).data));
@@ -1305,7 +1309,7 @@ ok("the moved sections are read at a named step", () => {
 });
 ok("no proof file in the text", () => {
   for (const f of [SKILL_MD, ...fs.readdirSync(REF).filter((x) => x.endsWith(".md")).map((x) => path.join(REF, x))])
-    { const t = fs.readFileSync(f, "utf8"); assert.ok(!t.includes("touch .board/dump/versions.txt") && !t.includes("touch board/dump/versions.txt"), f); }
+    { const t = fs.readFileSync(f, "utf8"); assert.ok(!/touch .*dump/.test(t), f); }
   assert.ok(section(fs.readFileSync(SKILL_MD, "utf8"), "## Read and handle the answers").includes("read --dump .board/dump --dumped"));
 });
 ok("sync: draft and draft_label are card fields; a draft change raises rev; a label warning prints and does not stop", () => {
@@ -2107,10 +2111,10 @@ ok("ack --result: a line break, a double quote, a dollar sign and a backtick are
   assert.ok(got.includes("why 'timeout' 1 y z") && got.length < 200, got);
   assert.equal(r.lines[1], "  result disk-size: " + q(got));
   const c = fresh(), long = dumped(c, "ack", BB, "--result", "disk-size", "z".repeat(201));
-  assert.deepEqual([long.code, long.lines], [1, ["ack --result disk-size: the text is 201 characters and a result holds 200. Shorten it"]]);
+  assert.deepEqual([long.code, long.lines], [1, ["ack --result disk-size: the text is longer than 200 (201; the page counts UTF-16 units, an emoji counts as 2). Shorten it"]]);
   assert.equal(doc(c, "batches", BB).data.status, "sent");
   const cl = cmd(c, "close", "disk-size", "--result", "y".repeat(201));
-  assert.deepEqual([cl.code, cl.lines], [1, ["close --result: the text is 201 characters and a result holds 200. Shorten it"]]);
+  assert.deepEqual([cl.code, cl.lines], [1, ["close --result: the text is longer than 200 (201; the page counts UTF-16 units, an emoji counts as 2). Shorten it"]]);
   assert.equal(card(c, "disk-size").status, "open");
   assert.equal(cmd(c, "close", "disk-size", "--result", "y".repeat(200)).code, 0);
 });
@@ -2444,7 +2448,7 @@ ok("watch: a watcher that polled within two intervals keeps its window past the 
   const r = atNow("2026-02-01T13:59:00Z", () => poll(b, id));
   assert.equal(r.code, 0, r.text);
   assert.equal(watchJson(b).polled, "2026-02-01T13:59:00+00:00", "the poll records its time");
-  assert.deepEqual(atNow("2026-02-01T14:05:00Z", () => cmd(b, "watch")).lines, [runsLine("poll", b, T14), "no writes"], "polled 6 minutes ago: not replaced");
+  assert.deepEqual(atNow("2026-02-01T14:05:00Z", () => cmd(b, "watch")).lines, [`wake poll: the window ended at ${T14}, but a watcher polled at 2026-02-01T13:59:00+00:00; leave it, start none. Only when the operator asks to watch again: node ${SELF} watch --restart --state ${JSON.stringify(b.state)}`, "no writes"], "polled 6 minutes ago: not replaced");
   assert.equal(watchJson(b).watcher, id);
   const late = atNow("2026-02-01T14:10:00Z", () => cmd(b, "watch"));
   assert.equal(late.lines[0], startLine("poll", 300, 24, "2026-02-01T16:10:00+00:00"), "polled 11 minutes ago: replaced");
@@ -3106,8 +3110,8 @@ ok("a pending write follows its board folder when the folder is renamed or moved
       assert.ok(fs.existsSync(w.file_path));
       apply(b, p);
       const dd = path.join(b.dir, "dump-rn"), lines = dump(b.db, dd);
-      fs.mkdirSync(dd, { recursive: true }); fs.writeFileSync(path.join(dd, "versions.txt"), lines.join("\n") + "\n");
-      const ad = sh("adopt", "cards", "--dump", dd, "--dumped", ...st);
+      fs.mkdirSync(dd, { recursive: true }); fs.writeFileSync(dd + ".reply", lines.join("\n") + "\n");
+      const ad = sh("adopt", "cards", "--dump", dd, "--dumped", "--reply", dd + ".reply", ...st);
       assert.equal(ad.code, 0, ad.text);
     });
   }

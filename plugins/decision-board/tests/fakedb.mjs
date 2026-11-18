@@ -35,7 +35,7 @@ export function writeDb(dir, db) {
   }
 }
 // The platform dump: <out>/<collection>/<doc id>.json holds only the data; the returned lines are the reply's
-// document lines, which an agent saves to <out>/versions.txt.
+// document lines, which an agent passes to --reply.
 export function dump(dir, out) {
   fs.rmSync(out, { recursive: true, force: true });
   const lines = [];

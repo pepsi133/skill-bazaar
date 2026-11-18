@@ -125,7 +125,7 @@ const words = (a, k) => { const i = a.raw.lastIndexOf("--" + k), out = []; for (
 
 // ---- dumps: <dir>/<collection>/<doc id>.json. A file holds the fields (as ArtifactData saves them), {version, data}
 // (and maybe id), or the fields with "version" beside them. A version in the file wins; else it comes from
-// <dir>/versions.txt, the saved document lines of the dump replies: - "<id>"  <n> bytes  version <v>  "<path>".
+// the reply text of the dump call (--reply): its lines - "<id>"  <n> bytes  version <v>  "<path>".
 // Parsed data is copied key by key into a fresh object, never merged, so a key such as "__proto__" cannot
 // change a prototype. A missing folder is an empty collection. only: read just that collection.
 const UNSAFE = new Set(["__proto__", "constructor", "prototype"]);
@@ -168,10 +168,10 @@ function replyText(a) {
 export function readDump(dir, only, reply = "") {
   if (!dir) fail("--dump <dir> is required");
   if (fs.existsSync(dir) && !fs.statSync(dir).isDirectory()) fail(`--dump ${shownPath(dir)}: not a folder. Give the dump folder`);
-  const cols = new Map(), listed = new Map(), vt = path.join(dir, "versions.txt");
+  const cols = new Map(), listed = new Map();
   let skipped = 0;
   // The quoted path of a reply line, absolute or relative to the cwd, names the file.
-  for (const ln of (fs.existsSync(vt) ? fs.readFileSync(vt, "utf8") + "\n" : "").concat(reply).split(/\r?\n/)) {
+  for (const ln of reply.split(/\r?\n/)) {
     const m = /\sversion (\d+)\s+("(?:[^"\\]|\\.)*")\s*$/.exec(ln);
     if (m) try { listed.set(path.resolve(JSON.parse(m[2])), Number(m[1])); } catch (e) { /* not a reply line */ }
   }
@@ -1820,7 +1820,7 @@ function cleanText(v, max) {
 // A result text as stored: cleaned, and refused when it is longer than the page shows (S.max.result).
 function resultText(v, cmd) {
   const s = cleanText(v, Infinity);
-  if (s.length > S.max.result) fail(`${cmd}: the text is ${s.length} characters and a result holds ${S.max.result}. Shorten it`);
+  if (s.length > S.max.result) fail(`${cmd}: the text is longer than ${S.max.result} (${s.length}; the page counts UTF-16 units, an emoji counts as 2). Shorten it`);
   return s;
 }
 function cmdStatus(a, log) {
@@ -1924,7 +1924,9 @@ function cmdWatch(a, log) {
     if (w.comment) log(COMMENTS_LINE);
     return;
   } else if (cur && cur.poll < cur.limit && !cur.reported && !cur.stopped && !has(a, "restart") && (P.stampMs(cur.until) > nowMs() || polledLately(cur))) {
-    log(`wake ${w.mode}: a watcher runs until ${cur.until}; start none. Only when the operator asks to watch again: node ${SELF} watch --restart${stateArg(a)}`);
+    const over = P.stampMs(cur.until) <= nowMs();
+    log(over ? `wake ${w.mode}: the window ended at ${cur.until}, but a watcher polled at ${cur.polled}; leave it, start none. Only when the operator asks to watch again: node ${SELF} watch --restart${stateArg(a)}`
+      : `wake ${w.mode}: a watcher runs until ${cur.until}; start none. Only when the operator asks to watch again: node ${SELF} watch --restart${stateArg(a)}`);
     if (w.comment) log(COMMENTS_LINE);
   } else {
     if (!r.st.url) fail(`watch: no board URL in ${r.file}. Run node ${SELF} check --url <the artifact link>${stateArg(a)} once, then watch again`);

@@ -392,7 +392,7 @@ ok("a dismissed card returns only when a new source input arrives", () => {
   const M = Object.assign({}, MAP, { input: "updated_at" });
   // A board command with the state; its writes go to the stand-in database.
   const cmd = (...argv) => { const r = sh(board, ...argv, "--state", state, ...(argv[0] === "check" || argv[0] === "sync" || argv[0] === "ack" ? ["--confirmed"] : [])); assert.equal(r.code, 0, r.text); writesOf(r.lines).forEach((w) => applyBatch(db, w)); return r; };
-  const dumped = () => { const lines = dump(db, dd); fs.writeFileSync(path.join(dd, "versions.txt"), lines.join("\n") + "\n"); return dd; };
+  const dumped = () => { const lines = dump(db, dd); fs.mkdirSync(dd, { recursive: true }); fs.writeFileSync(dd + ".reply", lines.join("\n") + "\n"); return dd; };
   const card = () => JSON.parse(fs.readFileSync(state, "utf8")).cards.find((c) => c.id === "tracker-7");
   const rows = (u) => map([row({ iid: 7, updated_at: u })], M).out;
   cmd("sync", rows("u1"), "--source", "tracker");
